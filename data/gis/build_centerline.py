@@ -141,11 +141,11 @@ def main() -> None:
                 return to_wgs.transform(x, y)
         return None
 
-    # Feet markers every 100 ft (labelled every 500), interpolated on the line.
-    lo = math.ceil(stations[0] / 100) * 100
-    hi = math.floor(stations[-1] / 100) * 100
+    # Feet markers every 50 ft (labelled every 500), interpolated on the line.
+    lo = math.ceil(stations[0] / 50) * 50
+    hi = math.floor(stations[-1] / 50) * 50
     marks = []
-    for s in range(int(lo), int(hi) + 1, 100):
+    for s in range(int(lo), int(hi) + 1, 50):
         ll = interp(float(s))
         if ll is None:
             continue

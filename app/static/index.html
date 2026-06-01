@@ -26,7 +26,7 @@
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
-    font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     color: var(--ink);
     background: var(--bg);
     display: grid;
@@ -39,11 +39,11 @@
     background: linear-gradient(90deg, #16273b, #0d1b2a);
     border-bottom: 1px solid var(--line);
   }
-  header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+  header h1 { font-size: 19px; margin: 0; letter-spacing: .2px; }
   header h1 span { color: var(--muted); font-weight: 400; }
   .badge {
     margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
-    padding: 5px 11px; border-radius: 999px; font-size: 12px;
+    padding: 5px 11px; border-radius: 999px; font-size: 14px;
     background: var(--panel-2); border: 1px solid var(--line);
   }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
@@ -62,11 +62,11 @@
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 10px; padding: 12px 14px;
   }
-  .stat .n { font-size: 24px; font-weight: 600; }
-  .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .stat .n { font-size: 28px; font-weight: 600; }
+  .stat .l { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
 
   h2 {
-    font-size: 12px; text-transform: uppercase; letter-spacing: .8px;
+    font-size: 14px; text-transform: uppercase; letter-spacing: .8px;
     color: var(--muted); margin: 22px 0 8px;
   }
   .card {
@@ -74,24 +74,24 @@
     border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
   }
   .card .name { font-weight: 600; }
-  .card .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .card .meta { color: var(--muted); font-size: 14px; margin-top: 2px; }
   .empty { color: var(--muted); font-style: italic; padding: 8px 2px; }
 
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; text-transform: uppercase; letter-spacing: .5px; }
   td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
   .probe {
     background: var(--panel-2); border: 1px solid var(--line);
     border-radius: 10px; padding: 12px; margin-top: 6px;
   }
-  .probe .hint { color: var(--muted); font-size: 12px; }
+  .probe .hint { color: var(--muted); font-size: 14px; }
   .probe .row { display: flex; justify-content: space-between; padding: 4px 0; }
   .probe .row b { font-variant-numeric: tabular-nums; }
   .crosswalk { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
 
-  .leaflet-popup-content { font: 13px system-ui, sans-serif; }
+  .leaflet-popup-content { font: 15px system-ui, sans-serif; }
   /* Permanent map labels. The tooltip box keeps Leaflet's positioning transform;
      the inner .lbl is counter-rotated so text stays upright when the map rotates. */
   .berth-label, .wh-label, .sta-label, .ft-label {
@@ -100,14 +100,14 @@
   .berth-label .lbl, .wh-label .lbl, .sta-label .lbl, .ft-label .lbl {
     display: inline-block; transform: rotate(var(--counter, 0deg)); transform-origin: center center;
   }
-  .berth-label { color: #ffce5a; font-weight: 700; text-align: center; line-height: 1.15; }
-  .berth-label .sub { color: #ffe6a8; font-weight: 500; font-size: 10px; }
-  .wh-label { color: #cdd9e5; font-size: 11px; }
-  .sta-label { color: #ff8a8a; font-size: 10px; font-weight: 600; }
-  .ft-label { color: #cfe3f5; font-size: 9px; font-weight: 500; }
+  .berth-label { color: #ffce5a; font-weight: 700; font-size: 16px; text-align: center; line-height: 1.15; }
+  .berth-label .sub { color: #ffe6a8; font-weight: 500; font-size: 13px; }
+  .wh-label { color: #cdd9e5; font-size: 14px; }
+  .sta-label { color: #ff8a8a; font-size: 13px; font-weight: 600; }
+  .ft-label { color: #cfe3f5; font-size: 12px; font-weight: 500; }
   .berth-label::before, .wh-label::before, .sta-label::before, .ft-label::before { display: none; }
   a { color: var(--accent); }
-  .legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend { font-size: 14px; color: var(--muted); margin-top: 6px; }
   .legend i { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
 </style>
 </head>
@@ -180,23 +180,6 @@ const map = L.map("map", {
 }).setView([29.87, -93.93], 14);
 
 let BERTH_STA = {};   // berth name -> [sw_station, ne_station], from geometry
-let CENTERLINE = null; // { coords: [[lon,lat],...], stations: [ft,...] }
-
-// Interpolate a [lat, lon] for any POPA station along the (monotonic) face line.
-function interpStation(sta) {
-  if (!CENTERLINE) return null;
-  const { coords, stations } = CENTERLINE;
-  for (let i = 0; i < stations.length - 1; i++) {
-    const a = stations[i], b = stations[i + 1];
-    if ((sta >= a && sta <= b) || (sta >= b && sta <= a)) {
-      const r = b === a ? 0 : (sta - a) / (b - a);
-      const lon = coords[i][0] + r * (coords[i + 1][0] - coords[i][0]);
-      const lat = coords[i][1] + r * (coords[i + 1][1] - coords[i][1]);
-      return [lat, lon];
-    }
-  }
-  return null;
-}
 
 // Rotate the map so the wharf face runs left->right (stations increase to the
 // right). Bearing is derived from the centerline endpoints; labels are
@@ -323,10 +306,7 @@ async function loadReferenceGeo() {
     const cl = await api("/static/gis/centerline.geojson");
     centerlineLayer.addData(cl);
     const line = cl.features.find((f) => f.geometry.type === "LineString");
-    if (line) {
-      CENTERLINE = { coords: line.geometry.coordinates, stations: line.properties.stations };
-      applyWharfBearing(line.geometry.coordinates);
-    }
+    if (line) applyWharfBearing(line.geometry.coordinates);
   } catch (e) { /* optional */ }
 }
 
@@ -476,34 +456,6 @@ map.on("click", async (e) => {
   toggle.addEventListener("change", () => (toggle.checked ? show() : hide()));
 })();
 // ===== /DUMMY SHIP =============================================================
-
-// ===== DUMMY SHIP (visualization only — delete this block + its HTML to remove)
-// Draws a fake vessel footprint as a rectangle occupying a station interval near
-// the Berth 5/4 boundary, offset to the water side of the quay face.
-const dummyShipLayer = L.layerGroup();
-const DUMMY = { stern: 20, bow: 660, beamDeg: 0.00045 };  // ~640 ft LOA near sta 351
-
-function buildDummyShip() {
-  dummyShipLayer.clearLayers();
-  const s = interpStation(DUMMY.stern), b = interpStation(DUMMY.bow);
-  if (!s || !b) return;
-  // perpendicular to the wharf, pointed to the water side (SE → lower lat)
-  let plat = b[1] - s[1], plon = -(b[0] - s[0]);   // rotate (dlon,dlat) by 90°
-  const mag = Math.hypot(plat, plon) || 1;
-  plat /= mag; plon /= mag;
-  if (plat > 0) { plat = -plat; plon = -plon; }     // ensure it points SE (to water)
-  const off = DUMMY.beamDeg;
-  const corners = [s, b, [b[0] + plat * off, b[1] + plon * off], [s[0] + plat * off, s[1] + plon * off]];
-  L.polygon(corners, { color: "#3ddc97", weight: 2, fillColor: "#3ddc97", fillOpacity: 0.45 })
-    .bindPopup(`<b>M/V Demo</b> (dummy)<br>occupies POPA ${fmtSta(DUMMY.stern)} – ${fmtSta(DUMMY.bow)}<br><i>visualization only — not real AIS</i>`)
-    .addTo(dummyShipLayer);
-}
-
-document.getElementById("dummyShipToggle").addEventListener("change", (e) => {
-  if (e.target.checked) { buildDummyShip(); dummyShipLayer.addTo(map); }
-  else { map.removeLayer(dummyShipLayer); }
-});
-// ===== /DUMMY SHIP
 
 // --- Boot ------------------------------------------------------------------
 loadBbox();

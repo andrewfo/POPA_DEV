@@ -30,10 +30,13 @@ class Settings(BaseSettings):
     aisstream_url: str = "wss://stream.aisstream.io/v0/stream"
 
     # Bounding box around the POPA public wharf (Sabine-Neches waterway).
-    ais_bbox_sw_lat: float = 29.855
-    ais_bbox_sw_lon: float = -93.945
-    ais_bbox_ne_lat: float = 29.885
-    ais_bbox_ne_lon: float = -93.920
+    # Snug to the quay (centerline spans lat 29.8541..29.8638, lon
+    # -93.9445..-93.9351) with margin pushed SE onto the channel — the water
+    # side where vessels transit/berth — and kept off the city to the N/E.
+    ais_bbox_sw_lat: float = 29.850
+    ais_bbox_sw_lon: float = -93.946
+    ais_bbox_ne_lat: float = 29.866
+    ais_bbox_ne_lon: float = -93.930
 
     @computed_field  # type: ignore[prop-decorator]
     @property
