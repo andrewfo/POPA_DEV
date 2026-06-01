@@ -13,3 +13,7 @@ env/
 .ruff_cache/
 *.log
 .DS_Store
+
+# ArcGIS transient lock files from shapefile exports
+*.sr.lock
+*.lock

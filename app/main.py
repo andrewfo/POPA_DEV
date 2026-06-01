@@ -1,18 +1,44 @@
-"""FastAPI app. Phase-1 scope: health + a couple of read-only endpoints to
-confirm the data layer is alive. No conflict service, intake, or UI yet.
+"""FastAPI app. Phase-1 scope: health + read-only endpoints to confirm the
+data layer is alive, plus a thin Leaflet map (static) over those endpoints.
+No conflict service, intake, or write paths yet.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi import Depends, FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app import __version__
+from app.config import get_settings
 from app.crosswalk import geo_to_station
 from app.db import get_session
 from app.models import PositionReport, Vessel, WharfSegment
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
+
+_STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    """Serve the read-only Leaflet map over the data layer."""
+    return FileResponse(_STATIC_DIR / "index.html")
+
+
+@app.get("/config/bbox")
+def config_bbox() -> dict:
+    """The AIS bounding box, so the map can frame the wharf without hard-coding it."""
+    s = get_settings()
+    return {
+        "sw": {"lat": s.ais_bbox_sw_lat, "lon": s.ais_bbox_sw_lon},
+        "ne": {"lat": s.ais_bbox_ne_lat, "lon": s.ais_bbox_ne_lon},
+    }
 
 
 @app.get("/health")
@@ -40,6 +66,73 @@ def list_segments(session: Session = Depends(get_session)) -> list[dict]:
             "dockno": {"scale": float(s.dockno_scale), "offset": float(s.dockno_offset)},
         }
         for s in rows
+    ]
+
+
+@app.get("/wharf-segments/geojson")
+def segments_geojson(session: Session = Depends(get_session)) -> dict:
+    """Wharf centerlines as a GeoJSON FeatureCollection (M dropped) for the map."""
+    rows = session.execute(
+        select(
+            WharfSegment.id,
+            WharfSegment.name,
+            WharfSegment.popa_sta_start,
+            WharfSegment.popa_sta_end,
+            func.ST_AsGeoJSON(func.ST_Force2D(WharfSegment.geom)).label("gj"),
+        )
+    ).all()
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": json.loads(r.gj),
+                "properties": {
+                    "id": r.id,
+                    "name": r.name,
+                    "popa_sta_start": float(r.popa_sta_start),
+                    "popa_sta_end": float(r.popa_sta_end),
+                },
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/positions/recent")
+def positions_recent(
+    limit: int = 500, session: Session = Depends(get_session)
+) -> list[dict]:
+    """Most recent landed AIS positions, joined to vessel name when known."""
+    rows = session.execute(
+        select(
+            PositionReport.id,
+            PositionReport.mmsi,
+            PositionReport.lat,
+            PositionReport.lon,
+            PositionReport.sog,
+            PositionReport.cog,
+            PositionReport.heading,
+            PositionReport.msg_ts,
+            Vessel.name.label("vessel_name"),
+        )
+        .join(Vessel, Vessel.id == PositionReport.vessel_id, isouter=True)
+        .order_by(PositionReport.msg_ts.desc().nullslast(), PositionReport.id.desc())
+        .limit(limit)
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "mmsi": r.mmsi,
+            "lat": r.lat,
+            "lon": r.lon,
+            "sog": r.sog,
+            "cog": r.cog,
+            "heading": r.heading,
+            "msg_ts": r.msg_ts.isoformat() if r.msg_ts else None,
+            "vessel_name": r.vessel_name,
+        }
+        for r in rows
     ]
 
 

@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>POPA Wharf — Berth &amp; Dredging Data Layer</title>
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+  crossorigin=""
+/>
+<style>
+  :root {
+    --bg: #0d1b2a;
+    --panel: #16273b;
+    --panel-2: #1d3148;
+    --line: #2a4259;
+    --ink: #e6edf3;
+    --muted: #8aa0b6;
+    --accent: #46b1ff;
+    --good: #3ddc97;
+    --bad: #ff6b6b;
+    --warn: #ffce5a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 18px;
+    background: linear-gradient(90deg, #16273b, #0d1b2a);
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  .badge {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 11px; border-radius: 999px; font-size: 12px;
+    background: var(--panel-2); border: 1px solid var(--line);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--good); box-shadow: 0 0 0 3px rgba(61,220,151,.18); }
+  .dot.down { background: var(--bad); box-shadow: 0 0 0 3px rgba(255,107,107,.18); }
+
+  main { display: grid; grid-template-columns: 340px 1fr; min-height: 0; }
+  aside {
+    overflow-y: auto; padding: 16px; border-right: 1px solid var(--line);
+    background: var(--bg);
+  }
+  #map { min-height: 0; height: 100%; background: #0a131e; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+  .stat {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .stat .n { font-size: 24px; font-weight: 600; }
+  .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); margin: 22px 0 8px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+  }
+  .card .name { font-weight: 600; }
+  .card .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .empty { color: var(--muted); font-style: italic; padding: 8px 2px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+  .probe {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px; margin-top: 6px;
+  }
+  .probe .hint { color: var(--muted); font-size: 12px; }
+  .probe .row { display: flex; justify-content: space-between; padding: 4px 0; }
+  .probe .row b { font-variant-numeric: tabular-nums; }
+  .crosswalk { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
+
+  .leaflet-popup-content { font: 13px system-ui, sans-serif; }
+  /* Permanent map labels. The tooltip box keeps Leaflet's positioning transform;
+     the inner .lbl is counter-rotated so text stays upright when the map rotates. */
+  .berth-label, .wh-label, .sta-label, .ft-label {
+    background: none; border: none; box-shadow: none; text-shadow: 0 1px 3px #000;
+  }
+  .berth-label .lbl, .wh-label .lbl, .sta-label .lbl, .ft-label .lbl {
+    display: inline-block; transform: rotate(var(--counter, 0deg)); transform-origin: center center;
+  }
+  .berth-label { color: #ffce5a; font-weight: 700; text-align: center; line-height: 1.15; }
+  .berth-label .sub { color: #ffe6a8; font-weight: 500; font-size: 10px; }
+  .wh-label { color: #cdd9e5; font-size: 11px; }
+  .sta-label { color: #ff8a8a; font-size: 10px; font-weight: 600; }
+  .ft-label { color: #cfe3f5; font-size: 9px; font-weight: 500; }
+  .berth-label::before, .wh-label::before, .sta-label::before, .ft-label::before { display: none; }
+  a { color: var(--accent); }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Port of Port Arthur <span>· Berth &amp; Dredging Data Layer</span></h1>
+  <div class="badge"><span id="statusDot" class="dot"></span><span id="statusText">checking…</span></div>
+</header>
+
+<main>
+  <aside>
+    <div class="stats">
+      <div class="stat"><div class="n" id="statVessels">—</div><div class="l">Vessels</div></div>
+      <div class="stat"><div class="n" id="statPositions">—</div><div class="l">Position reports</div></div>
+    </div>
+
+    <!-- ===== DUMMY SHIP control (visualization only — delete this block to remove) ===== -->
+    <div class="probe" id="dummyShipControl" style="margin-bottom:14px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="dummyShipToggle" />
+        <span>Show dummy ship <span style="color:var(--muted)">(visualization)</span></span>
+      </label>
+      <div class="hint" style="margin-top:6px">A fake vessel berthed near Berth 5/4 — for layout/demo only, not real AIS.</div>
+    </div>
+    <!-- ===== /DUMMY SHIP control ===== -->
+
+    <div class="probe">
+      <div class="hint">Click anywhere on the map to project that point onto the wharf centerline.</div>
+      <div id="probeResult" style="display:none">
+        <div class="row"><span>lat, lon</span><b id="probeLatLon">—</b></div>
+        <div class="row"><span>POPA station</span><b id="probePopa">—</b></div>
+        <div class="crosswalk" id="probeCrosswalk"></div>
+      </div>
+    </div>
+
+    <h2>Wharf segments</h2>
+    <div id="segments"><div class="empty">loading…</div></div>
+
+    <h2>Recent vessels</h2>
+    <div id="vessels"><div class="empty">loading…</div></div>
+  </aside>
+
+  <div id="map"></div>
+</main>
+
+<script
+  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+  crossorigin=""
+></script>
+<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
+<script>
+const api = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(p + " → " + r.status); return r.json(); });
+const fmtSta = (ft) => {
+  if (ft === null || ft === undefined) return "—";
+  const neg = ft < 0 ? "-" : "";
+  const a = Math.abs(ft);
+  const whole = Math.floor(a / 100);
+  const rem = (a - whole * 100).toFixed(2).padStart(5, "0");
+  return `${neg}${whole}+${rem}`;
+};
+
+// --- Map -------------------------------------------------------------------
+const map = L.map("map", {
+  zoomControl: true,
+  rotate: true,                                  // leaflet-rotate
+  bearing: 0,
+  touchRotate: true,
+  rotateControl: { closeOnZeroBearing: false },  // compass to fine-tune/reset
+}).setView([29.87, -93.93], 14);
+
+let BERTH_STA = {};   // berth name -> [sw_station, ne_station], from geometry
+let CENTERLINE = null; // { coords: [[lon,lat],...], stations: [ft,...] }
+
+// Interpolate a [lat, lon] for any POPA station along the (monotonic) face line.
+function interpStation(sta) {
+  if (!CENTERLINE) return null;
+  const { coords, stations } = CENTERLINE;
+  for (let i = 0; i < stations.length - 1; i++) {
+    const a = stations[i], b = stations[i + 1];
+    if ((sta >= a && sta <= b) || (sta >= b && sta <= a)) {
+      const r = b === a ? 0 : (sta - a) / (b - a);
+      const lon = coords[i][0] + r * (coords[i + 1][0] - coords[i][0]);
+      const lat = coords[i][1] + r * (coords[i + 1][1] - coords[i][1]);
+      return [lat, lon];
+    }
+  }
+  return null;
+}
+
+// Rotate the map so the wharf face runs left->right (stations increase to the
+// right). Bearing is derived from the centerline endpoints; labels are
+// counter-rotated via the --counter CSS var so text stays upright at any bearing
+// (including when the user spins the compass control).
+function syncLabelCounter() {
+  const b = (typeof map.getBearing === "function") ? map.getBearing() : 0;
+  document.documentElement.style.setProperty("--counter", (-b) + "deg");
+}
+map.on("rotate", syncLabelCounter);
+
+function applyWharfBearing(coords) {
+  if (typeof map.setBearing !== "function") return;  // plugin failed to load
+  const [lon1, lat1] = coords[0];
+  const [lon2, lat2] = coords[coords.length - 1];
+  const latm = ((lat1 + lat2) / 2) * Math.PI / 180;
+  const east = (lon2 - lon1) * Math.cos(latm) * 111320;
+  const north = (lat2 - lat1) * 110540;
+  const brng = Math.atan2(east, north) * 180 / Math.PI; // NE heading, deg from N
+  map.setBearing(90 - brng);                             // put NE end to the right
+  syncLabelCounter();
+}
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+
+const wharfLayer = L.geoJSON(null, {
+  style: { color: "#46b1ff", weight: 5, opacity: 0.9 },
+  onEachFeature: (f, layer) => {
+    const p = f.properties;
+    layer.bindPopup(`<b>${p.name}</b><br>POPA ${fmtSta(p.popa_sta_start)} → ${fmtSta(p.popa_sta_end)}`);
+  },
+}).addTo(map);
+const berthLayer = L.geoJSON(null, {
+  style: { color: "#ffce5a", weight: 2, fillColor: "#ffce5a", fillOpacity: 0.18 },
+  onEachFeature: (f, layer) => {
+    const p = f.properties;
+    const rng = BERTH_STA[p.name];
+    const span = rng ? `POPA ${fmtSta(rng[0])} – ${fmtSta(rng[1])} (${(rng[1] - rng[0]).toFixed(0)} ft)` : `width ${p.width} ft`;
+    layer.bindPopup(`<b>${p.name}</b><br>${span}`);
+    if (p.name) {
+      const inner = rng ? `${p.name}<br><span class="sub">${fmtSta(rng[0])}–${fmtSta(rng[1])}</span>` : p.name;
+      layer.bindTooltip(`<span class="lbl">${inner}</span>`, { permanent: true, direction: "center", className: "berth-label" });
+    }
+  },
+}).addTo(map);
+const warehouseLayer = L.geoJSON(null, {
+  style: { color: "#8aa0b6", weight: 1, fillColor: "#33485f", fillOpacity: 0.35 },
+  onEachFeature: (f, layer) => {
+    const p = f.properties;
+    layer.bindTooltip(`<span class="lbl">${p.label || p.name}</span>`, { permanent: true, direction: "center", className: "wh-label" });
+  },
+}).addTo(map);
+const centerlineLayer = L.geoJSON(null, {
+  style: { color: "#ff4d4d", weight: 3, opacity: 0.95 },
+  pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+    radius: 4, color: "#ff4d4d", fillColor: "#fff", fillOpacity: 1, weight: 2,
+  }).bindTooltip(`<span class="lbl">POPA ${fmtSta(f.properties.station)}</span>`, {
+    permanent: true, direction: "top", className: "sta-label", offset: [0, -4],
+  }),
+}).addTo(map);
+const feetLayer = L.geoJSON(null, {
+  pointToLayer: (f, latlng) => {
+    const major = f.properties.major;
+    const m = L.circleMarker(latlng, {
+      radius: major ? 3 : 1.5, weight: 0,
+      fillColor: "#cfe3f5", fillOpacity: major ? 0.95 : 0.6,
+    });
+    if (major) m.bindTooltip(`<span class="lbl">${fmtSta(f.properties.station)}</span>`, {
+      permanent: true, direction: "bottom", className: "ft-label", offset: [0, 2],
+    });
+    return m;
+  },
+}).addTo(map);
+const vesselLayer = L.layerGroup().addTo(map);
+let probeMarker = null;
+let segmentParams = null; // first segment's affine params, for client-side crosswalk
+
+// --- Status / stats --------------------------------------------------------
+function setStatus(ok, text) {
+  const dot = document.getElementById("statusDot");
+  dot.className = "dot " + (ok ? "ok" : "down");
+  document.getElementById("statusText").textContent = text;
+}
+
+async function loadStats() {
+  try {
+    const s = await api("/stats");
+    document.getElementById("statVessels").textContent = s.vessels;
+    document.getElementById("statPositions").textContent = s.position_reports;
+    setStatus(true, "data layer online");
+  } catch (e) {
+    setStatus(false, "database offline");
+    document.getElementById("statVessels").textContent = "0";
+    document.getElementById("statPositions").textContent = "0";
+  }
+}
+
+async function loadBbox() {
+  try {
+    const b = await api("/config/bbox");
+    const bounds = [[b.sw.lat, b.sw.lon], [b.ne.lat, b.ne.lon]];
+    L.rectangle(bounds, { color: "#46b1ff", weight: 1, dashArray: "5 5", fill: false }).addTo(map);
+  } catch (e) { /* keep default view */ }
+}
+
+// Real port geometry from ArcGIS exports (static GeoJSON — no DB needed).
+async function loadReferenceGeo() {
+  try { BERTH_STA = await api("/static/gis/berth_stations.json"); } catch (e) { /* optional */ }
+  try {
+    const wh = await api("/static/gis/warehouses.geojson");
+    warehouseLayer.addData(wh);
+  } catch (e) { /* optional */ }
+  try {
+    const berths = await api("/static/gis/berths.geojson");
+    berthLayer.addData(berths);
+    if (berths.features.length) map.fitBounds(berthLayer.getBounds(), { padding: [30, 30] });
+  } catch (e) { /* optional */ }
+  try {
+    const fm = await api("/static/gis/feet_markers.geojson");
+    feetLayer.addData(fm);
+  } catch (e) { /* optional */ }
+  try {
+    const cl = await api("/static/gis/centerline.geojson");
+    centerlineLayer.addData(cl);
+    const line = cl.features.find((f) => f.geometry.type === "LineString");
+    if (line) {
+      CENTERLINE = { coords: line.geometry.coordinates, stations: line.properties.stations };
+      applyWharfBearing(line.geometry.coordinates);
+    }
+  } catch (e) { /* optional */ }
+}
+
+async function loadSegments() {
+  const el = document.getElementById("segments");
+  try {
+    const segs = await api("/wharf-segments");
+    if (!segs.length) { el.innerHTML = '<div class="empty">no segments seeded</div>'; return; }
+    segmentParams = segs[0];
+    el.innerHTML = segs.map((s) => `
+      <div class="card">
+        <div class="name">${s.name}</div>
+        <div class="meta">POPA ${fmtSta(s.popa_sta_start)} → ${fmtSta(s.popa_sta_end)}</div>
+        <div class="meta">Corps ×${s.corps.scale} ${s.corps.offset >= 0 ? "+" : ""}${s.corps.offset} · Dock# ×${s.dockno.scale} ${s.dockno.offset >= 0 ? "+" : ""}${s.dockno.offset}</div>
+      </div>`).join("");
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+  }
+  try {
+    const gj = await api("/wharf-segments/geojson");
+    wharfLayer.addData(gj);
+    if (gj.features.length) map.fitBounds(wharfLayer.getBounds(), { padding: [60, 60] });
+  } catch (e) { /* no geometry */ }
+}
+
+async function loadVessels() {
+  const el = document.getElementById("vessels");
+  try {
+    const vs = await api("/vessels?limit=25");
+    if (!vs.length) { el.innerHTML = '<div class="empty">no vessels yet — run AIS ingestion</div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA</th></tr></thead><tbody>${
+      vs.map((v) => `<tr><td>${v.name || "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa ?? "—"}</td></tr>`).join("")
+    }</tbody></table>`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+  }
+}
+
+async function loadPositions() {
+  try {
+    const ps = await api("/positions/recent?limit=500");
+    vesselLayer.clearLayers();
+    const seen = new Set();
+    for (const p of ps) {
+      if (p.mmsi && seen.has(p.mmsi)) continue; // most-recent per vessel
+      if (p.mmsi) seen.add(p.mmsi);
+      const moored = (p.sog ?? 99) < 0.5;
+      L.circleMarker([p.lat, p.lon], {
+        radius: 6, weight: 1.5,
+        color: moored ? "#3ddc97" : "#46b1ff",
+        fillColor: moored ? "#3ddc97" : "#46b1ff",
+        fillOpacity: 0.55,
+      }).bindPopup(
+        `<b>${p.vessel_name || "(unnamed)"}</b><br>MMSI ${p.mmsi ?? "—"}<br>` +
+        `SOG ${p.sog ?? "—"} kn${moored ? " · <b>moored</b>" : ""}<br>` +
+        `${p.msg_ts ? new Date(p.msg_ts).toLocaleString() : ""}`
+      ).addTo(vesselLayer);
+    }
+  } catch (e) { /* no positions */ }
+}
+
+// --- Click-to-station probe ------------------------------------------------
+map.on("click", async (e) => {
+  const { lat, lng } = e.latlng;
+  const res = document.getElementById("probeResult");
+  res.style.display = "block";
+  document.getElementById("probeLatLon").textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  document.getElementById("probePopa").textContent = "…";
+  document.getElementById("probeCrosswalk").innerHTML = "";
+  if (probeMarker) probeMarker.remove();
+  probeMarker = L.marker([lat, lng]).addTo(map);
+  try {
+    const r = await api(`/geo-to-station?lat=${lat}&lon=${lng}`);
+    const popa = r.popa_station;
+    document.getElementById("probePopa").textContent = `${fmtSta(popa)} (${popa.toFixed(1)} ft)`;
+    if (segmentParams) {
+      const corps = segmentParams.corps.scale * popa + segmentParams.corps.offset;
+      const dockno = segmentParams.dockno.scale * popa + segmentParams.dockno.offset;
+      document.getElementById("probeCrosswalk").innerHTML =
+        `<div class="row"><span>Corps / USACE</span><b>${fmtSta(corps)}</b></div>` +
+        `<div class="row"><span>Dock No.</span><b>${dockno.toFixed(1)}</b></div>`;
+    }
+    probeMarker.bindPopup(`POPA ${fmtSta(popa)}`).openPopup();
+  } catch (err) {
+    document.getElementById("probePopa").textContent = "unavailable (DB offline)";
+  }
+});
+
+// ===== DUMMY SHIP (visualization only — self-contained; delete this whole block
+// and the matching #dummyShipControl markup in the sidebar to remove) ===========
+(function () {
+  const toggle = document.getElementById("dummyShipToggle");
+  if (!toggle) return;
+
+  // Fake vessel: a handymax-ish hull (~183 m LOA, 28 m beam) berthed near Berth 5/4.
+  const DUMMY = { name: "MV PHANTOM (dummy)", mmsi: 999000999, loa: 183, beam: 28 };
+  let layer = null;
+
+  // Build a ship-shaped polygon centered at `c`, aligned along the unit vector
+  // (fe, fn) given in east/north meters. Pure geometry — no app globals.
+  function hull(c, fe, fn) {
+    const mPerLat = 111320, mPerLon = 111320 * Math.cos(c.lat * Math.PI / 180);
+    const re = fn, rn = -fe;                 // starboard = forward rotated -90°
+    const L = DUMMY.loa, B = DUMMY.beam, taper = 0.28 * L;
+    // local (along, cross) offsets, bow pointing forward
+    const pts = [
+      [-L / 2, -B / 2], [-L / 2, B / 2],
+      [L / 2 - taper, B / 2], [L / 2, 0], [L / 2 - taper, -B / 2],
+    ];
+    return pts.map(([a, cr]) => {
+      const de = a * fe + cr * re, dn = a * fn + cr * rn;
+      return [c.lat + dn / mPerLat, c.lon + de / mPerLon];
+    });
+  }
+
+  // Place along the centerline (segment near station 351); fall back to map center.
+  async function placement() {
+    try {
+      const gj = await fetch("/static/gis/centerline.geojson").then((r) => r.json());
+      const line = gj.features.find((f) => f.geometry.type === "LineString");
+      const co = line.geometry.coordinates;          // [lon, lat] pairs
+      const a = co[2], b = co[3];                      // Berth 5/4 segment
+      const c = { lat: (a[1] + b[1]) / 2, lon: (a[0] + b[0]) / 2 };
+      const mPerLat = 111320, mPerLon = 111320 * Math.cos(c.lat * Math.PI / 180);
+      let fe = (b[0] - a[0]) * mPerLon, fn = (b[1] - a[1]) * mPerLat;
+      const len = Math.hypot(fe, fn) || 1; fe /= len; fn /= len;
+      return { c, fe, fn };
+    } catch (e) {
+      const c = map.getCenter();
+      return { c: { lat: c.lat, lon: c.lng }, fe: 0.7, fn: 0.7 };
+    }
+  }
+
+  async function show() {
+    if (layer) return;
+    const { c, fe, fn } = await placement();
+    if (!toggle.checked) return; // toggled off while awaiting
+    layer = L.polygon(hull(c, fe, fn), {
+      color: "#ffce5a", weight: 2, fillColor: "#ffce5a", fillOpacity: 0.45,
+    }).bindPopup(
+      `<b>${DUMMY.name}</b><br>MMSI ${DUMMY.mmsi}<br>` +
+      `LOA ${DUMMY.loa} m · beam ${DUMMY.beam} m<br><i>dummy — visualization only</i>`
+    ).addTo(map);
+  }
+  function hide() { if (layer) { map.removeLayer(layer); layer = null; } }
+
+  toggle.addEventListener("change", () => (toggle.checked ? show() : hide()));
+})();
+// ===== /DUMMY SHIP =============================================================
+
+// ===== DUMMY SHIP (visualization only — delete this block + its HTML to remove)
+// Draws a fake vessel footprint as a rectangle occupying a station interval near
+// the Berth 5/4 boundary, offset to the water side of the quay face.
+const dummyShipLayer = L.layerGroup();
+const DUMMY = { stern: 20, bow: 660, beamDeg: 0.00045 };  // ~640 ft LOA near sta 351
+
+function buildDummyShip() {
+  dummyShipLayer.clearLayers();
+  const s = interpStation(DUMMY.stern), b = interpStation(DUMMY.bow);
+  if (!s || !b) return;
+  // perpendicular to the wharf, pointed to the water side (SE → lower lat)
+  let plat = b[1] - s[1], plon = -(b[0] - s[0]);   // rotate (dlon,dlat) by 90°
+  const mag = Math.hypot(plat, plon) || 1;
+  plat /= mag; plon /= mag;
+  if (plat > 0) { plat = -plat; plon = -plon; }     // ensure it points SE (to water)
+  const off = DUMMY.beamDeg;
+  const corners = [s, b, [b[0] + plat * off, b[1] + plon * off], [s[0] + plat * off, s[1] + plon * off]];
+  L.polygon(corners, { color: "#3ddc97", weight: 2, fillColor: "#3ddc97", fillOpacity: 0.45 })
+    .bindPopup(`<b>M/V Demo</b> (dummy)<br>occupies POPA ${fmtSta(DUMMY.stern)} – ${fmtSta(DUMMY.bow)}<br><i>visualization only — not real AIS</i>`)
+    .addTo(dummyShipLayer);
+}
+
+document.getElementById("dummyShipToggle").addEventListener("change", (e) => {
+  if (e.target.checked) { buildDummyShip(); dummyShipLayer.addTo(map); }
+  else { map.removeLayer(dummyShipLayer); }
+});
+// ===== /DUMMY SHIP
+
+// --- Boot ------------------------------------------------------------------
+loadBbox();
+loadReferenceGeo();
+loadStats();
+loadSegments();
+loadVessels();
+loadPositions();
+setInterval(() => { loadStats(); loadPositions(); }, 15000);
+</script>
+</body>
+</html>

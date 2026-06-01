@@ -3,16 +3,20 @@
 Affine params come from ``app.crosswalk`` so there is exactly one source of
 truth for the published crosswalk constants.
 
-TODO(real-geometry): the vertex lat/lon below are a PLACEHOLDER straight-ish
-line inside the AIS bounding box. Replace with vertices digitized from the
-aerial / port GIS along the actual quay face. The ``M`` value on each vertex is
-the canonical POPA station (feet) and MUST stay monotonic and correct — that is
-what ``ST_InterpolatePoint`` reads to turn a lat/lon into a station. Only the
-lat/lon need replacing; keep the M values tied to true stationing.
+The wharf face geometry + POPA stationing are DERIVED from the port's ArcGIS
+berth polygons by ``data/gis/build_centerline.py`` (the quay face is each
+berth's water-side edge; station = running footage along it). That script
+writes ``data/gis/centerline_vertices.json`` as ``[[lon, lat, M], ...]`` where
+``M`` is the canonical POPA station (feet) — what ``ST_InterpolatePoint`` reads
+to turn a lat/lon into a station. If that file is missing we fall back to a
+placeholder line so the seed still runs.
 
 Run:  python -m app.seed.wharf_seed
 """
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -27,15 +31,28 @@ from app.db import SessionLocal
 
 SEGMENT_NAME = "POPA Public Wharf"
 
-# (lon, lat, M=POPA station feet). PLACEHOLDER lat/lon — see module docstring.
-# Spans POPA station -12+02 .. 33+66 (the crosswalk test reference points).
-WHARF_VERTICES: list[tuple[float, float, float]] = [
+_VERTICES_FILE = (
+    Path(__file__).parents[2] / "data" / "gis" / "centerline_vertices.json"
+)
+
+# PLACEHOLDER fallback (lon, lat, M=POPA station feet) if the derived file is
+# absent — a straight-ish line inside the AIS bounding box.
+_PLACEHOLDER_VERTICES: list[tuple[float, float, float]] = [
     (-93.93800, 29.86000, -1202.0),
     (-93.93432, 29.86526, 0.0),
     (-93.93125, 29.86964, 1000.0),
     (-93.92819, 29.87402, 2000.0),
     (-93.92400, 29.88000, 3366.0),
 ]
+
+
+def _load_vertices() -> list[tuple[float, float, float]]:
+    if _VERTICES_FILE.exists():
+        return [tuple(v) for v in json.loads(_VERTICES_FILE.read_text())]
+    return _PLACEHOLDER_VERTICES
+
+
+WHARF_VERTICES: list[tuple[float, float, float]] = _load_vertices()
 
 
 def _wharf_ewkt(vertices: list[tuple[float, float, float]]) -> str:
