@@ -221,8 +221,7 @@ const berthLayer = L.geoJSON(null, {
     const span = rng ? `POPA ${fmtSta(rng[0])} – ${fmtSta(rng[1])} (${(rng[1] - rng[0]).toFixed(0)} ft)` : `width ${p.width} ft`;
     layer.bindPopup(`<b>${p.name}</b><br>${span}`);
     if (p.name) {
-      const inner = rng ? `${p.name}<br><span class="sub">${fmtSta(rng[0])}–${fmtSta(rng[1])}</span>` : p.name;
-      layer.bindTooltip(`<span class="lbl">${inner}</span>`, { permanent: true, direction: "center", className: "berth-label" });
+      layer.bindTooltip(`<span class="lbl">${p.name}</span>`, { permanent: true, direction: "center", className: "berth-label" });
     }
   },
 }).addTo(map);
@@ -237,23 +236,71 @@ const centerlineLayer = L.geoJSON(null, {
   style: { color: "#ff4d4d", weight: 3, opacity: 0.95 },
   pointToLayer: (f, latlng) => L.circleMarker(latlng, {
     radius: 4, color: "#ff4d4d", fillColor: "#fff", fillOpacity: 1, weight: 2,
-  }).bindTooltip(`<span class="lbl">POPA ${fmtSta(f.properties.station)}</span>`, {
-    permanent: true, direction: "top", className: "sta-label", offset: [0, -4],
   }),
 }).addTo(map);
-const feetLayer = L.geoJSON(null, {
-  pointToLayer: (f, latlng) => {
+// Station markers are drawn as perpendicular tick lines crossing the quay face
+// and running out into the water (see "Wharf Stationing" aerial), not dots on
+// the centerline. Ticks need the centerline tangent + a water-side normal, so
+// they're rendered by renderFeetTicks() once the centerline + berths load.
+const feetLayer = L.layerGroup().addTo(map);
+let FEET_FEATURES = null;          // raw feet-marker features, rendered later
+let CENTER_COORDS = null;          // centerline [lon,lat] vertices
+let CENTER_STATIONS = null;        // matching POPA stations
+let LAND_CENTROID = null;          // [lon,lat] mean of berth polygons (landward)
+
+// Interpolate position + along-shore tangent at a POPA station on the centerline.
+function centerlineAt(s) {
+  if (!CENTER_COORDS || !CENTER_STATIONS) return null;
+  for (let i = 0; i < CENTER_STATIONS.length - 1; i++) {
+    const a = CENTER_STATIONS[i], b = CENTER_STATIONS[i + 1];
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    if (s >= lo && s <= hi) {
+      const r = b === a ? 0 : (s - a) / (b - a);
+      const A = CENTER_COORDS[i], B = CENTER_COORDS[i + 1];
+      return {
+        lon: A[0] + r * (B[0] - A[0]), lat: A[1] + r * (B[1] - A[1]),
+        dlon: B[0] - A[0], dlat: B[1] - A[1],
+      };
+    }
+  }
+  return null;
+}
+
+function renderFeetTicks() {
+  if (!FEET_FEATURES || !CENTER_COORDS || !LAND_CENTROID) return;
+  feetLayer.clearLayers();
+  for (const f of FEET_FEATURES) {
+    const sta = f.properties.station;
     const major = f.properties.major;
-    const m = L.circleMarker(latlng, {
-      radius: major ? 3 : 1.5, weight: 0,
-      fillColor: "#cfe3f5", fillOpacity: major ? 0.95 : 0.6,
-    });
-    if (major) m.bindTooltip(`<span class="lbl">${fmtSta(f.properties.station)}</span>`, {
-      permanent: true, direction: "bottom", className: "ft-label", offset: [0, 2],
-    });
-    return m;
-  },
-}).addTo(map);
+    const p = centerlineAt(sta);
+    if (!p) continue;
+    const mPerLat = 111320, mPerLon = 111320 * Math.cos(p.lat * Math.PI / 180);
+    // unit normal to the quay, flipped to point toward the water (away from land)
+    let pe = -p.dlat * mPerLat, pn = p.dlon * mPerLon;
+    const pl = Math.hypot(pe, pn) || 1; pe /= pl; pn /= pl;
+    const le = (p.lon - LAND_CENTROID[0]) * mPerLon;
+    const ln = (p.lat - LAND_CENTROID[1]) * mPerLat;
+    if (pe * le + pn * ln < 0) { pe = -pe; pn = -pn; }
+    // tick runs from the dock face out into the water
+    const out = major ? 70 : 22;       // metres
+    const back = major ? 8 : 4;        // metres onto the dock, so it crosses the face
+    const end = [p.lat + pn * out / mPerLat, p.lon + pe * out / mPerLon];
+    const top = [p.lat - pn * back / mPerLat, p.lon - pe * back / mPerLon];
+    L.polyline([top, end], {
+      color: "#cfe3f5", weight: major ? 1.4 : 0.8,
+      opacity: major ? 0.85 : 0.45,
+    }).addTo(feetLayer);
+    if (major) {
+      L.marker(end, {
+        icon: L.divIcon({
+          className: "ft-label",
+          html: `<span class="lbl">${fmtSta(sta)}</span>`,
+          iconSize: [0, 0],
+        }),
+      }).addTo(feetLayer);
+    }
+  }
+}
 const vesselLayer = L.layerGroup().addTo(map);
 let probeMarker = null;
 let segmentParams = null; // first segment's affine params, for client-side crosswalk
@@ -297,17 +344,30 @@ async function loadReferenceGeo() {
     const berths = await api("/static/gis/berths.geojson");
     berthLayer.addData(berths);
     if (berths.features.length) map.fitBounds(berthLayer.getBounds(), { padding: [30, 30] });
+    // landward reference: mean of every berth polygon vertex (used to flip the
+    // station ticks so they extend toward the water, not inland).
+    let sx = 0, sy = 0, n = 0;
+    for (const f of berths.features) {
+      const rings = f.geometry.type === "Polygon" ? f.geometry.coordinates : f.geometry.coordinates.flat();
+      for (const ring of rings) for (const [lon, lat] of ring) { sx += lon; sy += lat; n++; }
+    }
+    if (n) LAND_CENTROID = [sx / n, sy / n];
   } catch (e) { /* optional */ }
   try {
     const fm = await api("/static/gis/feet_markers.geojson");
-    feetLayer.addData(fm);
+    FEET_FEATURES = fm.features;
   } catch (e) { /* optional */ }
   try {
     const cl = await api("/static/gis/centerline.geojson");
     centerlineLayer.addData(cl);
     const line = cl.features.find((f) => f.geometry.type === "LineString");
-    if (line) applyWharfBearing(line.geometry.coordinates);
+    if (line) {
+      CENTER_COORDS = line.geometry.coordinates;
+      CENTER_STATIONS = line.properties.stations;
+      applyWharfBearing(line.geometry.coordinates);
+    }
   } catch (e) { /* optional */ }
+  renderFeetTicks();
 }
 
 async function loadSegments() {
