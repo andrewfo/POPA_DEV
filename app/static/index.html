@@ -163,6 +163,43 @@
   .intake .result .warn { color: var(--warn); display: block; margin-top: 4px; font-size: 13px; }
   .req-card .meta b { color: var(--ink); font-weight: 600; }
 
+  /* Edit surface (vessels + reservations) */
+  .filter-bar { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+  .filter-bar label { font-size: 12px; color: var(--muted); }
+  .filter-bar select {
+    padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font: inherit; font-size: 13px;
+  }
+  .status-badge {
+    display: inline-block; padding: 1px 7px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .4px; color: #04121f; vertical-align: 1px;
+  }
+  .row-actions { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+  .btn-sm {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .btn-sm:hover { border-color: var(--accent); }
+  .btn-sm.danger:hover { border-color: var(--bad); color: var(--bad); }
+  .btn-sm.primary { background: var(--accent); color: #04243d; font-weight: 700; border-color: var(--accent); }
+  .edit-form { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 10px; display: none; }
+  .edit-form.open { display: block; }
+  .edit-form label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  .edit-form input, .edit-form select {
+    width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font: inherit; font-size: 13px;
+  }
+  .edit-form .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .edit-form .check { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 13px; color: var(--ink); }
+  .edit-form .check input { width: auto; }
+  .mini-result { font-size: 13px; margin-top: 8px; padding: 7px 9px; border-radius: 7px; display: none; }
+  .mini-result.ok { background: rgba(61,220,151,.12); border: 1px solid var(--good); color: var(--good); display: block; }
+  .mini-result.err { background: rgba(255,107,107,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
+  .mini-result .warn { color: var(--warn); display: block; margin-top: 4px; }
+  td.act { text-align: right; }
+  td.act .btn-sm { padding: 2px 8px; font-size: 12px; }
+
   /* Berth occupancy timeline drawer */
   #timelineDrawer {
     position: relative; min-height: 0; display: flex; flex-direction: column;
@@ -310,6 +347,64 @@
     </details>
     <!-- ===== /Manual berth-request entry ===== -->
 
+    <!-- ===== New reservation (operator entry — vessel / dredge / layberth) ===== -->
+    <details class="intake" id="newResPanel">
+      <summary>New reservation <span class="sub">· operator / dredge</span></summary>
+      <form id="newResForm" autocomplete="off">
+        <div class="grid2">
+          <div>
+            <label>Type</label>
+            <select name="type">
+              <option value="vessel">Vessel</option>
+              <option value="dredge">Dredge</option>
+              <option value="layberth">Lay berth</option>
+            </select>
+          </div>
+          <div>
+            <label>Status</label>
+            <select name="status">
+              <option value="tentative">Tentative</option>
+              <option value="requested">Requested</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="observed">Observed</option>
+              <option value="completed">Completed</option>
+            </select>
+          </div>
+        </div>
+        <label>Vessel <span class="sub">(optional — for dredge/layberth leave blank)</span></label>
+        <select name="vessel_id" id="newResVessel"><option value="">— none —</option></select>
+        <fieldset>
+          <legend>Schedule</legend>
+          <div class="grid2">
+            <div><label>ETB <span class="req">*</span></label><input type="date" name="etb" required /></div>
+            <div><label>ETD</label><input type="date" name="etd" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Berth (POPA station, ft)</legend>
+          <div class="grid2">
+            <div><label>Stern station</label><input type="number" step="any" name="station_lo" /></div>
+            <div><label>Bow station</label><input type="number" step="any" name="station_hi" /></div>
+          </div>
+          <div class="check"><input type="checkbox" id="newResUnassigned" /><label for="newResUnassigned" style="margin:0">Berth unassigned</label></div>
+          <div class="grid2">
+            <div>
+              <label>Direction</label>
+              <select name="direction"><option value="">—</option><option value="upstream">Upstream</option><option value="downstream">Downstream</option></select>
+            </div>
+            <div><label>Priority</label><input type="number" name="priority" /></div>
+          </div>
+        </fieldset>
+        <label>Cargo</label>
+        <input type="text" name="cargo" />
+        <label>Notes</label>
+        <input type="text" name="notes" />
+        <button type="submit" id="nrSubmit">Create reservation</button>
+        <div class="result" id="nrResult"></div>
+      </form>
+    </details>
+    <!-- ===== /New reservation ===== -->
+
     <!-- ===== DUMMY SHIP control (visualization only — delete this block to remove) ===== -->
     <div class="probe" id="dummyShipControl" style="margin-bottom:14px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
@@ -342,11 +437,25 @@
     <h2>Wharf segments</h2>
     <div id="segments"><div class="empty">loading…</div></div>
 
-    <h2>Berth requests</h2>
+    <h2>Reservations</h2>
+    <div class="filter-bar">
+      <label for="resFilter">Show</label>
+      <select id="resFilter">
+        <option value="active">Active (not cancelled)</option>
+        <option value="requested">Requested</option>
+        <option value="tentative">Tentative</option>
+        <option value="confirmed">Confirmed</option>
+        <option value="observed">Observed</option>
+        <option value="completed">Completed</option>
+        <option value="cancelled">Cancelled</option>
+        <option value="all">All</option>
+      </select>
+    </div>
     <div id="requests"><div class="empty">none yet</div></div>
 
     <h2>Recent vessels</h2>
     <div id="vessels"><div class="empty">loading…</div></div>
+    <div id="vesselEditor"></div>
   </aside>
 
   <div id="stage">
@@ -404,6 +513,34 @@ const fmtSta = (ft) => {
   const rem = (a - whole * 100).toFixed(2).padStart(5, "0");
   return `${neg}${whole}+${rem}`;
 };
+// Escape DB-sourced free text (AIS names, cargo, notes) before innerHTML.
+const esc = (v) => (v == null ? "" : String(v).replace(/[&<>"']/g, (c) => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
+// Status -> badge colour (mirrors the occupancy-timeline palette).
+const RES_STATUS_COLOR = {
+  observed: "#3ddc97", requested: "#ffce5a", tentative: "#46b1ff",
+  confirmed: "#7c5cff", completed: "#5a6b7d", cancelled: "#39495a",
+};
+let VESSELS = [];   // last-fetched vessel list (id/name/dims), for edit + the new-reservation picker
+// JSON write helper: returns {ok, status, data}; 204 (delete) has no body.
+async function apiWrite(method, url, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const r = await fetch(url, opts);
+  let data = null;
+  if (r.status !== 204) { try { data = await r.json(); } catch (e) { /* empty body */ } }
+  return { ok: r.ok, status: r.status, data };
+}
+// Pull a typed payload out of a form: skip blanks, coerce the named numeric fields.
+function formPayload(form, numFields) {
+  const nums = new Set(numFields || []);
+  const out = {};
+  for (const [k, v] of new FormData(form).entries()) {
+    if (v === "" || v == null) continue;
+    out[k] = nums.has(k) ? Number(v) : v;
+  }
+  return out;
+}
 
 // --- Map -------------------------------------------------------------------
 const map = L.map("map", {
@@ -643,14 +780,95 @@ async function loadVessels() {
   const el = document.getElementById("vessels");
   try {
     const vs = await api("/vessels?limit=25");
+    VESSELS = vs;
+    populateVesselPicker();
     if (!vs.length) { el.innerHTML = '<div class="empty">no vessels yet — run AIS ingestion</div>'; return; }
-    el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA</th></tr></thead><tbody>${
-      vs.map((v) => `<tr><td>${v.name || "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa ?? "—"}</td></tr>`).join("")
+    el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA</th><th></th></tr></thead><tbody>${
+      vs.map((v) => `<tr><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa ?? "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`).join("")
     }</tbody></table>`;
+    el.querySelectorAll("[data-edit-vessel]").forEach((b) =>
+      b.addEventListener("click", () => openVesselEditor(Number(b.dataset.editVessel))));
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
 }
+
+// Fill the New-reservation vessel picker from the loaded vessel list.
+function populateVesselPicker() {
+  const sel = document.getElementById("newResVessel");
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— none —</option>' + VESSELS.map((v) =>
+    `<option value="${v.id}">${esc(v.name || ("MMSI " + (v.mmsi ?? "?")))} (#${v.id})</option>`).join("");
+  sel.value = cur;
+}
+
+// Inline editor for one vessel (dimensions in metres — the canonical store).
+function openVesselEditor(id) {
+  const v = VESSELS.find((x) => x.id === id);
+  const box = document.getElementById("vesselEditor");
+  if (!v) { box.innerHTML = ""; return; }
+  const val = (x) => (x == null ? "" : x);
+  box.innerHTML = `
+    <div class="card">
+      <div class="name">Edit vessel #${v.id}</div>
+      <form class="edit-form open" id="vesselEditForm">
+        <label>Name</label><input name="name" value="${esc(val(v.name))}" />
+        <div class="grid2">
+          <div><label>IMO</label><input type="number" name="imo" value="${val(v.imo)}" /></div>
+          <div><label>MMSI</label><input type="number" name="mmsi" value="${val(v.mmsi)}" /></div>
+        </div>
+        <div class="grid2">
+          <div><label>LOA (m)</label><input type="number" step="any" name="loa" value="${val(v.loa)}" /></div>
+          <div><label>Beam (m)</label><input type="number" step="any" name="beam" value="${val(v.beam)}" /></div>
+        </div>
+        <div class="grid2">
+          <div><label>Draft (m)</label><input type="number" step="any" name="draft" value="${val(v.draft)}" /></div>
+          <div><label>Callsign</label><input name="callsign" value="${esc(val(v.callsign))}" /></div>
+        </div>
+        <label>Destination</label><input name="destination" value="${esc(val(v.destination))}" />
+        <div class="row-actions">
+          <button type="submit" class="btn-sm primary">Save</button>
+          <button type="button" class="btn-sm" id="vesselEditCancel">Cancel</button>
+        </div>
+        <div class="mini-result" id="vesselEditResult"></div>
+      </form>
+    </div>`;
+  const form = document.getElementById("vesselEditForm");
+  const res = document.getElementById("vesselEditResult");
+  document.getElementById("vesselEditCancel").addEventListener("click", () => { box.innerHTML = ""; });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    res.className = "mini-result";
+    // Blank fields are skipped (not cleared) — a manual edit overwrites only what
+    // it sets, mirroring the server's exclude_unset partial update.
+    const payload = formPayload(form, ["imo", "mmsi", "loa", "beam", "draft"]);
+    const w = await apiWrite("PATCH", `/vessels/${id}`, payload);
+    if (w.ok) {
+      res.className = "mini-result ok"; res.textContent = "Saved.";
+      loadVessels(); loadPositions();
+      setTimeout(() => { box.innerHTML = ""; }, 1200);
+    } else {
+      res.className = "mini-result err";
+      res.textContent = "Failed: " + writeError(w);
+    }
+  });
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// Human-readable error from an apiWrite() failure (detail may be a string or a
+// FastAPI validation-error array).
+function writeError(w) {
+  const d = w.data && w.data.detail;
+  if (!d) return "HTTP " + w.status;
+  return typeof d === "string" ? d : JSON.stringify(d);
+}
+function warnHtml(warnings) {
+  return (warnings && warnings.length) ? `<span class="warn">⚠ ${esc(warnings.join("; "))}</span>` : "";
+}
+// date input value "YYYY-MM-DD" -> midnight-UTC ISO, matching the intake path
+// (reservation time_range is timestamptz; requests are date-granular).
+function dateToIso(d) { return d ? d + "T00:00:00Z" : d; }
 
 async function loadPositions() {
   try {
@@ -675,22 +893,115 @@ async function loadPositions() {
   } catch (e) { /* no positions */ }
 }
 
-// --- Berth requests (read) -------------------------------------------------
+// --- Reservations (read + inline edit / cancel / delete) -------------------
 async function loadRequests() {
   const el = document.getElementById("requests");
+  const sel = document.getElementById("resFilter");
+  const filter = sel ? sel.value : "active";
   try {
-    const rs = await api("/reservations?status=requested&limit=25");
-    if (!rs.length) { el.innerHTML = '<div class="empty">none yet</div>'; return; }
-    const fmtDate = (s) => s ? new Date(s).toLocaleDateString() : "—";
-    el.innerHTML = rs.map((r) => `
-      <div class="card req-card">
-        <div class="name">${r.vessel_name || "(unnamed)"} ${r.vessel_imo ? `<span style="color:var(--muted);font-weight:400">IMO ${r.vessel_imo}</span>` : ""}</div>
-        <div class="meta">ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${r.source}</div>
-        <div class="meta">${r.station_unassigned ? "berth unassigned" : `POPA ${fmtSta(r.station_lo)}–${fmtSta(r.station_hi)}`}${r.cargo ? " · " + r.cargo : ""}</div>
-      </div>`).join("");
+    // 'active' & 'all' fetch unfiltered then trim client-side; a specific
+    // status uses the API's own filter.
+    const q = (filter === "active" || filter === "all")
+      ? "/reservations?limit=100" : `/reservations?status=${filter}&limit=100`;
+    let rs = await api(q);
+    if (filter === "active") rs = rs.filter((r) => r.status !== "cancelled");
+    if (!rs.length) { el.innerHTML = '<div class="empty">none</div>'; return; }
+    el.innerHTML = rs.map(resCard).join("");
+    wireResCards(el);
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
+}
+
+function resCard(r) {
+  const fmtDate = (s) => s ? new Date(s).toLocaleDateString() : "—";
+  const dval = (s) => (s ? s.slice(0, 10) : "");
+  const color = RES_STATUS_COLOR[r.status] || "#888";
+  const imo = r.vessel_imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(r.vessel_imo)}</span>` : "";
+  const sta = r.station_unassigned ? "berth unassigned" : `POPA ${fmtSta(r.station_lo)}–${fmtSta(r.station_hi)}`;
+  const opt = (cur, v, lbl) => `<option value="${v}"${(cur || "") === v ? " selected" : ""}>${lbl}</option>`;
+  const statusSel = ["observed", "requested", "tentative", "confirmed", "completed", "cancelled"].map((s) => opt(r.status, s, s)).join("");
+  const typeSel = ["vessel", "dredge", "layberth"].map((t) => opt(r.type, t, t)).join("");
+  const dirSel = ["", "upstream", "downstream"].map((d) => opt(r.direction, d, d || "—")).join("");
+  return `
+    <div class="card req-card" data-res="${r.id}">
+      <div class="name">${esc(r.vessel_name || "(unnamed)")} ${imo}
+        <span class="status-badge" style="background:${color}">${esc(r.status)}</span></div>
+      <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(r.source)}</div>
+      <div class="meta">${esc(sta)}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
+      <div class="row-actions">
+        <button class="btn-sm" data-act="edit">Edit</button>
+        ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
+        <button class="btn-sm danger" data-act="delete">Delete</button>
+      </div>
+      <form class="edit-form" data-edit>
+        <div class="grid2">
+          <div><label>Status</label><select name="status">${statusSel}</select></div>
+          <div><label>Type</label><select name="type">${typeSel}</select></div>
+        </div>
+        <div class="grid2">
+          <div><label>ETB</label><input type="date" name="etb" value="${dval(r.t_start)}" /></div>
+          <div><label>ETD</label><input type="date" name="etd" value="${dval(r.t_end)}" /></div>
+        </div>
+        <div class="grid2">
+          <div><label>Stern sta (ft)</label><input type="number" step="any" name="station_lo" value="${r.station_unassigned ? "" : r.station_lo}" /></div>
+          <div><label>Bow sta (ft)</label><input type="number" step="any" name="station_hi" value="${r.station_unassigned ? "" : r.station_hi}" /></div>
+        </div>
+        <div class="check"><input type="checkbox" name="unassigned" ${r.station_unassigned ? "checked" : ""} /><label style="margin:0">Berth unassigned</label></div>
+        <div class="grid2">
+          <div><label>Direction</label><select name="direction">${dirSel}</select></div>
+          <div><label>Priority</label><input type="number" name="priority" value="${r.priority ?? ""}" /></div>
+        </div>
+        <label>Cargo</label><input name="cargo" value="${esc(r.cargo)}" />
+        <label>Notes</label><input name="notes" value="${esc(r.notes)}" />
+        <div class="row-actions">
+          <button type="submit" class="btn-sm primary">Save changes</button>
+          <button type="button" class="btn-sm" data-act="close">Close</button>
+        </div>
+        <div class="mini-result"></div>
+      </form>
+    </div>`;
+}
+
+function wireResCards(container) {
+  container.querySelectorAll(".req-card[data-res]").forEach((card) => {
+    const id = Number(card.dataset.res);
+    const form = card.querySelector("[data-edit]");
+    const res = form.querySelector(".mini-result");
+    card.querySelector('[data-act="edit"]').addEventListener("click", () => form.classList.toggle("open"));
+    form.querySelector('[data-act="close"]').addEventListener("click", () => form.classList.remove("open"));
+
+    const cancelBtn = card.querySelector('[data-act="cancel"]');
+    if (cancelBtn) cancelBtn.addEventListener("click", async () => {
+      if (!confirm("Cancel this reservation?")) return;
+      const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "cancelled" });
+      if (w.ok) { loadRequests(); loadTimeline(); } else alert("Failed: " + writeError(w));
+    });
+    card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
+      if (!confirm("Permanently delete this reservation?")) return;
+      const w = await apiWrite("DELETE", `/reservations/${id}`);
+      if (w.ok) { loadRequests(); loadTimeline(); } else alert("Failed: " + writeError(w));
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      res.className = "mini-result";
+      const payload = formPayload(form, ["station_lo", "station_hi", "priority"]);
+      payload.unassigned = form.elements.unassigned.checked;
+      payload.etb = dateToIso(payload.etb);
+      payload.etd = dateToIso(payload.etd);
+      const w = await apiWrite("PATCH", `/reservations/${id}`, payload);
+      if (w.ok) {
+        res.className = "mini-result ok";
+        res.innerHTML = "Saved." + warnHtml(w.data && w.data.warnings);
+        loadTimeline();
+        setTimeout(loadRequests, 1500);   // let the confirmation (and any warning) show first
+      } else {
+        res.className = "mini-result err";
+        res.textContent = "Failed: " + writeError(w);
+      }
+    });
+  });
 }
 
 // --- Berth requests (write) ------------------------------------------------
@@ -739,6 +1050,45 @@ async function loadRequests() {
       btn.disabled = false; btn.textContent = "Record berth request";
     }
   });
+})();
+
+// --- New reservation (operator entry) --------------------------------------
+(function () {
+  const form = document.getElementById("newResForm");
+  if (!form) return;
+  const result = document.getElementById("nrResult");
+  const btn = document.getElementById("nrSubmit");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    result.className = "result";
+    btn.disabled = true; btn.textContent = "Creating…";
+    const payload = formPayload(form, ["vessel_id", "station_lo", "station_hi", "priority"]);
+    if (document.getElementById("newResUnassigned").checked) {
+      delete payload.station_lo; delete payload.station_hi;   // unassigned berth -> empty range
+    }
+    payload.etb = dateToIso(payload.etb);
+    payload.etd = dateToIso(payload.etd);
+    try {
+      const w = await apiWrite("POST", "/reservations", payload);
+      if (!w.ok) throw new Error(writeError(w));
+      result.className = "result ok";
+      result.innerHTML = `Created reservation #${w.data.id}.` + warnHtml(w.data.warnings);
+      form.reset();
+      loadRequests(); loadTimeline(); loadStats();
+    } catch (err) {
+      result.className = "result err";
+      result.textContent = "Failed: " + err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = "Create reservation";
+    }
+  });
+})();
+
+// Reservations status filter -> reload the list.
+(function () {
+  const sel = document.getElementById("resFilter");
+  if (sel) sel.addEventListener("change", loadRequests);
 })();
 
 // --- Click-to-station probe ------------------------------------------------

@@ -272,7 +272,10 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     intake_id = session.execute(
         pg_insert(IntakeEvent)
         .values(source=req.source, raw=req.raw, dedupe_key=key, processed=False)
-        .on_conflict_do_nothing(index_elements=["dedupe_key"])
+        .on_conflict_do_nothing(
+            index_elements=["dedupe_key"],
+            index_where=IntakeEvent.dedupe_key.isnot(None),
+        )
         .returning(IntakeEvent.id)
     ).scalar_one_or_none()
 

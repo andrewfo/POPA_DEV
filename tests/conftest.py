@@ -51,9 +51,16 @@ def _db_engine():
 @pytest.fixture
 def db_session(_db_engine):
     # Run inside a transaction we roll back, so tests never leave state behind.
+    # join_transaction_mode="create_savepoint" makes the session's own
+    # commit()/rollback() act on a SAVEPOINT inside our outer transaction, not
+    # on the real one — essential when the code under test commits (e.g. the
+    # write endpoints via TestClient). Without it, an endpoint commit/rollback
+    # escapes the fixture and leaks rows into the dev DB.
     conn = _db_engine.connect()
     trans = conn.begin()
-    Session = sessionmaker(bind=conn, future=True)
+    Session = sessionmaker(
+        bind=conn, future=True, join_transaction_mode="create_savepoint"
+    )
     session = Session()
     try:
         yield session
