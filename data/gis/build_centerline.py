@@ -3,14 +3,14 @@
 The berth polygons are berthing-WATER rectangles: their landward long edge is
 the quay face, their water-side long edge is the outer limit of the berth
 pocket, ~200-270 ft (the berth depth) out into the channel. So the berths give
-clean STATIONING (running footage along the wharf) AND, in their landward
-extent, the real dock edge — though the complex multi-vertex berths (13/17 pts)
-make that edge jagged point-by-point.
+clean STATIONING (running footage along the wharf), independent of geometry.
 
-``quayface.*`` is NOT a bulkhead survey: it is an ArcGIS "Distance And Direction"
-annotation (two rough measurement lines). One of its two segments was drawn
-~120 ft out in the channel, so it cannot be traced as the quay. We use it only
-for the along-shore EXTENT (where to clip the centerline's ends).
+``lines.*`` (an ArcGIS "Distance And Direction" annotation) holds the real
+quay-face GEOMETRY: its two records are the two STRAIGHT PARTS of the bulkhead,
+each verified on the orthomosaic to lie on the concrete/water edge. The parts
+are near-parallel but laterally offset ~80 ft — a real STEP where the NE part
+juts waterward of the SW part (clearly visible in the aerial: the bulk-carrier
+berth sits on the outboard NE part, the small-boat berth on the inboard SW part).
 
 Method:
   * STATIONING REFERENCE: each berth's along-shore edge length matches its
@@ -19,15 +19,12 @@ Method:
     anchoring the Berth 5/4 junction at station 351 reproduces those deltas to
     ~1 ft. This chain carries correct ALONG-wharf stationing (independent of
     which side it sits on).
-  * QUAY-FACE GEOMETRY: ONE straight line on the real dock edge — direction =
-    the along-shore axis ``u`` (berth-centroid spread, the same axis that orients
-    the ticks and apron normal), perpendicular offset = the median over berths of
-    each berth's most-landward vertex (robust to the jagged notches). Each
-    stationing-reference vertex projects perpendicularly onto this line and keeps
-    its station, giving a dead-straight centerline ON the quay with canonical
-    POPA. Endpoints are clipped to the annotation's along-extent (the NE end
-    lands at POPA ~3360 ~= Dock No. 0, the physical start of the dock stationing
-    — ~90 ft SW of where the Berth 1 *polygon* ends).
+  * QUAY-FACE GEOMETRY: the centerline IS the two-part bulkhead — the four
+    ``lines`` endpoints ordered SW->NE and joined into one polyline (the middle
+    segment is the step face). Each vertex is stationed by projecting it onto the
+    reference chain, so POPA is canonical and monotonic while the drawn line sits
+    on the real, stepped dock edge. The NE terminus lands at POPA ~3360 ~= Dock
+    No. 0 (the physical start of the dock stationing).
 
 Outputs:
   * data/gis/centerline_vertices.json   -> [[lon, lat, M], ...] for the seed
@@ -55,7 +52,7 @@ from app.crosswalk import dockno_to_popa, format_station, popa_to_dockno
 
 BERTHS = GIS_DIR / "berths"
 WAREHOUSES = GIS_DIR / "warehouses"
-QUAYFACE = GIS_DIR / "quayface"   # surveyed bulkhead line (real quay-face geometry)
+LINES = GIS_DIR / "lines"   # the two straight parts of the stepped bulkhead (ArcGIS)
 
 ANCHOR_BERTH = "Berth 4"      # its SW water corner is the stationing anchor
 ANCHOR_STATION = 351.0        # running footage at that corner (from berth_leng)
@@ -157,49 +154,27 @@ def main() -> None:
     ai = min(range(len(ref_chain)), key=lambda i: _dist(ref_chain[i], anchor_pt))
     ref_stations = [ANCHOR_STATION + (cum[i] - cum[ai]) for i in range(len(ref_chain))]
 
-    # --- dock-edge (quay face) geometry: one straight line on the real edge ---
-    # NOTE: data/gis/quayface.* is NOT a bulkhead survey — it is an ArcGIS
-    # "Distance And Direction" annotation (two rough measurement lines). One of
-    # its two segments was drawn ~120 ft out in the channel, so projecting onto
-    # it pushed the centerline off the dock. The authoritative edge is the
-    # LANDWARD side of the berth polygons (source "PoPA Orthomosaics/Record
-    # Drawing" — traced on the aerial). The berths are jagged (merged multi-vertex
-    # edges), so we don't trace them directly; instead we build ONE straight line:
-    #   * direction  = the along-shore axis u (berth-centroid spread) — the same
-    #     axis that orients the ticks and the apron normal, so all stay parallel;
-    #   * offset D   = median over berths of each berth's most-landward vertex
-    #     (its quay corner), robust to the jagged notches.
-    # The quay's along-EXTENT (and thus the centerline's NE/SW clip) is taken from
-    # the annotation line's span, reprojected onto this corrected straight edge.
-    quay, qcrs = _reader(QUAYFACE)
+    # --- dock-edge (quay face) geometry: the two-part stepped bulkhead --------
+    # data/gis/lines.* is an ArcGIS "Distance And Direction" annotation whose two
+    # records are the two STRAIGHT PARTS of the real bulkhead — verified against
+    # the orthomosaic, each part lies on the concrete/water edge. The parts are
+    # near-parallel but laterally offset by ~80 ft: the NE part juts that far
+    # waterward of the SW part, a real STEP in the quay (a vessel berths against
+    # whichever part it sits along). Order the four endpoints SW->NE and connect
+    # them into one polyline — the middle segment, between the two inner
+    # endpoints, is the step face. The centerline IS this bulkhead, stationed by
+    # projecting each vertex onto the berth reference chain (so POPA is canonical
+    # and monotonic, while the drawn geometry sits on the real two-part edge).
+    quay, qcrs = _reader(LINES)
     q_to_b = Transformer.from_crs(qcrs, bcrs, always_xy=True)
-    span_pts = [q_to_b.transform(x, y) for sr in quay.iterShapeRecords()
-                for x, y in sr.shape.points]
-
-    land_offsets = sorted(min(water(p) for p in sr.shape.points) for sr in recs)
-    m = len(land_offsets)
-    D = (land_offsets[m // 2] if m % 2 else
-         (land_offsets[m // 2 - 1] + land_offsets[m // 2]) / 2)   # median quay offset
-
-    alongs = [along(p) for p in span_pts]
-    on_edge = lambda a: (a * u[0] + D * w[0], a * u[1] + D * w[1])
-    quay_pts = [on_edge(min(alongs)), on_edge(max(alongs))]
-    quay_edges = [(quay_pts[0], quay_pts[1])]
-
-    def _project(P, segs):
-        """Nearest point on a polyline (list of (a,b) edges) to P, with the
-        interpolation fraction carried for the matched edge."""
-        best = None  # (dist2, fx, fy, a, b, t)
-        for a, b in segs:
-            dx, dy = b[0] - a[0], b[1] - a[1]
-            seg2 = dx * dx + dy * dy
-            t = 0.0 if seg2 == 0 else ((P[0] - a[0]) * dx + (P[1] - a[1]) * dy) / seg2
-            t = max(0.0, min(1.0, t))
-            fx, fy = a[0] + t * dx, a[1] + t * dy
-            d2 = (P[0] - fx) ** 2 + (P[1] - fy) ** 2
-            if best is None or d2 < best[0]:
-                best = (d2, fx, fy, a, b, t)
-        return best
+    # Order each part's two points SW->NE, then place the SW part before the NE
+    # part: ...far_SW, SW-inner, NE-inner (the step face), far_NE... A naive
+    # global along-sort would swap the two inner step corners (their along values
+    # differ by <1 ft across the near-perpendicular step) and cut a diagonal.
+    parts = [sorted((q_to_b.transform(x, y) for x, y in sr.shape.points), key=along)
+             for sr in quay.iterShapeRecords()]
+    parts.sort(key=lambda seg: along(seg[0]))   # SW part first
+    quay_pts = parts[0] + parts[1]
 
     # Station of any point = M at its foot on the reference chain.
     ref_edges = list(zip(zip(ref_chain[:-1], ref_stations[:-1]),
@@ -218,24 +193,40 @@ def main() -> None:
                 best = (d2, ma + t * (mb - ma))
         return best[1]
 
-    # Quay coverage in POPA stationing = where its surveyed ends project to.
-    cov_lo = min(_ref_station(p) for p in quay_pts)
-    cov_hi = max(_ref_station(p) for p in quay_pts)
-    sw_end = min(quay_pts, key=along)   # SW quay terminus (station cov_lo)
-    ne_end = max(quay_pts, key=along)   # NE quay terminus (station cov_hi)
+    # Base geometry = the bulkhead polyline itself (SW terminus, the two inner
+    # step corners, NE terminus — two straight parts joined by the step face),
+    # each vertex stationed off the berth reference chain. The step face is
+    # near-perpendicular, so its two corners sit at ~the same station; clamp to a
+    # running max so POPA is non-decreasing SW->NE (the <1 ft blip is noise).
+    base_chain = quay_pts
+    base_st = []
+    for p in base_chain:
+        s = _ref_station(p)
+        base_st.append(s if not base_st else max(s, base_st[-1]))
 
-    # Centerline = quay SW end, then every reference vertex inside coverage
-    # projected perpendicularly onto the quay, then quay NE end. Smooth, on the
-    # real bulkhead, carrying canonical POPA station.
-    chain = [sw_end]
-    stations = [cov_lo]
-    for (x, y), m in zip(ref_chain, ref_stations):
-        if cov_lo + 1.0 < m < cov_hi - 1.0:
-            best = _project((x, y), quay_edges)
-            chain.append((best[1], best[2]))
-            stations.append(m)
-    chain.append(ne_end)
-    stations.append(cov_hi)
+    # Densify: drop a stationing node at every berth reference station, placed by
+    # interpolating ALONG the bulkhead (so it stays exactly on the straight
+    # part), giving canonical nodes at the berth corners (351, 1107, ...) on top
+    # of the four bulkhead points. The step face spans ~0 station, so nothing
+    # interpolates across it — every added node lands cleanly on one part.
+    def _interp_on(t):
+        for i in range(len(base_st) - 1):
+            a, b = base_st[i], base_st[i + 1]
+            if b > a and a <= t <= b:
+                r = (t - a) / (b - a)
+                return (base_chain[i][0] + r * (base_chain[i + 1][0] - base_chain[i][0]),
+                        base_chain[i][1] + r * (base_chain[i + 1][1] - base_chain[i][1]))
+        return None
+
+    nodes = list(zip(base_chain, base_st))
+    for m in ref_stations:
+        if base_st[0] + 1.0 < m < base_st[-1] - 1.0:
+            xy = _interp_on(m)
+            if xy is not None:
+                nodes.append((xy, m))
+    nodes.sort(key=lambda cs: cs[1])
+    chain = [c for c, _ in nodes]
+    stations = [s for _, s in nodes]
 
     # --- emit -------------------------------------------------------------
     vertices = []
