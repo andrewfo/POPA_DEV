@@ -875,7 +875,7 @@ async function loadPositions() {
       }).bindPopup(
         `<b>${p.vessel_name || "(unnamed)"}</b><br>MMSI ${p.mmsi ?? "—"}<br>` +
         `SOG ${p.sog ?? "—"} kn${moored ? " · <b>moored</b>" : ""}<br>` +
-        `${p.msg_ts ? new Date(p.msg_ts).toLocaleString() : ""}`
+        `${p.msg_ts ? new Date(p.msg_ts).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : ""}`
       ).addTo(vesselLayer);
       // Plain red dot for the "all vessels" layer; name shown on hover.
       L.circleMarker([p.lat, p.lon], {
@@ -907,30 +907,41 @@ async function loadRequests() {
   }
 }
 
-// <input type="datetime-local"> works in wall-clock with no zone; the store is
-// UTC (the intake form treats entered times as UTC). So fill the picker from the
-// timestamp's UTC components, and stamp the entered value back as UTC ('Z') —
-// keeping the round-trip in UTC, never silently shifting by the browser's zone.
+// Everything is Central Time (the DB runs at America/Chicago — see app/tz.py).
+// <input type="datetime-local"> is wall-clock with no zone, so fill it from the
+// timestamp's CENTRAL components and send the entered value back WITHOUT a zone —
+// the server stamps it Central. Round-trips in Central, never shifted by the
+// browser's own zone.
+const CENTRAL_TZ = "America/Chicago";
+function centralParts(d) {
+  // y/m/d/h/min rendered in Central (handles the CST/CDT switch), zero-padded.
+  const f = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CENTRAL_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d).reduce((o, p) => ((o[p.type] = p.value), o), {});
+  return { y: f.year, m: f.month, d: f.day, hh: f.hour === "24" ? "00" : f.hour, mm: f.minute };
+}
 function isoToLocalInput(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   if (isNaN(d)) return "";
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  const p = centralParts(d);
+  return `${p.y}-${p.m}-${p.d}T${p.hh}:${p.mm}`;
 }
 function localInputToIso(v) {
-  if (!v) return null;                       // blank -> caller omits the field
-  return v.length === 16 ? v + ":00Z" : v + "Z";   // append seconds/zone as needed
+  if (!v) return null;                  // blank -> caller omits the field
+  return v.length === 16 ? v + ":00" : v;   // naive Central wall-clock; server stamps the zone
 }
 function resCard(r) {
-  // Show the time of day when there is one; a date-only request (midnight UTC)
-  // reads as just the date. UTC throughout, matching the store + the edit form.
+  // Show the time of day when there is one; a date-only request (midnight
+  // Central) reads as just the date. Central throughout — store, edit form, view.
   const fmtDate = (s) => {
     if (!s) return "—";
     const d = new Date(s);
     if (isNaN(d)) return esc(s);
-    const opts = { timeZone: "UTC", year: "numeric", month: "short", day: "numeric" };
-    if (d.getUTCHours() || d.getUTCMinutes()) { opts.hour = "2-digit"; opts.minute = "2-digit"; }
+    const p = centralParts(d);
+    const opts = { timeZone: CENTRAL_TZ, year: "numeric", month: "short", day: "numeric" };
+    if (p.hh !== "00" || p.mm !== "00") { opts.hour = "2-digit"; opts.minute = "2-digit"; }
     return d.toLocaleString(undefined, opts);
   };
   const color = RES_STATUS_COLOR[r.status] || "#888";
@@ -1273,7 +1284,7 @@ function reqCard(r) {
   const agency = rawField(raw, ["agency", "Agency/Owner"]);
   const berth = rawField(raw, ["Assigned Berth"]);
   const cargo = rawField(raw, ["inbound_cargo", "Inbound Cargo"]) || rawField(raw, ["outbound_cargo", "Outbound Cargo"]);
-  const received = r.received_at ? new Date(r.received_at).toLocaleString() : "—";
+  const received = r.received_at ? new Date(r.received_at).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : "—";
   // Link to the reservation this request produced (status shows reconciliation
   // state); an unprocessed request (no arrival date) never made one.
   const resLink = r.reservation_id
@@ -1528,8 +1539,10 @@ const loadTimeline = (function () {
     for (const k in attrs) n.setAttribute(k, attrs[k]);
     return n;
   };
-  const fmtD = (ms) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const fmtDT = (s) => s ? new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+  // Axis + tooltip times in Central (the canonical zone); CENTRAL_TZ is the
+  // top-level const defined alongside the date helpers above.
+  const fmtD = (ms) => new Date(ms).toLocaleDateString(undefined, { timeZone: CENTRAL_TZ, month: "short", day: "numeric" });
+  const fmtDT = (s) => s ? new Date(s).toLocaleString(undefined, { timeZone: CENTRAL_TZ, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
   // Escape DB-sourced free-text before it goes into innerHTML. Vessel names come
   // from unauthenticated AIS and cargo/notes from manual intake — both untrusted.
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => (
@@ -1635,7 +1648,11 @@ const loadTimeline = (function () {
       svg.appendChild(el("line", { x1: px, y1: HEADER_H, x2: px, y2: totalH, class: "tl-grid" }));
       const tk = el("text", { x: px + 3, y: 15, class: "tl-axis-label" });
       const d = new Date(t);
-      tk.textContent = step < DAY ? (d.getHours() === 0 ? fmtD(t) : d.toLocaleTimeString(undefined, { hour: "2-digit" })) : fmtD(t);
+      // Sub-day ticks label the Central hour (midnight rolls over to the date).
+      const centralHour = Number(centralParts(d).hh);
+      tk.textContent = step < DAY
+        ? (centralHour === 0 ? fmtD(t) : d.toLocaleTimeString(undefined, { timeZone: CENTRAL_TZ, hour: "2-digit" }))
+        : fmtD(t);
       svg.appendChild(tk);
     }
 

@@ -108,6 +108,14 @@ station/time window before a reservation can be confirmed.
 - Migrations only via Alembic; never edit the DB by hand.
 - All position I/O goes through one crosswalk module (`app/crosswalk.py`) — no
   scattered stationing math.
+- **Central Time is the canonical wall-clock.** The whole system runs on US
+  Central (`America/Chicago`): the DB session is pinned to it (`app/db.py`) and
+  it's the database default (migration 0008); `timestamptz` columns still store
+  absolute instants, Central is just how they're read/written. Operator input
+  arrives zone-less (`datetime-local`/`date` send no zone) and is stamped Central
+  via the one time module (`app/tz.py` — `assume_central`); never hard-code a
+  `-6`/`-5` offset or attach UTC to form input. AIS `time_utc` is genuinely UTC
+  and stays so (it's a real instant; it just renders in Central).
 - Normalize on ingest (canonical units, enums, IMO/MMSI), keep the raw input in
   `intake_event` / `position_report.raw`.
 - Backfill is parse → human review → commit; legacy spreadsheets are messy
@@ -194,6 +202,7 @@ app/
   db.py                # SQLAlchemy engine / session
   models.py            # ORM models (mirror the migration; migration is truth)
   crosswalk.py         # THE stationing module — all position math lives here
+  tz.py                # THE time module — Central Time canon (assume_central); no inline offsets
   main.py              # FastAPI: read-only endpoints + map page + intake + edit endpoints
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
@@ -213,7 +222,8 @@ data/gis/              # build_centerline.py / to_geojson.py: real centerline + 
 alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intake dedupe ·
                        #   0004 'email' source · 0005 wharf_segment.apron ·
                        #   0006 berth catalog + reservation.berth_id ·
-                       #   0007 min mooring-gap buffer on the overlap constraint
+                       #   0007 min mooring-gap buffer on the overlap constraint ·
+                       #   0008 database default TimeZone = America/Chicago
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation; db-marked (auto-skip): geo→station, occupancy
                        #   derive, intake, reservations, edit (vessel patch / reservation CRUD / 409)

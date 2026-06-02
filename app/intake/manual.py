@@ -70,8 +70,8 @@ class BerthRequestForm(BaseModel):
     bunkers: bool = False
 
     # "Vessel is due from <origin> on <etb>" / "To Sail For <dest> on <etd>".
-    # ETB/ETD carry a time of day (arrival/departure timestamp); a bare date
-    # (no time component) is still accepted and lands at midnight UTC.
+    # ETB/ETD carry a time of day (arrival/departure timestamp), interpreted as
+    # Central Time; a bare date is still accepted and lands at midnight Central.
     due_from: str | None = None
     etb: dt.datetime | None = None
     sail_for: str | None = None

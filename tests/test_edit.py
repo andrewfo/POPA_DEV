@@ -179,9 +179,11 @@ def test_create_edit_reservation(client, db_session):
     assert got["station_lo_dock"] == 900 and got["station_hi_dock"] == 400
     assert got["station_lo"] == 2465 and got["station_hi"] == 2965
 
-    # Edit only the ETD + status; station bounds must be preserved.
+    # Edit only the ETD + status; station bounds must be preserved. Zone-less
+    # input is read as Central (the canonical wall-clock), so it round-trips to
+    # the same date — see app/tz.py.
     edited = client.patch(f"/reservations/{rid}", json={
-        "etd": "2026-07-15T00:00:00Z", "status": "requested",
+        "etd": "2026-07-15T00:00:00", "status": "requested",
     })
     assert edited.status_code == 200
     got = _get_reservation(client, rid)
@@ -198,8 +200,9 @@ def test_promote_request_from_bow(client, db_session):
     db_session.execute(
         text("UPDATE vessel SET loa = 182.88 WHERE id = :id"), {"id": vid}
     )
+    # Zone-less ETB is read as Central (canonical wall-clock — app/tz.py).
     rid = client.post("/reservations", json={
-        "vessel_id": vid, "etb": "2026-08-01T00:00:00Z", "status": "requested",
+        "vessel_id": vid, "etb": "2026-08-01T00:00:00", "status": "requested",
     }).json()["id"]
     assert _get_reservation(client, rid)["station_unassigned"] is True
 

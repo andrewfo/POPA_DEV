@@ -20,6 +20,7 @@ from app.intake.manual import (
     update_manual_request,
 )
 from app.models import IntakeEvent, Reservation, Vessel
+from app.tz import CENTRAL
 
 
 def _form(**over) -> BerthRequestForm:
@@ -48,30 +49,31 @@ def test_feet_to_metres_conversion():
     assert req.draft_m == round(31.1 / FEET_PER_M, 2)
 
 
-def test_dates_become_midnight_utc_timestamps():
+def test_dates_become_midnight_central_timestamps():
     req = normalize_form(_form())
-    assert req.etb == dt.datetime(2026, 6, 16, tzinfo=dt.timezone.utc)
-    assert req.etd == dt.datetime(2026, 6, 19, tzinfo=dt.timezone.utc)
+    assert req.etb == dt.datetime(2026, 6, 16, tzinfo=CENTRAL)
+    assert req.etd == dt.datetime(2026, 6, 19, tzinfo=CENTRAL)
 
 
 def test_etb_etd_keep_time_of_day():
-    # The form now carries an arrival/departure time of day; a naive datetime is
-    # treated as UTC (datetime-local inputs send no zone).
+    # The form carries an arrival/departure time of day; a naive datetime is
+    # read as Central Time (datetime-local inputs send no zone).
     req = normalize_form(
         _form(
             etb=dt.datetime(2026, 6, 16, 14, 30),
             etd=dt.datetime(2026, 6, 19, 6, 0),
         )
     )
-    assert req.etb == dt.datetime(2026, 6, 16, 14, 30, tzinfo=dt.timezone.utc)
-    assert req.etd == dt.datetime(2026, 6, 19, 6, 0, tzinfo=dt.timezone.utc)
+    assert req.etb == dt.datetime(2026, 6, 16, 14, 30, tzinfo=CENTRAL)
+    assert req.etd == dt.datetime(2026, 6, 19, 6, 0, tzinfo=CENTRAL)
 
 
-def test_etb_iso_string_with_zone_is_preserved():
-    # datetime-local + explicit 'Z' (what the reservation edit form sends) keeps
-    # its zone rather than being re-stamped.
+def test_etb_aware_input_keeps_its_instant():
+    # An explicitly-zoned value (e.g. 'Z') is not re-stamped — its instant is
+    # preserved, equal to the same moment expressed in Central.
     req = normalize_form(_form(etb="2026-06-16T14:30:00Z"))
     assert req.etb == dt.datetime(2026, 6, 16, 14, 30, tzinfo=dt.timezone.utc)
+    assert req.etb.utcoffset() == dt.timedelta(0)  # kept UTC, not shifted
 
 
 def test_cargo_summary_combines_in_and_out():

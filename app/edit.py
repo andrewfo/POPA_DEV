@@ -41,6 +41,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.crosswalk import segment_dockno_params
+from app.tz import assume_central
 from app.models import (
     DIRECTIONS,
     RESERVATION_SOURCES,
@@ -227,7 +228,13 @@ def _station_from_bow(
 
 def _time_range(etb: dt.datetime | None, etd: dt.datetime | None) -> TimeRange:
     """Resolve a ``[etb, etd)`` window. ``etd`` may be omitted (open-ended).
-    Raises ``ValueError`` if ``etd`` precedes ``etb``."""
+    Raises ``ValueError`` if ``etd`` precedes ``etb``.
+
+    Naive bounds (a ``datetime-local`` input sends no zone) are read as Central
+    Time — the canonical wall-clock (``app/tz.py``); an already-zoned bound keeps
+    its instant. The store stays ``timestamptz`` (absolute instants)."""
+    etb = assume_central(etb)
+    etd = assume_central(etd)
     if etb is not None and etd is not None and etd < etb:
         raise ValueError("ETD must not precede ETB")
     return TimeRange(lower=etb, upper=etd)
