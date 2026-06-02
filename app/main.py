@@ -364,7 +364,20 @@ def list_reservations(
                    lower(r.station_range) AS sta_lo,
                    upper(r.station_range) AS sta_hi,
                    r.created_at,
-                   v.name AS vessel_name, v.imo AS vessel_imo,
+                   -- A reservation projected from an IMO-less request (a barge/
+                   -- tug the vessel_requires_mmsi_or_imo CHECK won't let us key)
+                   -- has no vessel row, so fall back to the name carried in its
+                   -- linked intake_event.raw — the same source the berth-requests
+                   -- tab shows — rather than rendering "(unnamed)". Manual rows
+                   -- use the lowercase 'vessel' key, the online form 'Vessel'.
+                   COALESCE(v.name, (
+                       SELECT COALESCE(e.raw->>'vessel', e.raw->>'Vessel')
+                       FROM intake_event e
+                       WHERE e.reservation_id = r.id
+                       ORDER BY e.id
+                       LIMIT 1
+                   )) AS vessel_name,
+                   v.imo AS vessel_imo,
                    r.berth_id, b.name AS berth_name
             FROM reservation r
             LEFT JOIN vessel v ON v.id = r.vessel_id
