@@ -259,6 +259,45 @@ def create_berth_request(
     return result
 
 
+@app.get("/intake/berth-requests")
+def list_berth_requests(
+    limit: int = 100,
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Raw inbound berth requests exactly as received — the ``intake_event``
+    audit trail, newest first. Each row is one submission (online form, phone,
+    email, or operator entry) with its verbatim payload in ``raw`` and a link to
+    the ``requested`` reservation it produced, if any. This is the request
+    audit/reconciliation view, distinct from ``/reservations`` (the scheduling
+    rectangles)."""
+    rows = session.execute(
+        text(
+            """
+            SELECT e.id, e.source, e.received_at, e.processed,
+                   e.reservation_id, e.raw,
+                   r.status AS reservation_status
+            FROM intake_event e
+            LEFT JOIN reservation r ON r.id = e.reservation_id
+            ORDER BY e.received_at DESC
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit},
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "source": r.source,
+            "received_at": r.received_at.isoformat() if r.received_at else None,
+            "processed": r.processed,
+            "reservation_id": r.reservation_id,
+            "reservation_status": r.reservation_status,
+            "raw": r.raw,
+        }
+        for r in rows
+    ]
+
+
 @app.get("/reservations")
 def list_reservations(
     status: str | None = None,

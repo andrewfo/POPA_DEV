@@ -59,6 +59,23 @@
   }
   #sidebarResize { cursor: col-resize; background: var(--line); }
   #sidebarResize:hover { background: var(--accent); }
+
+  /* Sidebar tabs: Overview / Reservations / Berth requests. Each .tab-panel is
+     shown only when active; the panels share the one scrolling aside. */
+  nav.tabs {
+    display: flex; gap: 4px; margin: 4px 0 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  nav.tabs .tab {
+    flex: 1; padding: 9px 6px; border: none; background: none; cursor: pointer;
+    color: var(--muted); font: inherit; font-size: 13px; font-weight: 600;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  nav.tabs .tab:hover { color: var(--ink); }
+  nav.tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
   /* The map shares the right pane with the timeline drawer, stacked vertically.
      --drawerH is the drawer's expanded height (drag-resizable, persisted). */
   #stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr var(--drawerH, 300px); }
@@ -274,6 +291,15 @@
       <div class="stat"><div class="n" id="statPositions">—</div><div class="l">Position reports</div></div>
     </div>
 
+    <!-- Sidebar tabs: Overview / Reservations / Berth requests -->
+    <nav class="tabs" id="sidebarTabs">
+      <button type="button" class="tab active" data-tab="overview">Overview</button>
+      <button type="button" class="tab" data-tab="reservations">Reservations</button>
+      <button type="button" class="tab" data-tab="requests">Berth requests</button>
+    </nav>
+
+    <!-- ===== Berth requests tab ===== -->
+    <section class="tab-panel" data-panel="requests">
     <!-- ===== Manual berth-request entry (phone/email channel) ===== -->
     <details class="intake" id="intakePanel">
       <summary>New berth request <span class="sub">· phone / email</span></summary>
@@ -353,6 +379,23 @@
     </details>
     <!-- ===== /Manual berth-request entry ===== -->
 
+    <h2>All berth requests</h2>
+    <div class="filter-bar">
+      <label for="reqSource">Channel</label>
+      <select id="reqSource">
+        <option value="">All</option>
+        <option value="form">Online form</option>
+        <option value="phone">Phone</option>
+        <option value="email">Email</option>
+        <option value="operator">Operator</option>
+      </select>
+    </div>
+    <div id="berthRequests"><div class="empty">loading…</div></div>
+    </section>
+    <!-- ===== /Berth requests tab ===== -->
+
+    <!-- ===== Reservations tab ===== -->
+    <section class="tab-panel" data-panel="reservations">
     <!-- ===== New reservation (operator entry — vessel / dredge / layberth) ===== -->
     <details class="intake" id="newResPanel">
       <summary>New reservation <span class="sub">· operator / dredge</span></summary>
@@ -376,7 +419,7 @@
           </div>
         </div>
         <label>Vessel <span class="sub">(optional — for dredge/layberth leave blank)</span></label>
-        <select name="vessel_id" id="newResVessel"><option value="">— none —</option></select>
+        <select name="vessel_id" id="newResVessel"><option value=""></option></select>
         <fieldset>
           <legend>Schedule</legend>
           <div class="grid2">
@@ -410,6 +453,24 @@
     </details>
     <!-- ===== /New reservation ===== -->
 
+    <h2>Reservations</h2>
+    <div class="filter-bar">
+      <label for="resFilter">Show</label>
+      <select id="resFilter">
+        <option value="active">Active (not cancelled)</option>
+        <option value="requested">Requested</option>
+        <option value="confirmed">Confirmed</option>
+        <option value="completed">Completed</option>
+        <option value="cancelled">Cancelled</option>
+        <option value="all">All</option>
+      </select>
+    </div>
+    <div id="requests"><div class="empty">none yet</div></div>
+    </section>
+    <!-- ===== /Reservations tab ===== -->
+
+    <!-- ===== Overview tab ===== -->
+    <section class="tab-panel active" data-panel="overview">
     <!-- ===== Vessel outlines (to-scale, timeline-cursor driven) ===== -->
     <div class="probe" id="shipOutlineControl" style="margin-bottom:14px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
@@ -432,23 +493,11 @@
     <h2>Wharf segments</h2>
     <div id="segments"><div class="empty">loading…</div></div>
 
-    <h2>Reservations</h2>
-    <div class="filter-bar">
-      <label for="resFilter">Show</label>
-      <select id="resFilter">
-        <option value="active">Active (not cancelled)</option>
-        <option value="requested">Requested</option>
-        <option value="confirmed">Confirmed</option>
-        <option value="completed">Completed</option>
-        <option value="cancelled">Cancelled</option>
-        <option value="all">All</option>
-      </select>
-    </div>
-    <div id="requests"><div class="empty">none yet</div></div>
-
     <h2>Recent vessels</h2>
     <div id="vessels"><div class="empty">loading…</div></div>
     <div id="vesselEditor"></div>
+    </section>
+    <!-- ===== /Overview tab ===== -->
   </aside>
 
   <div id="sidebarResize" title="Drag to resize sidebar"></div>
@@ -800,7 +849,7 @@ function populateVesselPicker() {
   const sel = document.getElementById("newResVessel");
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '<option value="">— none —</option>' + VESSELS.map((v) =>
+  sel.innerHTML = '<option value=""></option>' + VESSELS.map((v) =>
     `<option value="${v.id}">${esc(v.name || ("MMSI " + (v.mmsi ?? "?")))} (#${v.id})</option>`).join("");
   sel.value = cur;
 }
@@ -941,6 +990,7 @@ function resCard(r) {
       <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(r.source)}</div>
       <div class="meta">${esc(sta)}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
       <div class="row-actions">
+        ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Assign berth + Confirm</button>' : ""}
         <button class="btn-sm" data-act="edit">Edit</button>
         ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
         <button class="btn-sm danger" data-act="delete">Delete</button>
@@ -981,6 +1031,19 @@ function wireResCards(container) {
     const res = form.querySelector(".mini-result");
     card.querySelector('[data-act="edit"]').addEventListener("click", () => form.classList.toggle("open"));
     form.querySelector('[data-act="close"]').addEventListener("click", () => form.classList.remove("open"));
+
+    // Promote a berth request to confirmed: open the edit form prefilled with
+    // status=confirmed and drop the operator on the berth (Dock No.) fields, the
+    // one thing a requested row is missing. Saving runs the confirmed-only
+    // no-overlap check (a clash surfaces as a 409 in the mini-result).
+    const confirmBtn = card.querySelector('[data-act="confirm"]');
+    if (confirmBtn) confirmBtn.addEventListener("click", () => {
+      form.classList.add("open");
+      form.elements.status.value = "confirmed";
+      form.elements.unassigned.checked = false;
+      form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      form.elements.station_lo.focus();
+    });
 
     const cancelBtn = card.querySelector('[data-act="cancel"]');
     if (cancelBtn) cancelBtn.addEventListener("click", async () => {
@@ -1053,7 +1116,7 @@ function wireResCards(container) {
         ? `<span class="warn">⚠ ${data.warnings.join("; ")}</span>` : "";
       result.innerHTML = msg + warns;
       if (!data.duplicate) form.reset();
-      loadRequests(); loadVessels(); loadStats();
+      loadRequests(); loadBerthRequests(); loadVessels(); loadStats();
     } catch (err) {
       result.className = "result err";
       result.textContent = "Failed: " + err.message;
@@ -1100,6 +1163,95 @@ function wireResCards(container) {
 (function () {
   const sel = document.getElementById("resFilter");
   if (sel) sel.addEventListener("change", loadRequests);
+})();
+
+// --- Sidebar tabs ----------------------------------------------------------
+// Toggle the .active panel; the last-selected tab persists in localStorage so a
+// refresh keeps you on the same view.
+(function () {
+  const nav = document.getElementById("sidebarTabs");
+  if (!nav) return;
+  const panels = document.querySelectorAll(".tab-panel");
+  function show(name) {
+    nav.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+    panels.forEach((p) => p.classList.toggle("active", p.dataset.panel === name));
+    localStorage.setItem("sidebarTab", name);
+  }
+  nav.querySelectorAll(".tab").forEach((b) =>
+    b.addEventListener("click", () => show(b.dataset.tab)));
+  const saved = localStorage.getItem("sidebarTab");
+  if (saved && nav.querySelector(`.tab[data-tab="${saved}"]`)) show(saved);
+})();
+
+// --- Berth requests (raw intake_event audit trail) -------------------------
+// The actual inbound requests as received (online form / phone / email /
+// operator), distinct from the reservations they project into. Read-only.
+async function loadBerthRequests() {
+  const el = document.getElementById("berthRequests");
+  if (!el) return;
+  const sel = document.getElementById("reqSource");
+  const channel = sel ? sel.value : "";
+  try {
+    let rows = await api("/intake/berth-requests?limit=200");
+    if (channel) rows = rows.filter((r) => r.source === channel);
+    if (!rows.length) { el.innerHTML = '<div class="empty">no berth requests on file</div>'; return; }
+    el.innerHTML = rows.map(reqCard).join("");
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+  }
+}
+
+// Pull a display value from a raw intake payload across both shapes: the manual
+// form (lowercase keys: vessel/imo/etb/etd/agency) and the online-form CSV
+// export (SharePoint column names: "Vessel"/"IMO Number"/...).
+function rawField(raw, keys) {
+  if (!raw) return null;
+  for (const k of keys) {
+    const v = raw[k];
+    if (v !== undefined && v !== null && v !== "") return v;
+  }
+  return null;
+}
+
+function reqCard(r) {
+  const raw = r.raw || {};
+  const fmtDate = (s) => { if (!s) return null; const d = new Date(s); return isNaN(d) ? esc(s) : d.toLocaleDateString(); };
+  const vessel = rawField(raw, ["vessel", "Vessel"]);
+  const imo = rawField(raw, ["imo", "IMO Number"]);
+  const etb = rawField(raw, ["etb", "Port Arrival Date"]);
+  const etd = rawField(raw, ["etd", "Port Departure Date"]);
+  const agency = rawField(raw, ["agency", "Agency/Owner"]);
+  const berth = rawField(raw, ["Assigned Berth"]);
+  const cargo = rawField(raw, ["inbound_cargo", "Inbound Cargo"]) || rawField(raw, ["outbound_cargo", "Outbound Cargo"]);
+  const received = r.received_at ? new Date(r.received_at).toLocaleString() : "—";
+  // Link to the reservation this request produced (status shows reconciliation
+  // state); an unprocessed request (no arrival date) never made one.
+  const resLink = r.reservation_id
+    ? `→ reservation #${r.reservation_id}${r.reservation_status ? " (" + esc(r.reservation_status) + ")" : ""}`
+    : (r.processed ? "no reservation" : "<span style=\"color:var(--warn)\">unprocessed</span>");
+  const lines = [];
+  if (etb || etd) lines.push(`ETB <b>${etb ? fmtDate(etb) : "—"}</b>${etd ? ` → ETD <b>${fmtDate(etd)}</b>` : ""}`);
+  if (berth) lines.push(`berth ${esc(berth)}`);
+  if (agency) lines.push(esc(agency));
+  if (cargo) lines.push(esc(cargo));
+  return `
+    <div class="card req-card">
+      <div class="name">${esc(vessel || "(no vessel name)")}
+        ${imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(imo)}</span>` : ""}
+        <span class="status-badge" style="background:var(--panel-2);color:var(--muted)">${esc(r.source)}</span></div>
+      ${lines.length ? `<div class="meta">${lines.join(" · ")}</div>` : ""}
+      <div class="meta" style="font-size:13px">received ${esc(received)} · ${resLink}</div>
+      <details style="margin-top:6px">
+        <summary style="cursor:pointer;color:var(--muted);font-size:13px">raw payload</summary>
+        <pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--muted);margin:6px 0 0">${esc(JSON.stringify(raw, null, 2))}</pre>
+      </details>
+    </div>`;
+}
+
+// Channel filter -> re-filter the list.
+(function () {
+  const sel = document.getElementById("reqSource");
+  if (sel) sel.addEventListener("change", loadBerthRequests);
 })();
 
 // --- Click-to-station probe ------------------------------------------------
@@ -1660,6 +1812,7 @@ loadStats();
 loadSegments();
 loadVessels();
 loadRequests();
+loadBerthRequests();
 loadPositions();
 setInterval(() => { loadStats(); loadPositions(); loadTimeline(); }, 15000);
 </script>
