@@ -171,8 +171,13 @@ surfaces as a 409.
    including manually assigning a berth from the named `berth` catalog
    (`GET /berths`; assignment fills `station_range`) and promoting to
    `confirmed` (the manual form of reconciliation; a confirmed overlap → 409 via
-   the exclusion constraint). The **automated** reconciliation engine and the
-   legacy-backfill *commit* are still TODO.
+   the exclusion constraint). An operator can also **edit a manual berth request
+   in place** (Edit button on each request card → `PATCH
+   /intake/berth-requests/{id}`): this re-projects the linked reservation and is
+   the one sanctioned mutation of an `intake_event.raw` row — manual channels
+   only (`phone|email|operator`); online-form rows stay immutable. The
+   **automated** reconciliation engine and the legacy-backfill *commit* are still
+   TODO.
 
 **Current state: steps 1–5 complete; step 6 (conflict-detection query/service)
 is the next core primitive.** Step 7 intake *capture* plus a manual *edit*
@@ -200,13 +205,15 @@ app/
     run.py             # runnable: python -m app.ais.run
   occupancy/           # step 5: detect.py, project.py, alongside.py, derive.py, run.py
   intake/              # step 7 capture: records.py (CSV parse), ingest.py, source.py,
-                       #   run.py (online-form CSV); manual.py (phone/email/operator entry)
+                       #   run.py (online-form CSV); manual.py (phone/email/operator
+                       #   entry + in-place request edit: record/update_manual_request)
 data/gis/              # build_centerline.py / to_geojson.py: real centerline + apron from
                        #   berth shapefiles (stationing) + quayface.* survey (quay geometry)
                        #   -> static GeoJSON + seed JSON
 alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intake dedupe ·
                        #   0004 'email' source · 0005 wharf_segment.apron ·
-                       #   0006 berth catalog + reservation.berth_id
+                       #   0006 berth catalog + reservation.berth_id ·
+                       #   0007 min mooring-gap buffer on the overlap constraint
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation; db-marked (auto-skip): geo→station, occupancy
                        #   derive, intake, reservations, edit (vessel patch / reservation CRUD / 409)
@@ -231,6 +238,15 @@ scripts/
   `requested` reservation projected from intake carries an **empty
   `station_range`** until reconciliation assigns the berth; an empty range never
   conflicts, which is intentional, so don't "fix" it with a placeholder span.
+  **One sanctioned exception to "never mutate raw":** the manual berth-request
+  *edit* (`update_manual_request` / `PATCH /intake/berth-requests/{id}`)
+  overwrites an existing `intake_event.raw` row in place (re-computing its
+  `dedupe_key`) and re-projects the linked reservation — an operator correcting a
+  phoned/emailed request one row at a time, rather than leaving a stale
+  duplicate. It is restricted to manual channels (`phone|email|operator`); the
+  online-form CSV row stays immutable, and the edit leaves the reservation's
+  berth/`station_range`, direction, and `status` alone (the request governs
+  vessel/time/cargo only). New *channels* still never skip the raw landing.
 - The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel
   edit overwrites the fields it sets (unlike intake, which only fills NULLs to
   keep AIS dimensions authoritative). Vessel dims are edited in **metres** (the

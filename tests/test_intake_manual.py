@@ -10,11 +10,14 @@ import datetime as dt
 
 from sqlalchemy import func, select, text
 
+import pytest
+
 from app.intake.manual import (
     FEET_PER_M,
     BerthRequestForm,
     normalize_form,
     record_manual_request,
+    update_manual_request,
 )
 from app.models import IntakeEvent, Reservation, Vessel
 
@@ -49,6 +52,26 @@ def test_dates_become_midnight_utc_timestamps():
     req = normalize_form(_form())
     assert req.etb == dt.datetime(2026, 6, 16, tzinfo=dt.timezone.utc)
     assert req.etd == dt.datetime(2026, 6, 19, tzinfo=dt.timezone.utc)
+
+
+def test_etb_etd_keep_time_of_day():
+    # The form now carries an arrival/departure time of day; a naive datetime is
+    # treated as UTC (datetime-local inputs send no zone).
+    req = normalize_form(
+        _form(
+            etb=dt.datetime(2026, 6, 16, 14, 30),
+            etd=dt.datetime(2026, 6, 19, 6, 0),
+        )
+    )
+    assert req.etb == dt.datetime(2026, 6, 16, 14, 30, tzinfo=dt.timezone.utc)
+    assert req.etd == dt.datetime(2026, 6, 19, 6, 0, tzinfo=dt.timezone.utc)
+
+
+def test_etb_iso_string_with_zone_is_preserved():
+    # datetime-local + explicit 'Z' (what the reservation edit form sends) keeps
+    # its zone rather than being re-stamped.
+    req = normalize_form(_form(etb="2026-06-16T14:30:00Z"))
+    assert req.etb == dt.datetime(2026, 6, 16, 14, 30, tzinfo=dt.timezone.utc)
 
 
 def test_cargo_summary_combines_in_and_out():
@@ -160,3 +183,66 @@ def test_missing_etb_lands_intake_without_reservation(db_session):
         select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
     ).scalar_one()
     assert ev.processed is False  # left for human follow-up
+
+
+# --- DB: in-place edit of a manual request ---------------------------------
+def test_edit_overwrites_raw_and_reprojects_reservation(db_session):
+    out = record_manual_request(db_session, _form(imo=9777888, draft_ft=31.1))
+    rid = out["reservation_id"]
+
+    edited = update_manual_request(
+        db_session,
+        out["intake_event_id"],
+        _form(imo=9777888, draft_ft=33.0, inbound_cargo="grain"),
+    )
+    # Same rows reused — an edit, not a new request.
+    assert edited["intake_event_id"] == out["intake_event_id"]
+    assert edited["reservation_id"] == rid
+
+    ev = db_session.execute(
+        select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
+    ).scalar_one()
+    assert ev.raw["draft_ft"] == 33.0  # raw mutated in place
+    res = db_session.execute(
+        select(Reservation).where(Reservation.id == rid)
+    ).scalar_one()
+    assert res.cargo == "IN: grain (12000 t)"  # reservation re-projected
+    # Draft correction flows to the vessel only where it was NULL (intake keeps
+    # AIS dims authoritative); name/IMO unchanged.
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9777888)).scalar_one()
+    assert v.name == "SAGA ADVENTURE"
+
+
+def test_edit_creates_reservation_when_arrival_date_added(db_session):
+    # Originally no ETB -> intake landed, no reservation.
+    out = record_manual_request(db_session, _form(imo=9001122, etb=None))
+    assert out["reservation_id"] is None
+
+    edited = update_manual_request(
+        db_session,
+        out["intake_event_id"],
+        _form(imo=9001122, etb=dt.date(2026, 7, 1), etd=dt.date(2026, 7, 5)),
+    )
+    assert edited["reservation_id"] is not None
+    ev = db_session.execute(
+        select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
+    ).scalar_one()
+    assert ev.processed is True
+    assert ev.reservation_id == edited["reservation_id"]
+
+
+def test_edit_rejects_online_form_rows(db_session):
+    # An online-form row (source='form') uses SharePoint keys and is immutable.
+    ev_id = db_session.execute(
+        text(
+            "INSERT INTO intake_event (source, raw, dedupe_key, processed) "
+            "VALUES ('form', '{}'::jsonb, 'k-form-1', false) RETURNING id"
+        )
+    ).scalar_one()
+    with pytest.raises(ValueError):
+        update_manual_request(db_session, ev_id, _form(imo=9223344))
+
+
+def test_edit_missing_event_raises_lookup(db_session):
+    with pytest.raises(LookupError):
+        update_manual_request(db_session, 999999, _form(imo=9334455))

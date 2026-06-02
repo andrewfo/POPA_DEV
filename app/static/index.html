@@ -165,7 +165,7 @@
   .intake legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; padding: 0; }
   .intake label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
   .intake label .req { color: var(--warn); }
-  .intake input[type=text], .intake input[type=number], .intake input[type=date], .intake select {
+  .intake input[type=text], .intake input[type=number], .intake input[type=date], .intake input[type=datetime-local], .intake select {
     width: 100%; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line);
     background: var(--panel-2); color: var(--ink); font: inherit; font-size: 14px;
   }
@@ -335,7 +335,7 @@
             <div><label>Beam (ft)</label><input type="number" step="any" name="beam_ft" /></div>
           </div>
           <div class="grid3">
-            <div><label>Draft (ft)</label><input type="number" step="any" name="draft_ft" /></div>
+            <div><label>Draft (ft) <span class="req">*</span></label><input type="number" step="any" name="draft_ft" required /></div>
             <div><label>Deadweight (lbs)</label><input type="number" step="any" name="deadweight_lbs" /></div>
             <div class="check"><input type="checkbox" name="bunkers" id="bunkers" /><label for="bunkers" style="margin:0">Taking bunkers</label></div>
           </div>
@@ -345,11 +345,11 @@
           <legend>Schedule</legend>
           <div class="grid2">
             <div><label>Due from</label><input type="text" name="due_from" /></div>
-            <div><label>On date (ETB) <span class="req">*</span></label><input type="date" name="etb" /></div>
+            <div><label>Arrival (ETB) <span class="req">*</span></label><input type="datetime-local" name="etb" /></div>
           </div>
           <div class="grid2">
             <div><label>To sail for</label><input type="text" name="sail_for" /></div>
-            <div><label>On date (ETD)</label><input type="date" name="etd" /></div>
+            <div><label>Departure (ETD)</label><input type="datetime-local" name="etd" /></div>
           </div>
         </fieldset>
 
@@ -374,6 +374,7 @@
         </fieldset>
 
         <button type="submit" id="brSubmit">Record berth request</button>
+        <button type="button" id="brCancelEdit" style="display:none">Cancel edit</button>
         <div class="result" id="brResult"></div>
       </form>
     </details>
@@ -683,7 +684,7 @@ L.control.layers(null, {
   "Berths": berthLayer,
   "Berthing zone (apron)": apronLayer,
   "Dock markers (yellow)": yellowLayer,
-  "POPA station ticks": feetLayer,
+  "Dredge markers": feetLayer,
 }, { collapsed: false, position: "topright" }).addTo(map);
 
 let probeMarker = null;
@@ -906,8 +907,32 @@ async function loadRequests() {
   }
 }
 
+// <input type="datetime-local"> works in wall-clock with no zone; the store is
+// UTC (the intake form treats entered times as UTC). So fill the picker from the
+// timestamp's UTC components, and stamp the entered value back as UTC ('Z') —
+// keeping the round-trip in UTC, never silently shifting by the browser's zone.
+function isoToLocalInput(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+function localInputToIso(v) {
+  if (!v) return null;                       // blank -> caller omits the field
+  return v.length === 16 ? v + ":00Z" : v + "Z";   // append seconds/zone as needed
+}
 function resCard(r) {
-  const fmtDate = (s) => s ? new Date(s).toLocaleDateString() : "—";
+  // Show the time of day when there is one; a date-only request (midnight UTC)
+  // reads as just the date. UTC throughout, matching the store + the edit form.
+  const fmtDate = (s) => {
+    if (!s) return "—";
+    const d = new Date(s);
+    if (isNaN(d)) return esc(s);
+    const opts = { timeZone: "UTC", year: "numeric", month: "short", day: "numeric" };
+    if (d.getUTCHours() || d.getUTCMinutes()) { opts.hour = "2-digit"; opts.minute = "2-digit"; }
+    return d.toLocaleString(undefined, opts);
+  };
   const color = RES_STATUS_COLOR[r.status] || "#888";
   const imo = r.vessel_imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(r.vessel_imo)}</span>` : "";
   const sta = r.station_unassigned
@@ -930,10 +955,28 @@ function resCard(r) {
       <div class="meta">${esc(sta)}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
       <div class="row-actions">
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
-        <button class="btn-sm" data-act="edit">Edit</button>
+        <button class="btn-sm" data-act="edit-request">Edit request</button>
+        <button class="btn-sm" data-act="edit">Edit placement</button>
         ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
         <button class="btn-sm danger" data-act="delete">Delete</button>
       </div>
+      <form class="edit-form" data-edit-request>
+        <fieldset>
+          <legend>Berth request</legend>
+          <div class="hint" style="margin:0 0 6px">Update the request as received — arrival/departure times and cargo. Placement (bow + heading) stays under “Edit placement”.</div>
+          <div class="grid2">
+            <div><label>Arrival (ETB)</label><input type="datetime-local" name="etb" value="${isoToLocalInput(r.t_start)}" /></div>
+            <div><label>Departure (ETD)</label><input type="datetime-local" name="etd" value="${isoToLocalInput(r.t_end)}" /></div>
+          </div>
+          <label>Cargo</label><input name="cargo" value="${esc(r.cargo)}" />
+          <label>Notes</label><input name="notes" value="${esc(r.notes)}" />
+        </fieldset>
+        <div class="row-actions">
+          <button type="submit" class="btn-sm primary">Save request</button>
+          <button type="button" class="btn-sm" data-act="close-request">Close</button>
+        </div>
+        <div class="mini-result"></div>
+      </form>
       <form class="edit-form" data-edit>
         <div class="grid2">
           <div><label>Status</label><select name="status">${statusSel}</select></div>
@@ -970,6 +1013,33 @@ function wireResCards(container) {
     const res = form.querySelector(".mini-result");
     card.querySelector('[data-act="edit"]').addEventListener("click", () => form.classList.toggle("open"));
     form.querySelector('[data-act="close"]').addEventListener("click", () => form.classList.remove("open"));
+
+    // Separate "Edit request" form: revise the berth-request info as received —
+    // arrival/departure timestamps and cargo/notes — without touching the
+    // placement (bow + heading), which stays on the "Edit placement" form.
+    const reqForm = card.querySelector("[data-edit-request]");
+    const reqRes = reqForm.querySelector(".mini-result");
+    card.querySelector('[data-act="edit-request"]').addEventListener("click", () => reqForm.classList.toggle("open"));
+    reqForm.querySelector('[data-act="close-request"]').addEventListener("click", () => reqForm.classList.remove("open"));
+    reqForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      reqRes.className = "mini-result";
+      const payload = { cargo: reqForm.elements.cargo.value, notes: reqForm.elements.notes.value };
+      const etb = localInputToIso(reqForm.elements.etb.value);
+      const etd = localInputToIso(reqForm.elements.etd.value);
+      if (etb) payload.etb = etb;   // blank -> leave the stored arrival as-is
+      if (etd) payload.etd = etd;   // blank -> leave the stored departure as-is
+      const w = await apiWrite("PATCH", `/reservations/${id}`, payload);
+      if (w.ok) {
+        reqRes.className = "mini-result ok";
+        reqRes.innerHTML = "Saved." + warnHtml(w.data && w.data.warnings);
+        loadTimeline();
+        setTimeout(loadRequests, 1200);   // let the confirmation show first
+      } else {
+        reqRes.className = "mini-result err";
+        reqRes.textContent = "Failed: " + writeError(w);
+      }
+    });
 
     // Promote a berth request to confirmed: open the edit form prefilled with
     // status=confirmed and drop the operator on the bow field — the one thing a
@@ -1024,16 +1094,59 @@ function wireResCards(container) {
 }
 
 // --- Berth requests (write) ------------------------------------------------
+// One form, two modes: record a new request (POST) or correct an existing
+// manual-channel one in place (PATCH). editBerthRequest() flips it into edit
+// mode (pre-filling from the raw payload); the cancel button / a successful
+// save flips it back. Exposed on window so reqCard's Edit button can call it.
 (function () {
   const form = document.getElementById("berthRequestForm");
   if (!form) return;
   const result = document.getElementById("brResult");
   const btn = document.getElementById("brSubmit");
+  const cancelBtn = document.getElementById("brCancelEdit");
+
+  let editingId = null;   // intake_event id being edited, or null in create mode
+
+  function setMode(id) {
+    editingId = id;
+    btn.textContent = id ? "Save changes" : "Record berth request";
+    cancelBtn.style.display = id ? "" : "none";
+  }
+
+  function resetForm() {
+    form.reset();
+    setMode(null);
+  }
+
+  cancelBtn.addEventListener("click", () => {
+    resetForm();
+    result.className = "result";
+    result.textContent = "";
+  });
+
+  // Pre-fill the form from a raw manual-request payload and switch to edit mode.
+  // Raw keys mirror the form's field names (set by BerthRequestForm.model_dump),
+  // so we can drive inputs directly; datetime-local wants "YYYY-MM-DDTHH:MM".
+  window.editBerthRequest = function (id, raw) {
+    resetForm();
+    for (const el of form.elements) {
+      if (!el.name || !(el.name in raw)) continue;
+      const v = raw[el.name];
+      if (el.type === "checkbox") el.checked = !!v;
+      else if (el.type === "datetime-local") el.value = v ? String(v).slice(0, 16) : "";
+      else el.value = v == null ? "" : v;
+    }
+    setMode(id);
+    document.getElementById("intakePanel").open = true;
+    form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    result.className = "result";
+    result.textContent = `Editing berth request #${id}.`;
+  };
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     result.className = "result";
-    btn.disabled = true; btn.textContent = "Recording…";
+    btn.disabled = true; btn.textContent = editingId ? "Saving…" : "Recording…";
 
     // Build a typed JSON payload: skip blanks, coerce numbers, bunkers->bool.
     const numFields = new Set(["imo", "length_ft", "beam_ft", "draft_ft", "deadweight_lbs", "inbound_tons", "outbound_tons"]);
@@ -1045,28 +1158,36 @@ function wireResCards(container) {
     }
     payload.bunkers = form.elements.bunkers.checked;
 
+    const editing = editingId;
+    const [method, url] = editing
+      ? ["PATCH", `/intake/berth-requests/${editing}`]
+      : ["POST", "/intake/berth-request"];
+
     try {
-      const r = await fetch("/intake/berth-request", {
-        method: "POST",
+      const r = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : ("HTTP " + r.status));
       result.className = "result ok";
-      const msg = data.duplicate
-        ? "Already on file — duplicate request, nothing added."
-        : `Recorded. Reservation #${data.reservation_id ?? "—"} (requested), vessel #${data.vessel_id ?? "—"}.`;
+      const msg = editing
+        ? `Updated request #${editing}. Reservation #${data.reservation_id ?? "—"}, vessel #${data.vessel_id ?? "—"}.`
+        : data.duplicate
+          ? "Already on file — duplicate request, nothing added."
+          : `Recorded. Reservation #${data.reservation_id ?? "—"} (requested), vessel #${data.vessel_id ?? "—"}.`;
       const warns = (data.warnings && data.warnings.length)
         ? `<span class="warn">⚠ ${data.warnings.join("; ")}</span>` : "";
       result.innerHTML = msg + warns;
-      if (!data.duplicate) form.reset();
+      if (editing || !data.duplicate) resetForm();
       loadRequests(); loadBerthRequests(); loadVessels(); loadStats();
     } catch (err) {
       result.className = "result err";
       result.textContent = "Failed: " + err.message;
     } finally {
-      btn.disabled = false; btn.textContent = "Record berth request";
+      btn.disabled = false;
+      btn.textContent = editingId ? "Save changes" : "Record berth request";
     }
   });
 })();
@@ -1098,6 +1219,8 @@ function wireResCards(container) {
 // --- Berth requests (raw intake_event audit trail) -------------------------
 // The actual inbound requests as received (online form / phone / email /
 // operator), distinct from the reservations they project into. Read-only.
+let _berthRequestRows = [];   // last-loaded rows, keyed for the delegated Edit handler
+
 async function loadBerthRequests() {
   const el = document.getElementById("berthRequests");
   if (!el) return;
@@ -1106,12 +1229,27 @@ async function loadBerthRequests() {
   try {
     let rows = await api("/intake/berth-requests?limit=200");
     if (channel) rows = rows.filter((r) => r.source === channel);
+    _berthRequestRows = rows;
     if (!rows.length) { el.innerHTML = '<div class="empty">no berth requests on file</div>'; return; }
     el.innerHTML = rows.map(reqCard).join("");
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
 }
+
+// Cards are re-rendered via innerHTML, so delegate the Edit click to the
+// container and look the row up by id to hand its raw payload to the form.
+(function () {
+  const el = document.getElementById("berthRequests");
+  if (!el) return;
+  el.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-edit-req]");
+    if (!btn) return;
+    const id = Number(btn.dataset.editReq);
+    const row = _berthRequestRows.find((r) => r.id === id);
+    if (row) window.editBerthRequest(id, row.raw || {});
+  });
+})();
 
 // Pull a display value from a raw intake payload across both shapes: the manual
 // form (lowercase keys: vessel/imo/etb/etd/agency) and the online-form CSV
@@ -1146,6 +1284,9 @@ function reqCard(r) {
   if (berth) lines.push(`berth ${esc(berth)}`);
   if (agency) lines.push(esc(agency));
   if (cargo) lines.push(esc(cargo));
+  // Only manual-channel rows (phone/email/operator) carry this form's lowercase
+  // keys, so only they can be re-edited here; the online-form CSV is immutable.
+  const editable = ["phone", "email", "operator"].includes(r.source);
   return `
     <div class="card req-card">
       <div class="name">${esc(vessel || "(no vessel name)")}
@@ -1153,6 +1294,7 @@ function reqCard(r) {
         <span class="status-badge" style="background:var(--panel-2);color:var(--muted)">${esc(r.source)}</span></div>
       ${lines.length ? `<div class="meta">${lines.join(" · ")}</div>` : ""}
       <div class="meta" style="font-size:13px">received ${esc(received)} · ${resLink}</div>
+      ${editable ? `<div class="row-actions"><button class="btn-sm" data-edit-req="${r.id}">Edit</button></div>` : ""}
       <details style="margin-top:6px">
         <summary style="cursor:pointer;color:var(--muted);font-size:13px">raw payload</summary>
         <pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--muted);margin:6px 0 0">${esc(JSON.stringify(raw, null, 2))}</pre>

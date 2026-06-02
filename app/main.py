@@ -31,7 +31,11 @@ from app.edit import (
     update_reservation,
     update_vessel,
 )
-from app.intake.manual import BerthRequestForm, record_manual_request
+from app.intake.manual import (
+    BerthRequestForm,
+    record_manual_request,
+    update_manual_request,
+)
 from app.models import PositionReport, Vessel, WharfSegment
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
@@ -64,6 +68,9 @@ def _do_write(session: Session, fn):
         result = fn()
         session.commit()
         return result
+    except LookupError as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -76,6 +83,8 @@ def _do_write(session: Session, fn):
                 "(time x station). Adjust the window, the berth, or keep it "
                 "tentative."
             )
+        elif "uq_intake_event_dedupe_key" in text_:
+            detail = "those exact details already exist on another berth request"
         elif "mmsi" in text_ and "key" in text_.lower():
             detail = "another vessel already uses that MMSI"
         elif "vessel_requires_mmsi_or_imo" in text_:
@@ -257,6 +266,19 @@ def create_berth_request(
     result = record_manual_request(session, form)
     session.commit()
     return result
+
+
+@app.patch("/intake/berth-requests/{intake_id}")
+def edit_berth_request(
+    intake_id: int, form: BerthRequestForm, session: Session = Depends(get_session)
+) -> dict:
+    """Correct a manual berth request **in place**: overwrites the raw
+    ``intake_event`` payload and re-projects its ``requested`` reservation. Only
+    manual-channel rows (phone/email/operator) are editable — the online-form CSV
+    export is left immutable. 404 if the event is missing, 422 if it isn't
+    editable, 409 if the edit collides (duplicate content, or a confirmed
+    time x station overlap)."""
+    return _do_write(session, lambda: update_manual_request(session, intake_id, form))
 
 
 @app.get("/intake/berth-requests")

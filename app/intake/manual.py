@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.intake.ingest import dedupe_key
 from app.models import IntakeEvent, Vessel
+from app.tz import CENTRAL, assume_central
 
 # Station "M" is feet; AIS/vessel dimensions are metres. Same constant as
 # app/occupancy/project.FEET_PER_M — duplicated to avoid coupling intake to the
@@ -48,8 +49,9 @@ class BerthRequestForm(BaseModel):
 
     Everything is optional at the transport layer; ``normalize_form`` decides
     what is required to build a vessel / reservation and records a warning for
-    anything missing. Dates arrive as ``YYYY-MM-DD`` (HTML date inputs) and are
-    parsed by pydantic into ``date``.
+    anything missing. Date-only fields arrive as ``YYYY-MM-DD`` (HTML date
+    inputs); ETB/ETD arrive as ``YYYY-MM-DDTHH:MM`` (``datetime-local`` inputs —
+    the arrival/departure timestamp) and a bare date is still accepted.
     """
 
     # how the request reached us (not on the paper form, but operational metadata)
@@ -67,11 +69,13 @@ class BerthRequestForm(BaseModel):
     draft_ft: float | None = None
     bunkers: bool = False
 
-    # "Vessel is due from <origin> on <etb>" / "To Sail For <dest> on <etd>"
+    # "Vessel is due from <origin> on <etb>" / "To Sail For <dest> on <etd>".
+    # ETB/ETD carry a time of day (arrival/departure timestamp); a bare date
+    # (no time component) is still accepted and lands at midnight UTC.
     due_from: str | None = None
-    etb: dt.date | None = None
+    etb: dt.datetime | None = None
     sail_for: str | None = None
-    etd: dt.date | None = None
+    etd: dt.datetime | None = None
 
     inbound_cargo: str | None = None
     inbound_tons: float | None = None
@@ -104,12 +108,17 @@ def _ft_to_m(value: float | None) -> float | None:
     return None if value is None else round(value / FEET_PER_M, 2)
 
 
-def _date_to_dt(d: dt.date | None) -> dt.datetime | None:
-    """Calendar date -> midnight UTC timestamp (reservation time_range is
-    timestamptz; requests are only date-granular, noted as such)."""
-    if d is None:
+def _to_dt(value: dt.datetime | dt.date | None) -> dt.datetime | None:
+    """Coerce an ETB/ETD input to a Central-Time timestamp for the
+    ``timestamptz`` ``time_range``. A ``datetime`` (the arrival/departure time of
+    day captured by the form) keeps its instant, assuming Central when naive
+    (form inputs send no zone); a bare ``date`` lands at midnight Central (a
+    date-only request). All zone handling goes through ``app/tz.py``."""
+    if value is None:
         return None
-    return dt.datetime.combine(d, dt.time.min, tzinfo=dt.timezone.utc)
+    if isinstance(value, dt.datetime):
+        return assume_central(value)
+    return dt.datetime.combine(value, dt.time.min, tzinfo=CENTRAL)
 
 
 def _cargo_summary(form: BerthRequestForm) -> str | None:
@@ -177,8 +186,8 @@ def normalize_form(form: BerthRequestForm) -> NormalizedRequest:
         loa_m=_ft_to_m(form.length_ft),
         beam_m=_ft_to_m(form.beam_ft),
         draft_m=_ft_to_m(form.draft_ft),
-        etb=_date_to_dt(form.etb),
-        etd=_date_to_dt(form.etd),
+        etb=_to_dt(form.etb),
+        etd=_to_dt(form.etd),
         cargo=_cargo_summary(form),
         notes=_notes(form, source, warnings),
         warnings=warnings,
@@ -307,6 +316,109 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     else:
         # No arrival date -> no defensible time window; keep the request as an
         # unprocessed intake_event for human follow-up rather than inventing one.
+        req.warnings.append("no reservation created (missing arrival date)")
+
+    return {
+        "duplicate": False,
+        "intake_event_id": intake_id,
+        "reservation_id": reservation_id,
+        "vessel_id": vessel_id,
+        "warnings": req.warnings,
+    }
+
+
+# Channels whose raw payload uses this form's lowercase keys, so an operator can
+# re-edit them through the same form. 'form' (online Adobe Sign CSV export) uses
+# SharePoint column names and is not editable here.
+EDITABLE_SOURCES = ("phone", "email", "operator")
+
+
+def update_manual_request(
+    session: Session, intake_id: int, form: BerthRequestForm
+) -> dict:
+    """Overwrite an existing manual berth request **in place**: re-normalize the
+    form, replace ``intake_event.raw`` (and its content-hash ``dedupe_key``), and
+    re-project the linked ``requested`` reservation (creating one if the edit now
+    supplies an arrival date).
+
+    This deliberately *mutates* the raw audit row — the one place we do — to let
+    an operator correct a phoned/emailed request one row at a time, rather than
+    leaving a stale duplicate behind. The berth assignment (``station_range`` /
+    ``berth_id``), direction, and reconciliation ``status`` are left untouched:
+    the request governs vessel / time / cargo, not where or whether it berthed.
+
+    Does NOT commit — the endpoint owns the transaction boundary. Raises
+    ``LookupError`` if the event doesn't exist and ``ValueError`` if it isn't an
+    editable manual-channel row.
+    """
+    existing = session.execute(
+        select(
+            IntakeEvent.id, IntakeEvent.source, IntakeEvent.reservation_id
+        ).where(IntakeEvent.id == intake_id)
+    ).first()
+    if existing is None:
+        raise LookupError(f"intake_event {intake_id} not found")
+    if existing.source not in EDITABLE_SOURCES:
+        raise ValueError(
+            f"only manual-channel requests ({', '.join(EDITABLE_SOURCES)}) "
+            f"can be edited, not {existing.source!r}"
+        )
+
+    req = normalize_form(form)
+    key = dedupe_key(req.raw)
+
+    # Replace the raw payload + its content hash in place. A collision with
+    # another row's hash trips the unique index -> IntegrityError -> 409.
+    session.execute(
+        update(IntakeEvent)
+        .where(IntakeEvent.id == intake_id)
+        .values(source=req.source, raw=req.raw, dedupe_key=key)
+    )
+
+    vessel_id = _upsert_vessel(session, req)
+    reservation_id = existing.reservation_id
+
+    if reservation_id is not None:
+        # Re-project onto the existing reservation. An empty time range when the
+        # arrival date is cleared never conflicts (same rule as an unassigned
+        # berth) and avoids an accidental unbounded range.
+        session.execute(
+            text(
+                """
+                UPDATE reservation
+                   SET vessel_id  = :vessel_id,
+                       time_range = CASE
+                           WHEN :etb IS NULL THEN 'empty'::tstzrange
+                           ELSE tstzrange(:etb, :etd, '[)')
+                       END,
+                       source = :source,
+                       cargo  = :cargo,
+                       notes  = :notes
+                 WHERE id = :rid
+                """
+            ),
+            {
+                "vessel_id": vessel_id,
+                "etb": req.etb,
+                "etd": req.etd,
+                "source": req.source,
+                "cargo": req.cargo,
+                "notes": req.notes,
+                "rid": reservation_id,
+            },
+        )
+        if req.etb is None:
+            req.warnings.append("arrival date cleared — time window emptied")
+    elif req.etb is not None:
+        # No reservation existed (the original lacked an arrival date); the edit
+        # now supplies one, so project it and link the event.
+        reservation_id = _insert_reservation(session, req, vessel_id)
+        session.execute(
+            update(IntakeEvent)
+            .where(IntakeEvent.id == intake_id)
+            .values(processed=True, reservation_id=reservation_id)
+        )
+    else:
         req.warnings.append("no reservation created (missing arrival date)")
 
     return {
