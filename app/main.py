@@ -243,8 +243,8 @@ def list_reservations(
                    v.name AS vessel_name, v.imo AS vessel_imo
             FROM reservation r
             LEFT JOIN vessel v ON v.id = r.vessel_id
-            WHERE (:status IS NULL OR r.status::text = :status)
-              AND ((:t_from IS NULL AND :t_to IS NULL)
+            WHERE (CAST(:status AS text) IS NULL OR r.status::text = CAST(:status AS text))
+              AND ((CAST(:t_from AS timestamptz) IS NULL AND CAST(:t_to AS timestamptz) IS NULL)
                    OR r.time_range && tstzrange(:t_from, :t_to, '[]'))
             ORDER BY r.created_at DESC
             LIMIT :limit

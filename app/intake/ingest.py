@@ -56,7 +56,10 @@ class IntakeIngestor:
                 dedupe_key=dedupe_key(rec.raw),
                 processed=False,
             )
-            .on_conflict_do_nothing(index_elements=["dedupe_key"])
+            .on_conflict_do_nothing(
+                index_elements=["dedupe_key"],
+                index_where=IntakeEvent.dedupe_key.isnot(None),
+            )
             .returning(IntakeEvent.id)
         )
         landed = self.session.execute(stmt).scalar_one_or_none()

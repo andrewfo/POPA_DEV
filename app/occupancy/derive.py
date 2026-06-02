@@ -151,7 +151,7 @@ def _upsert(
                  status, source, derived_key, notes, created_at)
             VALUES
                 (:vessel_id, 'vessel',
-                 numrange(:lo, :hi, '[]'),
+                 numrange(CAST(:lo AS numeric), CAST(:hi AS numeric), '[]'),
                  tstzrange(:t_start, :t_end, '[)'),
                  :direction, 'observed', 'ais', :derived_key, :notes, now())
             ON CONFLICT (derived_key) WHERE derived_key IS NOT NULL
