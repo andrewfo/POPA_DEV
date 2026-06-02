@@ -179,13 +179,13 @@ surfaces as a 409.
    including manually assigning a berth from the named `berth` catalog
    (`GET /berths`; assignment fills `station_range`) and promoting to
    `confirmed` (the manual form of reconciliation; a confirmed overlap → 409 via
-   the exclusion constraint). An operator can also **edit a manual berth request
-   in place** (Edit button on each request card → `PATCH
-   /intake/berth-requests/{id}`): this re-projects the linked reservation and is
-   the one sanctioned mutation of an `intake_event.raw` row — manual channels
-   only (`phone|email|operator`); online-form rows stay immutable. The
-   **automated** reconciliation engine and the legacy-backfill *commit* are still
-   TODO.
+   the exclusion constraint). An operator can also **edit or delete a manual
+   berth request** (Edit / Delete buttons on each request card → `PATCH` /
+   `DELETE /intake/berth-requests/{id}`): edit re-projects the linked reservation
+   in place (the one sanctioned mutation of an `intake_event.raw` row), delete
+   drops the raw row and its projected reservation. Both are manual channels only
+   (`phone|email|operator`); online-form rows stay immutable. The **automated**
+   reconciliation engine and the legacy-backfill *commit* are still TODO.
 
 **Current state: steps 1–5 complete; step 6 (conflict-detection query/service)
 is the next core primitive.** Step 7 intake *capture* plus a manual *edit*
@@ -215,7 +215,8 @@ app/
   occupancy/           # step 5: detect.py, project.py, alongside.py, derive.py, run.py
   intake/              # step 7 capture: records.py (CSV parse), ingest.py, source.py,
                        #   run.py (online-form CSV); manual.py (phone/email/operator
-                       #   entry + in-place request edit: record/update_manual_request)
+                       #   entry + in-place request edit/delete:
+                       #   record/update/delete_manual_request)
 data/gis/              # build_centerline.py / to_geojson.py: real centerline + apron from
                        #   berth shapefiles (stationing) + quayface.* survey (quay geometry)
                        #   -> static GeoJSON + seed JSON
@@ -256,7 +257,10 @@ scripts/
   duplicate. It is restricted to manual channels (`phone|email|operator`); the
   online-form CSV row stays immutable, and the edit leaves the reservation's
   berth/`station_range`, direction, and `status` alone (the request governs
-  vessel/time/cargo only). New *channels* still never skip the raw landing.
+  vessel/time/cargo only). `delete_manual_request` / `DELETE
+  /intake/berth-requests/{id}` likewise removes a manual row outright (raw event
+  + its projected reservation), same channel restriction. New *channels* still
+  never skip the raw landing.
 - The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel
   edit overwrites the fields it sets (unlike intake, which only fills NULLs to
   keep AIS dimensions authoritative). Vessel dims are edited in **metres** (the

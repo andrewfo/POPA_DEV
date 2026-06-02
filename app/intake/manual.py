@@ -327,6 +327,49 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     }
 
 
+def delete_manual_request(session: Session, intake_id: int) -> dict:
+    """Delete a manual berth request: drop the raw ``intake_event`` row and the
+    ``requested`` reservation it projected. An operator removing a phoned/emailed
+    request that was mistaken or withdrawn, rather than leaving a stale row + an
+    orphan reservation behind.
+
+    Like the in-place edit, this is restricted to manual channels
+    (``phone|email|operator``); the immutable online-form CSV export cannot be
+    deleted here. Does NOT commit — the endpoint owns the transaction boundary.
+    Raises ``LookupError`` if the event doesn't exist (-> 404) and ``ValueError``
+    if it isn't an editable manual-channel row (-> 422).
+    """
+    existing = session.execute(
+        select(IntakeEvent.source, IntakeEvent.reservation_id).where(
+            IntakeEvent.id == intake_id
+        )
+    ).first()
+    if existing is None:
+        raise LookupError(f"intake_event {intake_id} not found")
+    if existing.source not in EDITABLE_SOURCES:
+        raise ValueError(
+            f"only manual-channel requests ({', '.join(EDITABLE_SOURCES)}) "
+            f"can be deleted, not {existing.source!r}"
+        )
+
+    # The intake_event -> reservation FK is ON DELETE SET NULL, so deleting the
+    # event first just clears the link; then drop the projected reservation.
+    session.execute(
+        text("DELETE FROM intake_event WHERE id = :id"), {"id": intake_id}
+    )
+    reservation_id = existing.reservation_id
+    if reservation_id is not None:
+        session.execute(
+            text("DELETE FROM reservation WHERE id = :id"), {"id": reservation_id}
+        )
+
+    return {
+        "deleted": True,
+        "intake_event_id": intake_id,
+        "reservation_id": reservation_id,
+    }
+
+
 # Channels whose raw payload uses this form's lowercase keys, so an operator can
 # re-edit them through the same form. 'form' (online Adobe Sign CSV export) uses
 # SharePoint column names and is not editable here.

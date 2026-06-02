@@ -33,6 +33,7 @@ from app.edit import (
 )
 from app.intake.manual import (
     BerthRequestForm,
+    delete_manual_request,
     record_manual_request,
     update_manual_request,
 )
@@ -279,6 +280,18 @@ def edit_berth_request(
     editable, 409 if the edit collides (duplicate content, or a confirmed
     time x station overlap)."""
     return _do_write(session, lambda: update_manual_request(session, intake_id, form))
+
+
+@app.delete("/intake/berth-requests/{intake_id}", status_code=204)
+def remove_berth_request(
+    intake_id: int, session: Session = Depends(get_session)
+) -> Response:
+    """Delete a manual berth request and the ``requested`` reservation it
+    projected. Only manual-channel rows (phone/email/operator) can be deleted —
+    the online-form CSV export is immutable. 404 if the event is missing, 422 if
+    it isn't an editable manual-channel row."""
+    _do_write(session, lambda: delete_manual_request(session, intake_id))
+    return Response(status_code=204)
 
 
 @app.get("/intake/berth-requests")

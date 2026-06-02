@@ -162,12 +162,14 @@ does not.
   through the edit surface (`berth_id` on `POST`/`PATCH /reservations`), which
   fills `station_range` from the catalog; `GET /berths` lists the catalog. This
   is the manual half of reconciliation — the automated half (below) is still TODO.
-- **In-place berth-request edit** — an Edit button on each manual-channel request
-  card opens the same intake form pre-filled; `PATCH /intake/berth-requests/{id}`
-  (`update_manual_request`) overwrites that `intake_event.raw` row and
-  re-projects its reservation (leaving berth/status/direction alone). The one
-  sanctioned mutation of a raw intake row (manual channels only; online-form rows
-  stay immutable). The form's Draft (ft) field is now mandatory.
+- **In-place berth-request edit + delete** — Edit / Delete buttons on each
+  manual-channel request card. `PATCH /intake/berth-requests/{id}`
+  (`update_manual_request`) overwrites that `intake_event.raw` row and re-projects
+  its reservation (leaving berth/status/direction alone) — the one sanctioned
+  mutation of a raw intake row; `DELETE /intake/berth-requests/{id}`
+  (`delete_manual_request`) drops the raw row and its projected reservation. Both
+  are manual channels only (online-form rows stay immutable). The form's Draft
+  (ft) field is now mandatory.
 
 **Still TODO:**
 - **Reconcile against observed AIS** — match a request to the `observed`

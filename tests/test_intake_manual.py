@@ -15,6 +15,7 @@ import pytest
 from app.intake.manual import (
     FEET_PER_M,
     BerthRequestForm,
+    delete_manual_request,
     normalize_form,
     record_manual_request,
     update_manual_request,
@@ -248,3 +249,50 @@ def test_edit_rejects_online_form_rows(db_session):
 def test_edit_missing_event_raises_lookup(db_session):
     with pytest.raises(LookupError):
         update_manual_request(db_session, 999999, _form(imo=9334455))
+
+
+def test_delete_removes_intake_event_and_reservation(db_session):
+    ev0, res0 = _counts(db_session)
+    out = record_manual_request(db_session, _form(imo=9445566))
+    rid = out["reservation_id"]
+    assert rid is not None
+
+    deleted = delete_manual_request(db_session, out["intake_event_id"])
+    assert deleted["deleted"] is True
+    assert deleted["reservation_id"] == rid
+    # Back to the starting counts — both the audit row and its projection gone.
+    assert _counts(db_session) == (ev0, res0)
+    assert db_session.execute(
+        select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
+    ).scalar_one_or_none() is None
+    assert db_session.execute(
+        select(Reservation).where(Reservation.id == rid)
+    ).scalar_one_or_none() is None
+
+
+def test_delete_without_reservation(db_session):
+    # No ETB -> intake landed but no reservation; delete still drops the event.
+    out = record_manual_request(db_session, _form(imo=9667788, etb=None))
+    assert out["reservation_id"] is None
+
+    deleted = delete_manual_request(db_session, out["intake_event_id"])
+    assert deleted["reservation_id"] is None
+    assert db_session.execute(
+        select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
+    ).scalar_one_or_none() is None
+
+
+def test_delete_rejects_online_form_rows(db_session):
+    ev_id = db_session.execute(
+        text(
+            "INSERT INTO intake_event (source, raw, dedupe_key, processed) "
+            "VALUES ('form', '{}'::jsonb, 'k-form-del', false) RETURNING id"
+        )
+    ).scalar_one()
+    with pytest.raises(ValueError):
+        delete_manual_request(db_session, ev_id)
+
+
+def test_delete_missing_event_raises_lookup(db_session):
+    with pytest.raises(LookupError):
+        delete_manual_request(db_session, 999999)

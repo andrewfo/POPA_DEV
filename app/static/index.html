@@ -1248,17 +1248,27 @@ async function loadBerthRequests() {
   }
 }
 
-// Cards are re-rendered via innerHTML, so delegate the Edit click to the
+// Cards are re-rendered via innerHTML, so delegate the Edit/Delete clicks to the
 // container and look the row up by id to hand its raw payload to the form.
 (function () {
   const el = document.getElementById("berthRequests");
   if (!el) return;
-  el.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-edit-req]");
-    if (!btn) return;
-    const id = Number(btn.dataset.editReq);
-    const row = _berthRequestRows.find((r) => r.id === id);
-    if (row) window.editBerthRequest(id, row.raw || {});
+  el.addEventListener("click", async (e) => {
+    const editBtn = e.target.closest("[data-edit-req]");
+    if (editBtn) {
+      const id = Number(editBtn.dataset.editReq);
+      const row = _berthRequestRows.find((r) => r.id === id);
+      if (row) window.editBerthRequest(id, row.raw || {});
+      return;
+    }
+    const delBtn = e.target.closest("[data-delete-req]");
+    if (delBtn) {
+      const id = Number(delBtn.dataset.deleteReq);
+      if (!confirm("Delete this berth request and its requested reservation?")) return;
+      const w = await apiWrite("DELETE", `/intake/berth-requests/${id}`);
+      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); }
+      else alert("Failed: " + writeError(w));
+    }
   });
 })();
 
@@ -1305,7 +1315,7 @@ function reqCard(r) {
         <span class="status-badge" style="background:var(--panel-2);color:var(--muted)">${esc(r.source)}</span></div>
       ${lines.length ? `<div class="meta">${lines.join(" · ")}</div>` : ""}
       <div class="meta" style="font-size:13px">received ${esc(received)} · ${resLink}</div>
-      ${editable ? `<div class="row-actions"><button class="btn-sm" data-edit-req="${r.id}">Edit</button></div>` : ""}
+      ${editable ? `<div class="row-actions"><button class="btn-sm" data-edit-req="${r.id}">Edit</button><button class="btn-sm" data-delete-req="${r.id}">Delete</button></div>` : ""}
       <details style="margin-top:6px">
         <summary style="cursor:pointer;color:var(--muted);font-size:13px">raw payload</summary>
         <pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--muted);margin:6px 0 0">${esc(JSON.stringify(raw, null, 2))}</pre>
