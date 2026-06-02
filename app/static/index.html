@@ -210,6 +210,10 @@
   .tl-grid { stroke: var(--line); stroke-width: 1; }
   .tl-axis-label { fill: var(--muted); font: 11px system-ui, sans-serif; }
   .tl-now { stroke: var(--bad); stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .tl-cursor { stroke: #46e0ff; stroke-width: 2; }
+  .tl-cursor-handle { fill: #46e0ff; stroke: #04121f; stroke-width: 1; cursor: ew-resize; }
+  #tlSvg { cursor: ew-resize; }
+  #tlSpeed { padding: 3px 4px; }
   .tl-bar { rx: 3; cursor: pointer; stroke-width: 1; }
   .tl-bar-label { fill: #04121f; font: 600 11px system-ui, sans-serif; pointer-events: none; }
 </style>
@@ -316,6 +320,16 @@
     </div>
     <!-- ===== /DUMMY SHIP control ===== -->
 
+    <!-- ===== Vessel outlines (to-scale, timeline-cursor driven) ===== -->
+    <div class="probe" id="shipOutlineControl" style="margin-bottom:14px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="shipOutlineToggle" checked />
+        <span>Vessel outlines <span style="color:var(--muted)">(observed + confirmed)</span></span>
+      </label>
+      <div class="hint" style="margin-top:6px">To-scale ship footprints for the moment under the timeline cursor — drag the cursor (or press ▶) in the occupancy timeline below.</div>
+    </div>
+    <!-- ===== /Vessel outlines control ===== -->
+
     <div class="probe">
       <div class="hint">Click anywhere on the map to project that point onto the wharf centerline.</div>
       <div id="probeResult" style="display:none">
@@ -354,6 +368,13 @@
           <button class="tl-btn" data-pan="1" title="Pan forward">›</button>
           <button class="tl-btn" id="tlToday" title="Recenter on now">Today</button>
           <label class="tl-chk"><input type="checkbox" id="tlHideCancelled" checked /> hide cancelled</label>
+          <span class="tl-sub" id="tlCursorLabel" title="Time cursor — drives the map's vessel outlines">—</span>
+          <button class="tl-btn" id="tlPlay" title="Play / pause — sweep the cursor">▶</button>
+          <select class="tl-btn" id="tlSpeed" title="Playback speed">
+            <option value="1">1h/s</option>
+            <option value="6" selected>6h/s</option>
+            <option value="24">1d/s</option>
+          </select>
         </div>
       </div>
       <div class="tl-body">
@@ -394,6 +415,10 @@ const map = L.map("map", {
 }).setView([29.87, -93.93], 14);
 
 let BERTH_STA = {};   // berth name -> [sw_station, ne_station], from geometry
+// Centerline as { coords: [[lon,lat],...], stations: [POPA ft,...] }, captured
+// from centerline.geojson so the client can do station -> lat/lon (the inverse
+// of crosswalk.geo_to_station). Drives the to-scale vessel outlines.
+let CENTERLINE = null;
 
 // Rotate the map so the wharf face runs left->right (stations increase to the
 // right). Bearing is derived from the centerline endpoints; labels are
@@ -583,7 +608,12 @@ async function loadReferenceGeo() {
     const cl = await api("/static/gis/centerline.geojson");
     centerlineLayer.addData(cl);
     const line = cl.features.find((f) => f.geometry.type === "LineString");
-    if (line) applyWharfBearing(line.geometry.coordinates);
+    if (line) {
+      applyWharfBearing(line.geometry.coordinates);
+      // stations[] (POPA ft per vertex) rides alongside the coords; keep both
+      // so station -> lat/lon interpolation can place vessel outlines.
+      CENTERLINE = { coords: line.geometry.coordinates, stations: line.properties.stations };
+    }
   } catch (e) { /* optional */ }
 }
 
@@ -808,6 +838,140 @@ map.on("click", async (e) => {
 })();
 // ===== /DUMMY SHIP =============================================================
 
+// ===== VESSEL OUTLINES (to-scale, time-cursor driven) ==========================
+// Real reservations drawn as to-scale ship polygons, positioned by projecting
+// their POPA station range onto the wharf centerline. WHICH vessels show is
+// driven by the timeline's draggable cursor: the timeline calls
+// window.onTimeCursor(tSel, rows); we render whoever is alongside at that
+// instant. Shares the hull math with the dummy ship above; the station -> lat/lon
+// step is the client-side inverse of crosswalk.geo_to_station. Only 'observed'
+// (AIS ground truth) and 'confirmed' reservations are drawn.
+(function () {
+  const STATUS = { observed: "#3ddc97", confirmed: "#7c5cff" };
+  const DREDGE = "#ff8a5a";
+  const FT_PER_M = 3.280839895;
+
+  const shipLayer = L.layerGroup().addTo(map);
+  const toggle = document.getElementById("shipOutlineToggle");
+  let enabled = toggle ? toggle.checked : true;
+  let VESSEL_DIMS = {};                 // "i"+imo / "m"+mmsi -> { loa, beam } (m)
+  let lastTSel = null, lastRows = [];
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // Beam (hull width) isn't on /reservations; pull it from /vessels by IMO/MMSI.
+  async function loadDims() {
+    try {
+      const vs = await api("/vessels?limit=500");
+      const m = {};
+      for (const v of vs) {
+        const d = { loa: v.loa, beam: v.beam };
+        if (v.imo != null) m["i" + v.imo] = d;
+        if (v.mmsi != null) m["m" + v.mmsi] = d;
+      }
+      VESSEL_DIMS = m;
+    } catch (e) { /* DB offline -> fall back to LOA/7 from the station span */ }
+  }
+
+  // POPA station (ft) -> { lat, lon } on the centerline. Linear interpolation
+  // over CENTERLINE.coords paired with CENTERLINE.stations (non-decreasing;
+  // the zero-length step at the stepped bulkhead is skipped). Clamps to the ends.
+  function stationToLatLon(sta) {
+    const C = CENTERLINE;
+    if (!C || !C.coords || C.coords.length < 2 || !C.stations) return null;
+    const co = C.coords, st = C.stations, n = co.length;
+    let i;
+    if (sta <= st[0]) i = 0;
+    else if (sta >= st[n - 1]) i = n - 2;
+    else { i = 0; while (i < n - 2 && !(sta >= st[i] && sta < st[i + 1])) i++; }
+    const lo = st[i], hi = st[i + 1];
+    let f = hi > lo ? (sta - lo) / (hi - lo) : 0;
+    f = Math.max(0, Math.min(1, f));
+    const a = co[i], b = co[i + 1];
+    return { lat: a[1] + (b[1] - a[1]) * f, lon: a[0] + (b[0] - a[0]) * f };
+  }
+
+  // To-scale ship ring [[lat,lon],...] spanning [staLo, staHi] along the quay,
+  // pushed to the WATER side (same normal/standoff convention as the dummy ship).
+  // beamM = width (m); dirUp true => bow toward increasing station; dredge => box.
+  function hullFor(staLo, staHi, beamM, dirUp, isDredge) {
+    const A = stationToLatLon(staLo), B = stationToLatLon(staHi);
+    if (!A || !B) return null;
+    const cLat = (A.lat + B.lat) / 2;
+    const mPerLat = 111320, mPerLon = 111320 * Math.cos(cLat * Math.PI / 180);
+    let fe = (B.lon - A.lon) * mPerLon, fn = (B.lat - A.lat) * mPerLat;   // lo->hi
+    const L = Math.hypot(fe, fn);                         // hull length (m)
+    if (L < 1) return null;
+    fe /= L; fn /= L;
+    const re = fn, rn = -fe;                              // water-side normal
+    const stand = 6;                                      // fender standoff (m)
+    const taper = isDredge ? 0 : 0.28 * L;
+    // local (along from A, cross from line) corners; bow tapered at the +along end
+    let pts = [
+      [0, stand], [0, stand + beamM],
+      [L - taper, stand + beamM], [L, stand + beamM / 2], [L - taper, stand],
+    ];
+    if (!dirUp) pts = pts.map(([al, cr]) => [L - al, cr]);   // bow at the lo end
+    return pts.map(([al, cr]) => {
+      const de = al * fe + cr * re, dn = al * fn + cr * rn;
+      return [A.lat + dn / mPerLat, A.lon + de / mPerLon];
+    });
+  }
+
+  function timeContains(r, tSel) {
+    const s = r.t_start ? Date.parse(r.t_start) : -Infinity;
+    const e = r.t_end ? Date.parse(r.t_end) : Infinity;     // open-ended -> ongoing
+    return s <= tSel && tSel <= e;
+  }
+
+  function beamFor(r, spanFt) {
+    const d = r.vessel_imo != null ? VESSEL_DIMS["i" + r.vessel_imo] : null;
+    let beamM = d && d.beam != null ? Number(d.beam) : 0;   // Numeric may arrive as string
+    if (!(beamM > 0)) {                                     // no static data yet
+      const loaM = (d && d.loa != null ? Number(d.loa) : 0) || spanFt / FT_PER_M;
+      beamM = Math.max(8, (loaM || 30) / 7);                // plausible aspect ratio
+    }
+    return beamM;
+  }
+
+  function render(tSel, rows) {
+    lastTSel = tSel;
+    if (rows) lastRows = rows;
+    shipLayer.clearLayers();
+    if (!enabled || tSel == null || !CENTERLINE) return;
+    for (const r of lastRows) {
+      if (!(r.status in STATUS)) continue;                  // observed + confirmed only
+      if (r.station_unassigned || r.station_lo == null || r.station_hi == null) continue;
+      if (!timeContains(r, tSel)) continue;
+      const lo = Math.min(r.station_lo, r.station_hi), hi = Math.max(r.station_lo, r.station_hi);
+      const spanFt = hi - lo;
+      if (spanFt < 1) continue;
+      const isDredge = r.type === "dredge";
+      const beamM = beamFor(r, spanFt);
+      const ring = hullFor(lo, hi, beamM, r.direction !== "downstream", isDredge);
+      if (!ring) continue;
+      const color = isDredge ? DREDGE : STATUS[r.status];
+      L.polygon(ring, {
+        color, weight: 2, fillColor: color,
+        fillOpacity: r.status === "observed" ? 0.5 : 0.35,
+        dashArray: isDredge ? "5 4" : null,
+      }).bindPopup(
+        `<b>${esc(r.vessel_name || (isDredge ? "Dredging op" : "(unnamed)"))}</b>` +
+        (r.vessel_imo ? `<br>IMO ${esc(r.vessel_imo)}` : "") +
+        `<br>LOA ≈ ${Math.round(spanFt)} ft · beam ${beamM.toFixed(0)} m` +
+        `<br>POPA ${fmtSta(lo)}–${fmtSta(hi)}` +
+        `<br><i>${esc(r.type)} · ${esc(r.status)}</i>`
+      ).addTo(shipLayer);
+    }
+  }
+
+  if (toggle) toggle.addEventListener("change", () => { enabled = toggle.checked; render(lastTSel, null); });
+  // Bridge: the timeline cursor calls this on drag / play / data refresh.
+  window.onTimeCursor = (tSel, rows) => render(tSel, rows);
+  loadDims();
+})();
+// ===== /VESSEL OUTLINES ========================================================
+
 // ===== BERTH OCCUPANCY TIMELINE (Gantt drawer) =================================
 // Self-contained: reads the in-page api()/fmtSta() helpers and the BERTH_STA
 // global (berth -> [station_lo, station_hi] ft). Renders reservations from
@@ -842,6 +1006,10 @@ const loadTimeline = (function () {
   let t0 = Date.now() - 2 * DAY, t1 = Date.now() + 7 * DAY;
   let rows = [];                       // last fetched reservations
   let hideCancelled = true;
+  // Time cursor: a single selected instant that drives the map's vessel outlines.
+  let tSel = Number(localStorage.getItem("tlCursor")) || Date.now();
+  let plotW = 1;                       // current plot width (set in render)
+  let cursorLine = null, cursorHandle = null;   // live SVG refs for cheap drag
 
   const el = (tag, attrs) => {
     const n = document.createElementNS(SVGNS, tag);
@@ -910,7 +1078,7 @@ const loadTimeline = (function () {
     while (svg.firstChild) svg.removeChild(svg.firstChild);
 
     const ls = lanes();
-    const plotW = W - LABEL_W - RIGHT_PAD;
+    plotW = W - LABEL_W - RIGHT_PAD;
     const x = (ms) => LABEL_W + (Math.max(t0, Math.min(t1, ms)) - t0) / (t1 - t0) * plotW;
 
     // Bucket reservations into lanes, clamp times to the window, drop non-overlapping.
@@ -965,6 +1133,10 @@ const loadTimeline = (function () {
       svg.appendChild(el("line", { x1: x(now), y1: HEADER_H, x2: x(now), y2: totalH, class: "tl-now" }));
     }
 
+    // Clamp the time cursor into the (possibly changed) window; it's drawn last
+    // so it overlays the bars.
+    tSel = Math.max(t0, Math.min(t1, tSel));
+
     // Bars.
     for (const lane of laid) {
       for (const it of lane.items) {
@@ -983,6 +1155,16 @@ const loadTimeline = (function () {
         }
       }
     }
+
+    // Time cursor on top of everything; keep live refs so dragging only moves
+    // these two nodes (no full SVG rebuild per mouse-move).
+    const cx = x(tSel);
+    cursorLine = el("line", { x1: cx, y1: HEADER_H - 6, x2: cx, y2: totalH, class: "tl-cursor" });
+    cursorHandle = el("rect", { x: cx - 5, y: HEADER_H - 11, width: 10, height: 10, rx: 2, class: "tl-cursor-handle" });
+    svg.appendChild(cursorLine);
+    svg.appendChild(cursorHandle);
+    updateCursorLabel();
+    syncMap();
   }
 
   function showTip(ev, r) {
@@ -1040,9 +1222,65 @@ const loadTimeline = (function () {
   document.getElementById("tlToday").addEventListener("click", () => setWindow(Date.now() - 2 * DAY, Date.now() + 7 * DAY));
   document.getElementById("tlHideCancelled").addEventListener("change", (e) => { hideCancelled = e.target.checked; render(); });
 
+  // --- time cursor + playback ---
+  const cursorLabel = document.getElementById("tlCursorLabel");
+  const playBtn = document.getElementById("tlPlay");
+  const speedSel = document.getElementById("tlSpeed");
+
+  function updateCursorLabel() { if (cursorLabel) cursorLabel.textContent = fmtDT(new Date(tSel).toISOString()); }
+  function positionCursor() {
+    if (!cursorLine) return;
+    const cx = LABEL_W + (Math.max(t0, Math.min(t1, tSel)) - t0) / (t1 - t0) * plotW;
+    cursorLine.setAttribute("x1", cx); cursorLine.setAttribute("x2", cx);
+    cursorHandle.setAttribute("x", cx - 5);
+  }
+  function syncMap() { if (window.onTimeCursor) window.onTimeCursor(tSel, rows); }
+  function setCursor(ms) {
+    tSel = Math.max(t0, Math.min(t1, ms));
+    localStorage.setItem("tlCursor", String(Math.round(tSel)));
+    positionCursor(); updateCursorLabel(); syncMap();
+  }
+  function timeAt(clientX) {
+    const r = svg.getBoundingClientRect();
+    const frac = (clientX - r.left - LABEL_W) / plotW;
+    return t0 + Math.max(0, Math.min(1, frac)) * (t1 - t0);
+  }
+
+  // Drag the cursor anywhere on the plot (a mousedown also lands on bars — fine,
+  // it just sets the time there). Move/up are global so the drag survives leaving
+  // the svg. Cheap: only the two cursor nodes move, no SVG rebuild.
+  let cursoring = false;
+  svg.addEventListener("mousedown", (e) => { stopPlay(); cursoring = true; setCursor(timeAt(e.clientX)); e.preventDefault(); });
+  addEventListener("mousemove", (e) => { if (cursoring) setCursor(timeAt(e.clientX)); });
+  addEventListener("mouseup", () => { cursoring = false; });
+
+  // Play: sweep the cursor at <speed> sim-hours per real second; stop at t1.
+  let playing = false, playRAF = 0, lastFrame = 0;
+  function frame(ts) {
+    if (!playing) return;
+    if (lastFrame) {
+      setCursor(tSel + ((ts - lastFrame) / 1000) * Number(speedSel.value) * H);
+      if (tSel >= t1) { stopPlay(); return; }
+    }
+    lastFrame = ts;
+    playRAF = requestAnimationFrame(frame);
+  }
+  function startPlay() {
+    if (playing || drawer.classList.contains("tl-collapsed")) return;
+    if (tSel >= t1) setCursor(t0);                 // rewind if parked at the end
+    playing = true; lastFrame = 0; playBtn.textContent = "⏸";
+    playRAF = requestAnimationFrame(frame);
+  }
+  function stopPlay() {
+    if (!playing) return;
+    playing = false; cancelAnimationFrame(playRAF); playBtn.textContent = "▶";
+  }
+  playBtn.addEventListener("click", () => (playing ? stopPlay() : startPlay()));
+
   // --- collapse / resize ---
   function invalidateMap() { if (typeof map !== "undefined" && map.invalidateSize) setTimeout(() => map.invalidateSize(), 0); }
   function setCollapsed(c) {
+    if (c) stopPlay();                              // don't sweep a hidden timeline
     drawer.classList.toggle("tl-collapsed", c);
     stage.classList.toggle("drawer-collapsed", c);
     document.getElementById("tlToggle").textContent = c ? "▸" : "▾";
