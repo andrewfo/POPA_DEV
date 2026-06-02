@@ -72,7 +72,14 @@ from day one with no manual intake.
   berthing zone; the occupancy "alongside" test, migration 0005)
 - `vessel` — IMO/MMSI as canonical key (names are non-unique and misspelled),
   name, LOA, beam, draft
-- `reservation` — vessel_id (nullable for dredging), type
+- `berth` — named canonical POPA station range (`popa_sta_start/end`, migration
+  0006). "Berths are named station ranges": a berth is the operator's *handle*,
+  not the allocation unit. Seeded from the port's berth shapefile via
+  `data/gis` (`berth_stations.json`). Assigning one to a reservation copies its
+  range onto `station_range`, so conflict detection still runs on the canonical
+  range — never on `berth_id`.
+- `reservation` — vessel_id (nullable for dredging), nullable `berth_id`
+  (assigned berth, `ON DELETE SET NULL`), type
   (`vessel|dredge|layberth`), `station_range numrange`, `time_range tstzrange`,
   direction (`upstream|downstream`), status
   (`observed|requested|tentative|confirmed|cancelled|completed`), source
@@ -117,9 +124,9 @@ Note: items the original plan deferred have been pulled forward at the user's
 request and now exist — a **read-only UI**, berth-request intake **capture**
 (online-form CSV + manual phone/email/operator entry; see Build order step 7),
 and a **manual edit surface** (`app/edit.py`): create/edit/cancel/delete vessels
-and reservations, including **manually assigning a berth/station range and
-promoting a row to `confirmed`** — i.e. the *manual* form of reconciliation,
-done by an operator one row at a time. What remains out of scope is the
+and reservations, including **manually assigning a berth (from the named `berth`
+catalog, which fills `station_range`) and promoting a row to `confirmed`** —
+i.e. the *manual* form of reconciliation, done by an operator one row at a time. What remains out of scope is the
 **automated request→AIS reconciliation engine** (matching a `requested` row to
 observed AIS and auto-promoting it) and the legacy-spreadsheet backfill *commit*
 (its parser exists, the review pipeline does not). Confirming still cannot run
@@ -161,10 +168,11 @@ surfaces as a 409.
    (`app/edit.py`, sidebar forms over `PATCH /vessels/{id}`,
    `POST /reservations`, `PATCH`/`DELETE /reservations/{id}`) now lets an
    operator correct vessel records and create/edit/cancel/delete reservations,
-   including manually assigning the berth and promoting to `confirmed` (the
-   manual form of reconciliation; a confirmed overlap → 409 via the exclusion
-   constraint). The **automated** reconciliation engine and the legacy-backfill
-   *commit* are still TODO.
+   including manually assigning a berth from the named `berth` catalog
+   (`GET /berths`; assignment fills `station_range`) and promoting to
+   `confirmed` (the manual form of reconciliation; a confirmed overlap → 409 via
+   the exclusion constraint). The **automated** reconciliation engine and the
+   legacy-backfill *commit* are still TODO.
 
 **Current state: steps 1–5 complete; step 6 (conflict-detection query/service)
 is the next core primitive.** Step 7 intake *capture* plus a manual *edit*
@@ -184,7 +192,7 @@ app/
   main.py              # FastAPI: read-only endpoints + map page + intake + edit endpoints
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
-  seed/wharf_seed.py   # seeds wharf_segment: real centerline + apron polygon (from data/gis/)
+  seed/wharf_seed.py   # seeds wharf_segment (real centerline + apron) + berth catalog (from data/gis/)
   ais/
     messages.py        # normalized AISPosition/AISStatic + aisstream parser
     source.py          # AISSource ABC + AisStreamSource (websocket)
@@ -197,7 +205,8 @@ data/gis/              # build_centerline.py / to_geojson.py: real centerline + 
                        #   berth shapefiles (stationing) + quayface.* survey (quay geometry)
                        #   -> static GeoJSON + seed JSON
 alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intake dedupe ·
-                       #   0004 'email' source · 0005 wharf_segment.apron
+                       #   0004 'email' source · 0005 wharf_segment.apron ·
+                       #   0006 berth catalog + reservation.berth_id
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation; db-marked (auto-skip): geo→station, occupancy
                        #   derive, intake, reservations, edit (vessel patch / reservation CRUD / 409)

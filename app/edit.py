@@ -80,6 +80,9 @@ class ReservationCreate(BaseModel):
     vessel_id: int | None = None
     etb: dt.datetime
     etd: dt.datetime | None = None
+    # Assign a named berth: its catalog range fills station_range. Explicit
+    # station_lo/hi (a sub-span for a vessel shorter than the berth) override it.
+    berth_id: int | None = None
     station_lo: float | None = None
     station_hi: float | None = None
     direction: str | None = None
@@ -100,6 +103,10 @@ class ReservationUpdate(BaseModel):
     vessel_id: int | None = None
     etb: dt.datetime | None = None
     etd: dt.datetime | None = None
+    # Reassign the berth (its range fills station_range unless explicit
+    # station_lo/hi are also given). ``unassigned=True`` clears both the berth
+    # and the station range.
+    berth_id: int | None = None
     station_lo: float | None = None
     station_hi: float | None = None
     unassigned: bool | None = None
@@ -147,6 +154,27 @@ def _station_range(lo: float | None, hi: float | None, unassigned: bool) -> Stat
     return StationRange(empty=False, lo=float(lo), hi=float(hi))
 
 
+def _station_range_for(
+    berth_bounds: tuple[float, float] | None,
+    lo: float | None,
+    hi: float | None,
+    unassigned: bool,
+) -> StationRange:
+    """Resolve the station range when a berth may be assigned.
+
+    Precedence: ``unassigned`` clears the range; otherwise explicit ``lo/hi``
+    win (a vessel shorter than the berth occupies a sub-span); otherwise an
+    assigned berth supplies its full catalog range; otherwise fall back to the
+    plain bound resolution (empty when both bounds are None — berth unassigned).
+    """
+    if unassigned:
+        return StationRange(empty=True)
+    if lo is None and hi is None and berth_bounds is not None:
+        b_lo, b_hi = berth_bounds
+        return StationRange(empty=False, lo=float(b_lo), hi=float(b_hi))
+    return _station_range(lo, hi, unassigned=False)
+
+
 def _time_range(etb: dt.datetime | None, etd: dt.datetime | None) -> TimeRange:
     """Resolve a ``[etb, etd)`` window. ``etd`` may be omitted (open-ended).
     Raises ``ValueError`` if ``etd`` precedes ``etb``."""
@@ -186,6 +214,19 @@ def _time_sql(tr: TimeRange, params: dict) -> str:
 # ---------------------------------------------------------------------------
 # Session functions — no commit; the endpoint owns the transaction
 # ---------------------------------------------------------------------------
+def _berth_bounds(session: Session, berth_id: int) -> tuple[float, float]:
+    """Look up a berth's canonical POPA station range. Raises ``ValueError``
+    (-> 422) if the berth id is unknown."""
+    row = session.execute(
+        text("SELECT popa_sta_start, popa_sta_end FROM berth WHERE id = :id"),
+        {"id": berth_id},
+    ).first()
+    if row is None:
+        raise ValueError(f"no such berth {berth_id}")
+    return float(row.popa_sta_start), float(row.popa_sta_end)
+
+
+
 def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict | None:
     """Overwrite the provided columns of a vessel. Returns a summary dict, or
     ``None`` if no such vessel (-> 404). ``mmsi``/``imo`` collisions or the
@@ -213,11 +254,13 @@ def create_reservation(session: Session, req: ReservationCreate) -> dict:
     _validate_enum(req.source, RESERVATION_SOURCES, "source")
     _validate_enum(req.direction, DIRECTIONS, "direction")
 
-    sr = _station_range(req.station_lo, req.station_hi, unassigned=False)
+    berth_bounds = _berth_bounds(session, req.berth_id) if req.berth_id else None
+    sr = _station_range_for(berth_bounds, req.station_lo, req.station_hi, unassigned=False)
     tr = _time_range(req.etb, req.etd)
 
     params: dict = {
         "vessel_id": req.vessel_id,
+        "berth_id": req.berth_id,
         "type": req.type,
         "direction": req.direction,
         "status": req.status,
@@ -232,10 +275,10 @@ def create_reservation(session: Session, req: ReservationCreate) -> dict:
         text(
             f"""
             INSERT INTO reservation
-                (vessel_id, type, station_range, time_range, direction,
+                (vessel_id, berth_id, type, station_range, time_range, direction,
                  status, source, priority, cargo, notes, created_at)
             VALUES
-                (:vessel_id, CAST(:type AS reservation_type),
+                (:vessel_id, :berth_id, CAST(:type AS reservation_type),
                  {station_sql}, {time_sql},
                  CAST(:direction AS direction),
                  CAST(:status AS reservation_status),
@@ -259,7 +302,8 @@ def update_reservation(
     cur = session.execute(
         text(
             """
-            SELECT type, vessel_id, direction, status, priority, cargo, notes,
+            SELECT type, vessel_id, berth_id, direction, status, priority, cargo,
+                   notes,
                    lower(time_range) AS t_lo, upper(time_range) AS t_hi,
                    isempty(station_range) AS sta_empty,
                    lower(station_range) AS s_lo, upper(station_range) AS s_hi
@@ -290,23 +334,35 @@ def update_reservation(
     etd = changes.get("etd", cur.t_hi)
     tr = _time_range(etb, etd)
 
-    # Station range: explicit unassigned wins; else merge lo/hi over the current
-    # range; if the current range was empty and nothing supplied, stay empty.
+    # Berth + station range. Precedence:
+    #   unassigned -> clear both berth_id and the range;
+    #   else a newly-assigned berth (no explicit bounds) -> its catalog range;
+    #   else explicit lo/hi merged over the current range (berth_id unchanged);
+    #   else keep the current range (and berth_id).
+    has_bounds = "station_lo" in changes or "station_hi" in changes
     if changes.get("unassigned"):
+        berth_id = None
         sr = StationRange(empty=True)
-    elif "station_lo" in changes or "station_hi" in changes:
+    elif "berth_id" in changes and changes["berth_id"] is not None and not has_bounds:
+        berth_id = changes["berth_id"]
+        sr = _station_range_for(_berth_bounds(session, berth_id), None, None, False)
+    elif has_bounds:
+        berth_id = changes.get("berth_id", cur.berth_id)
         lo = changes.get("station_lo", None if cur.sta_empty else float(cur.s_lo))
         hi = changes.get("station_hi", None if cur.sta_empty else float(cur.s_hi))
         sr = _station_range(lo, hi, unassigned=False)
-    elif cur.sta_empty:
-        sr = StationRange(empty=True)
     else:
-        sr = StationRange(empty=False, lo=float(cur.s_lo), hi=float(cur.s_hi))
+        berth_id = changes.get("berth_id", cur.berth_id)
+        if cur.sta_empty:
+            sr = StationRange(empty=True)
+        else:
+            sr = StationRange(empty=False, lo=float(cur.s_lo), hi=float(cur.s_hi))
 
     params: dict = {
         "id": res_id,
         "type": type_,
         "vessel_id": vessel_id,
+        "berth_id": berth_id,
         "direction": direction,
         "status": status,
         "priority": priority,
@@ -321,6 +377,7 @@ def update_reservation(
             UPDATE reservation SET
                 type = CAST(:type AS reservation_type),
                 vessel_id = :vessel_id,
+                berth_id = :berth_id,
                 station_range = {station_sql},
                 time_range = {time_sql},
                 direction = CAST(:direction AS direction),

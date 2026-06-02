@@ -34,6 +34,12 @@ SEGMENT_NAME = "POPA Public Wharf"
 _VERTICES_FILE = (
     Path(__file__).parents[2] / "data" / "gis" / "centerline_vertices.json"
 )
+# Per-berth canonical POPA station ranges, derived by build_centerline.py from
+# the port's berth shapefile (each berth's water-side face projected onto the
+# stationing reference). {"Berth 4": [351.0, 1107.3], ...}.
+_BERTHS_FILE = (
+    Path(__file__).parents[2] / "app" / "static" / "gis" / "berth_stations.json"
+)
 # Digitized berthing-zone polygon ([[lon, lat], ...] closed ring), also from
 # build_centerline.py. Optional — NULL apron just means the occupancy detector
 # falls back to the centerline buffer.
@@ -117,11 +123,43 @@ def seed_wharf(session: Session) -> int:
     return int(row.id)
 
 
+def seed_berths(session: Session) -> int:
+    """Insert (or update) the named berth catalog from berth_stations.json.
+
+    Each berth is a canonical POPA station range. Idempotent on ``name``: a
+    re-run after a finer survey updates the ranges in place rather than
+    duplicating. Returns the number of berths upserted (0 if the derived file is
+    absent — the catalog is optional, the data layer works without it)."""
+    if not _BERTHS_FILE.exists():
+        return 0
+    berths: dict[str, list[float]] = json.loads(_BERTHS_FILE.read_text())
+    for name, (lo, hi) in berths.items():
+        # The build emits [lo, hi] sorted ascending already; guard anyway so the
+        # CHECK (start < end) can never trip on a malformed file.
+        lo, hi = sorted((float(lo), float(hi)))
+        session.execute(
+            text(
+                """
+                INSERT INTO berth (name, popa_sta_start, popa_sta_end)
+                VALUES (:name, :lo, :hi)
+                ON CONFLICT (name) DO UPDATE SET
+                    popa_sta_start = EXCLUDED.popa_sta_start,
+                    popa_sta_end = EXCLUDED.popa_sta_end
+                """
+            ),
+            {"name": name, "lo": lo, "hi": hi},
+        )
+    session.commit()
+    return len(berths)
+
+
 def main() -> None:
     session = SessionLocal()
     try:
         seg_id = seed_wharf(session)
         print(f"Seeded wharf_segment id={seg_id} ({SEGMENT_NAME})")
+        n = seed_berths(session)
+        print(f"Seeded {n} berth(s) from {_BERTHS_FILE.name}")
     finally:
         session.close()
 

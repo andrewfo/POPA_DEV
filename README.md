@@ -37,7 +37,8 @@ docker compose up -d
 # 4. Apply migrations (creates tables, enums, btree_gist exclusion constraint)
 alembic upgrade head
 
-# 5. Seed the first wharf segment (real centerline + apron polygon, from data/gis/)
+# 5. Seed the wharf segment (real centerline + apron) and the named berth
+#    catalog (canonical POPA station range per berth) — all from data/gis/
 python -m app.seed.wharf_seed
 #   geometry is pre-built; regenerate from the ArcGIS shapefiles with:
 #   python data/gis/build_centerline.py   (needs pyshp, pyproj)
@@ -56,7 +57,9 @@ uvicorn app.main:app --reload
 #   GET  /stats           -> row counts
 #   GET  /geo-to-station?lat=..&lon=..  -> project a point to POPA station
 #   GET  /reservations[?status=&from=&to=]  -> reservations (status + time-window filter)
+#   GET  /berths          -> named berth catalog (POPA station ranges) to assign from
 #   POST /intake/berth-request  -> manual berth request (phone/email); also a form on /
+#   PATCH /reservations/{id}    -> edit; assign a berth via {"berth_id": N} (fills station_range)
 
 # AIS ingestion (live aisstream.io websocket -> DB). Long-running; reconnects.
 python -m app.ais.run

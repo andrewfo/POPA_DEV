@@ -290,9 +290,11 @@ def list_reservations(
                    lower(r.station_range) AS sta_lo,
                    upper(r.station_range) AS sta_hi,
                    r.created_at,
-                   v.name AS vessel_name, v.imo AS vessel_imo
+                   v.name AS vessel_name, v.imo AS vessel_imo,
+                   r.berth_id, b.name AS berth_name
             FROM reservation r
             LEFT JOIN vessel v ON v.id = r.vessel_id
+            LEFT JOIN berth b ON b.id = r.berth_id
             WHERE (CAST(:status AS text) IS NULL OR r.status::text = CAST(:status AS text))
               AND ((CAST(:t_from AS timestamptz) IS NULL AND CAST(:t_to AS timestamptz) IS NULL)
                    OR r.time_range && tstzrange(:t_from, :t_to, '[]'))
@@ -319,6 +321,33 @@ def list_reservations(
             "station_hi": float(r.sta_hi) if r.sta_hi is not None else None,
             "vessel_name": r.vessel_name,
             "vessel_imo": r.vessel_imo,
+            "berth_id": r.berth_id,
+            "berth_name": r.berth_name,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/berths")
+def list_berths(session: Session = Depends(get_session)) -> list[dict]:
+    """The named berth catalog — each a canonical POPA station range. An operator
+    assigns one to a ``requested`` reservation (``PATCH /reservations/{id}`` with
+    ``berth_id``), which fills the reservation's ``station_range`` from the berth.
+    Ordered by station so the list reads SW -> NE along the wharf."""
+    rows = session.execute(
+        text(
+            """
+            SELECT id, name, popa_sta_start, popa_sta_end
+            FROM berth ORDER BY popa_sta_start
+            """
+        )
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "station_lo": float(r.popa_sta_start),
+            "station_hi": float(r.popa_sta_end),
         }
         for r in rows
     ]

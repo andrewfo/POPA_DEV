@@ -107,6 +107,33 @@ class WharfSegment(Base):
     )
 
 
+class Berth(Base):
+    """A named canonical station range — the operator's handle for a stretch of
+    wharf. Per the core model "berths are just named station ranges": the berth
+    is a label, not the allocation unit. Assigning a berth to a reservation
+    copies this range onto its canonical ``station_range`` (see app/edit.py), so
+    conflict detection keeps running on the range, not on the berth id.
+    """
+
+    __tablename__ = "berth"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    # Canonical POPA station span (feet); start < end (CHECK in migration 0006).
+    popa_sta_start: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
+    popa_sta_end: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "popa_sta_start < popa_sta_end", name="berth_station_ordered"
+        ),
+    )
+
+
 class Vessel(Base):
     """A physical vessel. MMSI is the canonical AIS key; IMO is the stable
     long-term identity. Names are non-unique and frequently misspelled, so they
@@ -159,6 +186,13 @@ class Reservation(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     vessel_id: Mapped[int | None] = mapped_column(
         ForeignKey("vessel.id", ondelete="SET NULL")
+    )
+    # Named berth this booking is assigned to (operator's handle). NULL = berth
+    # not yet assigned. The canonical position stays station_range; assigning a
+    # berth copies its range here (app/edit.py). ondelete SET NULL: dropping a
+    # berth from the catalog must not delete bookings.
+    berth_id: Mapped[int | None] = mapped_column(
+        ForeignKey("berth.id", ondelete="SET NULL"), index=True
     )
 
     type: Mapped[str] = mapped_column(reservation_type_enum, nullable=False)

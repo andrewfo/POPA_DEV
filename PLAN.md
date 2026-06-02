@@ -60,9 +60,15 @@ is a later layer", both user-requested):
   verified; the **seed + `ST_Contains` predicate are unexercised until PostGIS is
   up** (backward-compatible: NULL apron → old buffer behavior). Optional refinement:
   tune `APRON_WATER_FT`/`APRON_INLAND_FT` or swap in a surveyed apron.
-- **Requested reservations have no berth.** Manual/online intake creates
-  `requested` rows with an **empty `station_range`** (never conflicts); the
-  station is assigned by the (not-yet-built) reconciliation layer.
+- **Requested reservations start with no berth, but can now be assigned one.**
+  Manual/online intake still creates `requested` rows with an **empty
+  `station_range`** (never conflicts). A named **`berth` catalog** now exists
+  (migration `0006`, seeded from `data/gis` `berth_stations.json`); an operator
+  assigns a berth via `PATCH /reservations/{id}` `{berth_id}` (or `POST`), which
+  copies the berth's POPA range onto `station_range`. That's the *manual* path;
+  **automated** request→AIS reconciliation is still the not-yet-built layer.
+  UI gap: the sidebar form still takes raw station feet — no berth `<select>`
+  over `GET /berths` yet.
 - **Intake detail lives only in `intake_event.raw`.** Manual-entry fields with
   no normalized column (flag, S/S line, deadweight, bunkers, cargo weights,
   agency) are kept raw + summarized into `reservation.notes`. Promote to columns
@@ -149,7 +155,13 @@ does not.
   upserts `vessel` by IMO, lands `intake_event`, **and** creates a candidate
   `reservation` (status `requested`, source `phone|email|operator`) with an
   **empty `station_range`** (berth unassigned). `email` was added to the source
-  enums in migration `0004`. `GET /reservations` lists them.
+  enums in migration `0004`. `GET /reservations` lists them (with `berth_name`).
+- **Berth catalog + manual assignment** (migration `0006`) — a named `berth`
+  table (canonical POPA range per berth, seeded from `data/gis`
+  `berth_stations.json`) and `reservation.berth_id`. An operator assigns a berth
+  through the edit surface (`berth_id` on `POST`/`PATCH /reservations`), which
+  fills `station_range` from the catalog; `GET /berths` lists the catalog. This
+  is the manual half of reconciliation — the automated half (below) is still TODO.
 
 **Still TODO:**
 - **Reconcile against observed AIS** — match a request to the `observed`
@@ -204,6 +216,9 @@ Not tied to a single step — pick up as the system matures.
   trusting them in derivation.
 
 ### 5.6 Schema evolution (always via Alembic)
+- ✅ `berth` catalog + `reservation.berth_id` (migration `0006`) — named POPA
+  station ranges; assigning a berth fills `station_range` (the canonical range
+  stays the conflict primitive, never `berth_id`).
 - `controlling_depth` table (§3.3).
 - Wharf apron polygon / `wharf_area` (§2.1).
 - `reservation.derived_key` + unique index for idempotent observed rows (§2.5).

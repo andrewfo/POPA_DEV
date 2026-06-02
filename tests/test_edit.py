@@ -20,6 +20,7 @@ from app.edit import (
     ReservationUpdate,
     VesselUpdate,
     _station_range,
+    _station_range_for,
     _time_range,
     confirm_warnings,
 )
@@ -49,6 +50,24 @@ def test_station_range_inverted_rejected():
 def test_station_range_single_bound_rejected():
     with pytest.raises(ValueError):
         _station_range(400, None, unassigned=False)
+
+
+def test_station_range_for_uses_berth_when_no_bounds():
+    # Assigning a berth with no explicit bounds -> the berth's full range.
+    sr = _station_range_for((351.0, 1107.3), None, None, unassigned=False)
+    assert (sr.empty, sr.lo, sr.hi) == (False, 351.0, 1107.3)
+
+
+def test_station_range_for_explicit_bounds_override_berth():
+    # A vessel shorter than the berth occupies a sub-span: explicit wins.
+    sr = _station_range_for((351.0, 1107.3), 400.0, 900.0, unassigned=False)
+    assert (sr.lo, sr.hi) == (400.0, 900.0)
+
+
+def test_station_range_for_unassigned_and_no_berth():
+    assert _station_range_for((351.0, 1107.3), None, None, unassigned=True).empty
+    # No berth, no bounds -> empty (unassigned), same as the plain resolver.
+    assert _station_range_for(None, None, None, unassigned=False).empty
 
 
 def test_time_range_open_ended_ok():
@@ -153,6 +172,70 @@ def test_assign_then_unassign_station(client, db_session):
 
     client.patch(f"/reservations/{rid}", json={"unassigned": True})
     assert _get_reservation(client, rid)["station_unassigned"] is True
+
+
+# Test-only berth names so these don't collide with a seeded catalog (the
+# 'berth' unique name constraint) when the suite runs against a populated DB.
+def _add_berth(session, *, name="Test Berth A", lo=351.0, hi=1107.3):
+    return session.execute(
+        text(
+            "INSERT INTO berth (name, popa_sta_start, popa_sta_end) "
+            "VALUES (:n, :lo, :hi) RETURNING id"
+        ),
+        {"n": name, "lo": lo, "hi": hi},
+    ).scalar_one()
+
+
+def test_assign_berth_fills_station_range(client, db_session):
+    bid = _add_berth(db_session)
+    # A requested berth-request lands with an unassigned (empty) station range.
+    rid = client.post("/reservations", json={
+        "etb": "2026-08-10T00:00:00Z", "status": "requested",
+    }).json()["id"]
+    assert _get_reservation(client, rid)["station_unassigned"] is True
+
+    # Operator assigns the berth -> station_range is filled from the catalog.
+    r = client.patch(f"/reservations/{rid}", json={"berth_id": bid})
+    assert r.status_code == 200
+    got = _get_reservation(client, rid)
+    assert got["station_unassigned"] is False
+    assert got["station_lo"] == 351.0 and got["station_hi"] == 1107.3
+    assert got["berth_id"] == bid and got["berth_name"] == "Test Berth A"
+
+    # Unassigning clears both the berth and the range.
+    client.patch(f"/reservations/{rid}", json={"unassigned": True})
+    got = _get_reservation(client, rid)
+    assert got["station_unassigned"] is True and got["berth_id"] is None
+
+
+def test_create_with_berth_and_subspan(client, db_session):
+    bid = _add_berth(db_session, name="Test Berth B", lo=1107.3, hi=1966.5)
+    # Explicit bounds override the berth's full range (a shorter vessel).
+    rid = client.post("/reservations", json={
+        "etb": "2026-08-20T00:00:00Z", "status": "tentative",
+        "berth_id": bid, "station_lo": 1200, "station_hi": 1500,
+    }).json()["id"]
+    got = _get_reservation(client, rid)
+    assert got["station_lo"] == 1200 and got["station_hi"] == 1500
+    assert got["berth_id"] == bid
+
+
+def test_assign_unknown_berth_422(client):
+    rid = client.post("/reservations", json={
+        "etb": "2026-08-25T00:00:00Z", "status": "requested",
+    }).json()["id"]
+    assert client.patch(
+        f"/reservations/{rid}", json={"berth_id": 99999999}
+    ).status_code == 422
+
+
+def test_list_berths_ordered(client, db_session):
+    _add_berth(db_session, name="Test Berth North", lo=2707.9, hi=3451.1)
+    _add_berth(db_session, name="Test Berth South", lo=-411.4, hi=351.0)
+    names = [b["name"] for b in client.get("/berths").json()]
+    # Ordered SW -> NE by station: the southern (smaller POPA) berth precedes
+    # the northern one, regardless of any other seeded berths in between.
+    assert names.index("Test Berth South") < names.index("Test Berth North")
 
 
 def test_cancel_and_delete(client):
