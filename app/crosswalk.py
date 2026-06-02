@@ -21,7 +21,9 @@ and ``format_station`` convert to/from that notation.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from typing import Sequence
 
 # Published POPA crosswalk defaults.
 DEFAULT_CORPS_SCALE = 1.0
@@ -145,3 +147,45 @@ def geo_to_station(session, lat: float, lon: float, segment_id: int | None = Non
         params["segment_id"] = segment_id
     row = session.execute(text(sql), params).first()
     return None if row is None else float(row.station)
+
+
+# --- Geo -> station, pure (no database) ------------------------------------
+def project_to_station(
+    vertices: Sequence[tuple[float, float, float]], lat: float, lon: float
+) -> float:
+    """Project a lat/lon onto a measured polyline and return the POPA station
+    (interpolated ``M``) of the closest point — the pure-Python counterpart of
+    ``geo_to_station``.
+
+    ``vertices`` is ``[(lon, lat, M), ...]`` — the same measured centerline that
+    is seeded into ``wharf_segment.geom`` (e.g.
+    ``data/gis/centerline_vertices.json``). Uses a local equirectangular
+    projection about the polyline's mean latitude, which is accurate to far below
+    a foot at wharf scale (a few thousand feet).
+
+    This exists for **verification and offline use** (tests, tooling, a
+    DB-less map) — PostGIS ``ST_InterpolatePoint`` via ``geo_to_station`` remains
+    authoritative for anything that touches the database.
+    """
+    if len(vertices) < 2:
+        raise ValueError("need at least two vertices to project onto a line")
+
+    lat0 = sum(v[1] for v in vertices) / len(vertices)
+    k = math.cos(math.radians(lat0))  # longitude foreshortening at this latitude
+
+    px, py = lon * k, lat
+    best_d2: float | None = None
+    best_m = vertices[0][2]
+    for (lo1, la1, m1), (lo2, la2, m2) in zip(vertices[:-1], vertices[1:]):
+        ax, ay = lo1 * k, la1
+        bx, by = lo2 * k, la2
+        dx, dy = bx - ax, by - ay
+        seg2 = dx * dx + dy * dy
+        t = 0.0 if seg2 == 0 else ((px - ax) * dx + (py - ay) * dy) / seg2
+        t = max(0.0, min(1.0, t))
+        cx, cy = ax + t * dx, ay + t * dy
+        d2 = (px - cx) ** 2 + (py - cy) ** 2
+        if best_d2 is None or d2 < best_d2:
+            best_d2 = d2
+            best_m = m1 + t * (m2 - m1)
+    return best_m

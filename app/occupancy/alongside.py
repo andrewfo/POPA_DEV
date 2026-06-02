@@ -1,11 +1,13 @@
 """The single "is this point at the quay?" predicate, plus sample loading.
 
-THIS is the Option-3 swap point. Today "alongside" means *within a buffer of the
-wharf centerline* (``ST_DWithin`` on geography, metres). When a real apron
-polygon is digitized, replace the one expression in ``_alongside_sql`` with a
-point-in-polygon test (``ST_Contains(apron, point)``) and nothing else in the
-occupancy package has to change — the detector consumes a pre-classified
-``alongside`` boolean and never sees geometry.
+"Alongside" prefers the digitized **apron polygon** (``wharf_segment.apron``, a
+water-side berthing-zone strip — point-in-polygon via ``ST_Contains``) and falls
+back to a symmetric **centerline buffer** (``ST_DWithin`` on geography, metres,
+``Settings.berth_buffer_m``) for any segment that has no apron seeded yet. Both
+live in the one expression in ``_alongside_sql``; nothing else in the occupancy
+package sees geometry — the detector consumes a pre-classified ``alongside``
+boolean. (Apron added in migration 0005; built by
+``data/gis/build_centerline.py``, seeded by ``app/seed/wharf_seed.py``.)
 """
 from __future__ import annotations
 
@@ -31,10 +33,15 @@ class PosRow:
     alongside: bool
 
 
-# The swappable predicate. ``seg.g`` is the (2D) wharf geometry chosen per row;
-# ``pt`` is the position. Both are cast to geography so the buffer is in metres.
+# The predicate. ``seg.apron`` is the digitized berthing-zone polygon (or NULL);
+# ``seg.g`` is the (2D) centerline; ``point_sql`` is the position. Apron wins when
+# present (point-in-polygon); otherwise the metres-buffer of the centerline.
 def _alongside_sql(point_sql: str) -> str:
-    return f"ST_DWithin(seg.g::geography, ({point_sql})::geography, :buffer_m)"
+    return (
+        f"CASE WHEN seg.apron IS NOT NULL "
+        f"THEN ST_Contains(seg.apron, {point_sql}) "
+        f"ELSE ST_DWithin(seg.g::geography, ({point_sql})::geography, :buffer_m) END"
+    )
 
 
 def load_samples(
@@ -67,7 +74,7 @@ def load_samples(
             {_alongside_sql(point)} AS alongside
         FROM position_report pr
         CROSS JOIN LATERAL (
-            SELECT ST_Force2D(ws.geom) AS g
+            SELECT ST_Force2D(ws.geom) AS g, ws.apron AS apron
             FROM wharf_segment ws
             {seg_where}
             ORDER BY ws.geom <-> {point}

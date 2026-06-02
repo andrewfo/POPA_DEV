@@ -43,6 +43,16 @@ WAREHOUSES = GIS_DIR / "warehouses"
 ANCHOR_BERTH = "Berth 4"      # its SW water corner is the stationing anchor
 ANCHOR_STATION = 351.0        # running footage at that corner (from berth_leng)
 
+# Apron / berthing-zone polygon: a strip along the WATER side of the quay face.
+# A berthed vessel's AIS antenna floats off the quay (NOT on the landward berth
+# rectangle), so the "alongside" zone is water-side. Widths are in true feet
+# (the berths' planar CRS). Water reach covers a large beam + standoff + AIS
+# noise; the small inland reach absorbs fender slop / antennas just shy of the
+# digitized face. This supersedes the symmetric centerline buffer
+# (Settings.berth_buffer_m) once seeded — see app/occupancy/alongside.py.
+APRON_WATER_FT = 250.0
+APRON_INLAND_FT = 40.0
+
 
 def _reader(path: Path):
     r = shapefile.Reader(str(path))
@@ -196,9 +206,12 @@ def main() -> None:
     # wharf (so every berth is covered). Distinct from the POPA series above:
     # these sit ON the wharf — each tick runs from the quay edge landward onto
     # the concrete apron (water_ft=0, no part in the channel), vs. the long POPA
-    # lines that run out into the water. Labelled at the round hundreds (minor
-    # 50s left unlabelled) so the result reads like a ruler instead of stacking a
-    # label on every tick.
+    # lines that run out into the water. The berth rectangles are ~270 ft deep,
+    # so the labelled round-hundred ticks run nearly that full depth and carry
+    # their label at the landward (top) edge of the berth rectangle; the minor
+    # 50s are short unlabelled ticks at the quay. Result: a ruler with the yellow
+    # numbers along the top of the berths instead of a label on every tick.
+    BERTH_DEPTH_FT = 255.0              # just inside the ~270 ft berth rectangles
     popa_ne = stations[-1]              # Berth 1 NE quay corner = yellow 0+00
     yellow_marks = []
     y = 0.0
@@ -207,7 +220,7 @@ def main() -> None:
         if xy is not None:
             major = round(y) % 100 == 0
             line = marker_line(xy[0], xy[1],
-                               land_ft=60 if major else 40,
+                               land_ft=BERTH_DEPTH_FT if major else 45,
                                water_ft=0)
             yellow_marks.append({
                 "type": "Feature",
@@ -215,10 +228,32 @@ def main() -> None:
                 "properties": {
                     "dist_ne": round(y, 1),
                     "major": major,
-                    "label": format_station(y) if major else None,
+                    "label": str(int(round(y))) if major else None,
                 },
             })
         y += 50.0
+
+    # Close the ruler exactly on the SW (leftmost) edge of Berth 6 — the end of
+    # the wharf face — even though it is not a round 50 ft from Berth 1. Without
+    # this the last 50-ft tick stops ~20 ft inside the berth; the port wants the
+    # final marker lined up with that edge.
+    y_end = popa_ne - popa_lo
+    if y_end - (y - 50.0) > 1.0:        # last placed tick fell short of the edge
+        # Drop the final round-hundred if the edge tick would land almost on top
+        # of it (4600 vs the 4620 terminus), leaving just the edge marker.
+        if yellow_marks and y_end - yellow_marks[-1]["properties"]["dist_ne"] < 50.0:
+            yellow_marks.pop()
+        xy = interp_xy(popa_lo)
+        if xy is not None:
+            yellow_marks.append({
+                "type": "Feature",
+                "geometry": {"type": "LineString",
+                             "coordinates": marker_line(xy[0], xy[1],
+                                                        land_ft=BERTH_DEPTH_FT,
+                                                        water_ft=0)},
+                "properties": {"dist_ne": round(y_end, 1), "major": True,
+                               "label": str(int(round(y_end)))},
+            })
     (STATIC_GIS / "yellow_markers.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": yellow_marks})
     )
@@ -253,12 +288,35 @@ def main() -> None:
         json.dumps({"type": "FeatureCollection", "features": [line, *ticks]})
     )
 
+    # --- apron / berthing-zone polygon (water-side strip of the quay face) -----
+    # Offset the face chain inland by APRON_INLAND_FT and waterward by
+    # APRON_WATER_FT (both along the unit water normal w, in true feet), then walk
+    # the inland edge SW->NE and the water edge back NE->SW to close one ring.
+    inland_xy = [(x - w[0] * APRON_INLAND_FT, y - w[1] * APRON_INLAND_FT) for x, y in chain]
+    water_xy = [(x + w[0] * APRON_WATER_FT, y + w[1] * APRON_WATER_FT) for x, y in chain]
+    ring_xy = inland_xy + water_xy[::-1] + [inland_xy[0]]
+    ring_wgs = [[round(lon, 7), round(lat, 7)] for lon, lat in (to_wgs.transform(x, y) for x, y in ring_xy)]
+
+    (GIS_DIR / "apron_polygon.json").write_text(json.dumps(ring_wgs, indent=2))
+    (STATIC_GIS / "apron.geojson").write_text(json.dumps({
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": [ring_wgs]},
+            "properties": {
+                "name": "POPA Public Wharf apron (berthing zone)",
+                "water_ft": APRON_WATER_FT, "inland_ft": APRON_INLAND_FT,
+            },
+        }],
+    }))
+
     print(f"axis u={u} water_normal={w}")
     print(f"faces found: {list(faces)}")
     for lon, lat, m in vertices:
         print(f"  station {m:>8.1f} ft  ->  ({lat:.6f}, {lon:.6f})")
     print(f"span {vertices[0][2]} .. {vertices[-1][2]} ft over {len(vertices)} vertices")
-    print(f"-> wrote centerline_vertices.json and app/static/gis/centerline.geojson")
+    print(f"apron strip: {APRON_INLAND_FT} ft inland .. {APRON_WATER_FT} ft water, {len(ring_wgs)} ring pts")
+    print(f"-> wrote centerline_vertices.json, apron_polygon.json, and app/static/gis/{{centerline,apron}}.geojson")
 
 
 if __name__ == "__main__":

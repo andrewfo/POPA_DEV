@@ -55,6 +55,10 @@
     overflow-y: auto; padding: 16px; border-right: 1px solid var(--line);
     background: var(--bg);
   }
+  /* The map shares the right pane with the timeline drawer, stacked vertically.
+     --drawerH is the drawer's expanded height (drag-resizable, persisted). */
+  #stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr var(--drawerH, 300px); }
+  #stage.drawer-collapsed { grid-template-rows: 1fr 38px; }
   #map { min-height: 0; height: 100%; background: #0a131e; }
 
   .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
@@ -114,8 +118,8 @@
     transform: rotate(-90deg); transform-origin: center center;
     white-space: nowrap;
   }
-  .berth-label { color: #ffce5a; font-weight: 700; font-size: 16px; text-align: center; line-height: 1.15; }
-  .berth-label .sub { color: #ffe6a8; font-weight: 500; font-size: 13px; }
+  .berth-label { color: #2dd4bf; font-weight: 700; font-size: 16px; text-align: center; line-height: 1.15; }
+  .berth-label .sub { color: #99f6e4; font-weight: 500; font-size: 13px; }
   .wh-label { color: #cdd9e5; font-size: 14px; }
   .sta-label { color: #ff8a8a; font-size: 13px; font-weight: 600; }
   .ft-label { color: #f0f0f0; font-size: 12px; font-weight: 600; text-shadow: 0 0 3px #000, 0 1px 2px #000; }
@@ -158,6 +162,57 @@
   .intake .result.err { background: rgba(255,107,107,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
   .intake .result .warn { color: var(--warn); display: block; margin-top: 4px; font-size: 13px; }
   .req-card .meta b { color: var(--ink); font-weight: 600; }
+
+  /* Berth occupancy timeline drawer */
+  #timelineDrawer {
+    position: relative; min-height: 0; display: flex; flex-direction: column;
+    background: var(--bg); border-top: 1px solid var(--line);
+  }
+  #tlResize {
+    position: absolute; top: -3px; left: 0; right: 0; height: 7px; cursor: row-resize; z-index: 5;
+  }
+  #tlResize:hover { background: rgba(70,177,255,.25); }
+  .tl-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+    font-size: 14px;
+  }
+  .tl-head strong { font-size: 14px; }
+  .tl-sub { color: var(--muted); font-size: 13px; }
+  .tl-controls { margin-left: auto; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .tl-btn {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 4px 9px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .tl-btn:hover { border-color: var(--accent); }
+  .tl-btn.tl-caret { padding: 2px 8px; }
+  .tl-chk { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .tl-chk input { accent-color: var(--accent); }
+  .tl-body { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; }
+  #timelineDrawer.tl-collapsed .tl-body { display: none; }
+  #timelineDrawer.tl-collapsed { }
+  .tl-legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 12px; font-size: 12px; color: var(--muted); }
+  .tl-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .tl-scroll { flex: 1; min-height: 0; overflow: auto; }
+  #tlSvg { display: block; }
+  .tl-empty { display: none; color: var(--muted); font-style: italic; padding: 14px; }
+  .tl-tip {
+    position: fixed; z-index: 1000; display: none; max-width: 320px; pointer-events: none;
+    background: var(--panel-2); border: 1px solid var(--accent); border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; box-shadow: 0 6px 22px rgba(0,0,0,.5);
+  }
+  .tl-tip b { color: var(--ink); }
+  .tl-tip .k { color: var(--muted); }
+  /* SVG element classes */
+  .tl-lane-band { fill: var(--panel); opacity: .45; }
+  .tl-lane-band.alt { fill: var(--panel-2); opacity: .35; }
+  .tl-lane-label { fill: var(--ink); font: 600 12px system-ui, sans-serif; }
+  .tl-lane-label.unassigned { fill: var(--warn); }
+  .tl-grid { stroke: var(--line); stroke-width: 1; }
+  .tl-axis-label { fill: var(--muted); font: 11px system-ui, sans-serif; }
+  .tl-now { stroke: var(--bad); stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .tl-bar { rx: 3; cursor: pointer; stroke-width: 1; }
+  .tl-bar-label { fill: #04121f; font: 600 11px system-ui, sans-serif; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -281,7 +336,36 @@
     <div id="vessels"><div class="empty">loading…</div></div>
   </aside>
 
-  <div id="map"></div>
+  <div id="stage">
+    <div id="map"></div>
+
+    <!-- ===== Berth occupancy timeline (Gantt drawer under the map) ===== -->
+    <section id="timelineDrawer" class="tl-collapsed">
+      <div id="tlResize" title="Drag to resize"></div>
+      <div class="tl-head">
+        <button id="tlToggle" class="tl-btn tl-caret" title="Show/hide timeline">▾</button>
+        <strong>Berth occupancy</strong>
+        <span class="tl-sub" id="tlWindowLabel">—</span>
+        <div class="tl-controls">
+          <button class="tl-btn" data-pan="-1" title="Pan back">‹</button>
+          <button class="tl-btn" data-preset="3d">±3d</button>
+          <button class="tl-btn" data-preset="week">Week</button>
+          <button class="tl-btn" data-preset="7d">Next 7d</button>
+          <button class="tl-btn" data-preset="30d">Next 30d</button>
+          <button class="tl-btn" data-pan="1" title="Pan forward">›</button>
+          <button class="tl-btn" id="tlToday" title="Recenter on now">Today</button>
+          <label class="tl-chk"><input type="checkbox" id="tlHideCancelled" checked /> hide cancelled</label>
+        </div>
+      </div>
+      <div class="tl-body">
+        <div class="tl-legend" id="tlLegend"></div>
+        <div class="tl-scroll"><svg id="tlSvg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+        <div class="tl-empty" id="tlEmpty">no reservations in this window</div>
+      </div>
+      <div class="tl-tip" id="tlTip"></div>
+    </section>
+    <!-- ===== /Berth occupancy timeline ===== -->
+  </div>
 </main>
 
 <script
@@ -346,7 +430,7 @@ const wharfLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 const berthLayer = L.geoJSON(null, {
-  style: { color: "#ffce5a", weight: 2, fillColor: "#ffce5a", fillOpacity: 0.18 },
+  style: { color: "#2dd4bf", weight: 2, fillColor: "#2dd4bf", fillOpacity: 0.18 },
   onEachFeature: (f, layer) => {
     const p = f.properties;
     const rng = BERTH_STA[p.name];
@@ -362,6 +446,18 @@ const warehouseLayer = L.geoJSON(null, {
   onEachFeature: (f, layer) => {
     const p = f.properties;
     layer.bindTooltip(`<span class="lbl">${p.label || p.name}</span>`, { permanent: true, direction: "center", className: "wh-label" });
+  },
+}).addTo(map);
+// Apron / berthing-zone polygon (apron.geojson): the water-side strip of the
+// quay face where a berthed vessel's AIS position falls. This is the "alongside"
+// footprint the occupancy detector uses (a digitized polygon, superseding the
+// symmetric centerline buffer). Drawn as a faint teal fill so it reads as a zone,
+// not a feature.
+const apronLayer = L.geoJSON(null, {
+  style: { color: "#2dd4bf", weight: 1, opacity: 0.6, fillColor: "#2dd4bf", fillOpacity: 0.10, dashArray: "4 4" },
+  onEachFeature: (f, layer) => {
+    const p = f.properties || {};
+    layer.bindPopup(`<b>Berthing zone (apron)</b><br>${p.inland_ft ?? "?"} ft inland · ${p.water_ft ?? "?"} ft water`);
   },
 }).addTo(map);
 // The quay-face centerline is kept faint — the exhibit shows no drawn line, the
@@ -417,6 +513,17 @@ const yellowLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 const vesselLayer = L.layerGroup().addTo(map);
+
+// Show/hide toggles for the reference overlays. Each layer (and its child
+// label markers) is added to the map above, so unchecking removes the ticks/
+// labels/berths together. Kept expanded so the toggles are visible at a glance.
+L.control.layers(null, {
+  "Berths": berthLayer,
+  "Berthing zone (apron)": apronLayer,
+  "Dock markers (yellow)": yellowLayer,
+  "POPA station ticks": feetLayer,
+}, { collapsed: false, position: "topright" }).addTo(map);
+
 let probeMarker = null;
 let segmentParams = null; // first segment's affine params, for client-side crosswalk
 
@@ -467,6 +574,10 @@ async function loadReferenceGeo() {
   try {
     const ym = await api("/static/gis/yellow_markers.geojson");
     yellowLayer.addData(ym);
+  } catch (e) { /* optional */ }
+  try {
+    const ap = await api("/static/gis/apron.geojson");
+    apronLayer.addData(ap);
   } catch (e) { /* optional */ }
   try {
     const cl = await api("/static/gis/centerline.geojson");
@@ -689,15 +800,268 @@ map.on("click", async (e) => {
 })();
 // ===== /DUMMY SHIP =============================================================
 
+// ===== BERTH OCCUPANCY TIMELINE (Gantt drawer) =================================
+// Self-contained: reads the in-page api()/fmtSta() helpers and the BERTH_STA
+// global (berth -> [station_lo, station_hi] ft). Renders reservations from
+// /reservations as bars in discrete berth lanes over a time axis. Exposes
+// window.loadTimeline() so the boot + poll can refresh it.
+const loadTimeline = (function () {
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const LABEL_W = 96, ROW_H = 20, LANE_PAD = 4, HEADER_H = 24, RIGHT_PAD = 14;
+  const H = 3600e3, DAY = 24 * H;
+
+  // status -> colour; dredge overrides by type. Mirrors the reservation enums.
+  const STATUS = {
+    observed:  "#3ddc97", requested: "#ffce5a", tentative: "#46b1ff",
+    confirmed: "#7c5cff", completed: "#5a6b7d", cancelled: "#39495a",
+  };
+  const DREDGE = "#ff8a5a";
+  const LEGEND = [
+    ["observed", "Observed (AIS)"], ["requested", "Requested"],
+    ["tentative", "Tentative"], ["confirmed", "Confirmed"],
+    ["completed", "Completed"], ["__dredge", "Dredging"],
+  ];
+
+  const drawer = document.getElementById("timelineDrawer");
+  const stage = document.getElementById("stage");
+  const svg = document.getElementById("tlSvg");
+  const scroll = svg.parentElement;
+  const tip = document.getElementById("tlTip");
+  const emptyEl = document.getElementById("tlEmpty");
+  const winLabel = document.getElementById("tlWindowLabel");
+
+  // window state (ms). Default: now-2d .. now+7d.
+  let t0 = Date.now() - 2 * DAY, t1 = Date.now() + 7 * DAY;
+  let rows = [];                       // last fetched reservations
+  let hideCancelled = true;
+
+  const el = (tag, attrs) => {
+    const n = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  };
+  const fmtD = (ms) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const fmtDT = (s) => s ? new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+
+  // Build berth lanes from BERTH_STA (high station on top), plus an Unassigned
+  // lane at the top for requests with no berth yet.
+  function lanes() {
+    const berths = Object.entries(BERTH_STA || {})
+      .map(([name, r]) => ({ key: name, label: name, lo: Math.min(r[0], r[1]), hi: Math.max(r[0], r[1]), unassigned: false }))
+      .sort((a, b) => b.hi - a.hi);
+    return [{ key: "__un", label: "Unassigned", lo: null, hi: null, unassigned: true }, ...berths];
+  }
+
+  // Assign a reservation to one lane by greatest station overlap (fallback:
+  // nearest by midpoint). Unassigned-station rows go to the Unassigned lane.
+  function assignLane(r, ls) {
+    if (r.station_unassigned || r.station_lo == null) return ls[0];
+    const lo = Math.min(r.station_lo, r.station_hi), hi = Math.max(r.station_lo, r.station_hi);
+    const mid = (lo + hi) / 2;
+    let best = null, bestOv = -1, bestDist = Infinity;
+    for (const L of ls) {
+      if (L.unassigned) continue;
+      const ov = Math.max(0, Math.min(hi, L.hi) - Math.max(lo, L.lo));
+      const dist = Math.max(L.lo - mid, mid - L.hi, 0);
+      if (ov > bestOv || (ov === bestOv && dist < bestDist)) { best = L; bestOv = ov; bestDist = dist; }
+    }
+    return best || ls[1] || ls[0];
+  }
+
+  // Greedy sub-row packing: items that overlap in time stack into separate rows.
+  function pack(items) {
+    items.sort((a, b) => a.s - b.s);
+    const rowEnds = [];
+    for (const it of items) {
+      let placed = false;
+      for (let i = 0; i < rowEnds.length; i++) {
+        if (it.s >= rowEnds[i]) { it.row = i; rowEnds[i] = it.e; placed = true; break; }
+      }
+      if (!placed) { it.row = rowEnds.length; rowEnds.push(it.e); }
+    }
+    return Math.max(1, rowEnds.length);
+  }
+
+  function colorFor(r) { return r.type === "dredge" ? DREDGE : (STATUS[r.status] || "#888"); }
+
+  function render() {
+    if (drawer.classList.contains("tl-collapsed")) return;   // body hidden -> nothing to draw
+    const W = scroll.clientWidth || drawer.clientWidth || 800;
+    if (W < 60) { requestAnimationFrame(render); return; }
+    winLabel.textContent = `${fmtD(t0)} – ${fmtD(t1)}`;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    const ls = lanes();
+    const plotW = W - LABEL_W - RIGHT_PAD;
+    const x = (ms) => LABEL_W + (Math.max(t0, Math.min(t1, ms)) - t0) / (t1 - t0) * plotW;
+
+    // Bucket reservations into lanes, clamp times to the window, drop non-overlapping.
+    const visible = rows.filter((r) => !(hideCancelled && r.status === "cancelled"));
+    const byLane = new Map(ls.map((L) => [L.key, []]));
+    for (const r of visible) {
+      const s = r.t_start ? Date.parse(r.t_start) : t0;
+      const e = r.t_end ? Date.parse(r.t_end) : t1;       // open-ended -> window edge
+      if (e <= t0 || s >= t1) continue;                    // outside window
+      byLane.get(assignLane(r, ls).key).push({ r, s, e });
+    }
+
+    // Layout: each lane height grows with its packed sub-row count.
+    let y = HEADER_H, totalRows = 0;
+    const laid = ls.map((L, i) => {
+      const items = byLane.get(L.key);
+      const nrows = pack(items);
+      totalRows += items.length;
+      const h = nrows * ROW_H + 2 * LANE_PAD;
+      const lane = { L, i, y, h, items };
+      y += h;
+      return lane;
+    });
+    const totalH = y;
+    svg.setAttribute("width", W);
+    svg.setAttribute("height", totalH);
+    emptyEl.style.display = totalRows ? "none" : "block";
+
+    // Lane bands + labels.
+    for (const lane of laid) {
+      svg.appendChild(el("rect", { x: 0, y: lane.y, width: W, height: lane.h, class: "tl-lane-band" + (lane.i % 2 ? " alt" : "") }));
+      const lbl = el("text", { x: 8, y: lane.y + lane.h / 2 + 4, class: "tl-lane-label" + (lane.L.unassigned ? " unassigned" : "") });
+      lbl.textContent = lane.L.label;
+      svg.appendChild(lbl);
+    }
+
+    // X gridlines + tick labels (nice step from the span).
+    const span = t1 - t0;
+    let step = span <= 2 * DAY ? 6 * H : span <= 8 * DAY ? DAY : span <= 40 * DAY ? 7 * DAY : Math.ceil(span / 8 / DAY) * DAY;
+    for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+      const px = x(t);
+      svg.appendChild(el("line", { x1: px, y1: HEADER_H, x2: px, y2: totalH, class: "tl-grid" }));
+      const tk = el("text", { x: px + 3, y: 15, class: "tl-axis-label" });
+      const d = new Date(t);
+      tk.textContent = step < DAY ? (d.getHours() === 0 ? fmtD(t) : d.toLocaleTimeString(undefined, { hour: "2-digit" })) : fmtD(t);
+      svg.appendChild(tk);
+    }
+
+    // "Now" marker.
+    const now = Date.now();
+    if (now >= t0 && now <= t1) {
+      svg.appendChild(el("line", { x1: x(now), y1: HEADER_H, x2: x(now), y2: totalH, class: "tl-now" }));
+    }
+
+    // Bars.
+    for (const lane of laid) {
+      for (const it of lane.items) {
+        const bx = x(it.s), bw = Math.max(2, x(it.e) - bx);
+        const by = lane.y + LANE_PAD + it.row * ROW_H + 1;
+        const fill = colorFor(it.r);
+        const rect = el("rect", { x: bx, y: by, width: bw, height: ROW_H - 3, rx: 3, class: "tl-bar", fill, stroke: "rgba(0,0,0,.35)" });
+        if (it.r.t_end == null) rect.setAttribute("opacity", "0.85");   // open-ended hint
+        rect.addEventListener("mousemove", (ev) => showTip(ev, it.r));
+        rect.addEventListener("mouseleave", hideTip);
+        svg.appendChild(rect);
+        if (bw > 42) {
+          const t = el("text", { x: bx + 5, y: by + ROW_H - 7, class: "tl-bar-label" });
+          t.textContent = it.r.vessel_name || `#${it.r.id}`;
+          svg.appendChild(t);
+        }
+      }
+    }
+  }
+
+  function showTip(ev, r) {
+    const sta = r.station_unassigned ? "unassigned" : `POPA ${fmtSta(r.station_lo)}–${fmtSta(r.station_hi)}`;
+    tip.innerHTML =
+      `<b>${r.vessel_name || "(unnamed)"}</b>${r.vessel_imo ? ` <span class="k">IMO ${r.vessel_imo}</span>` : ""}<br>` +
+      `<span class="k">${r.type} · ${r.status} · via ${r.source}</span><br>` +
+      `${fmtDT(r.t_start)} → ${r.t_end ? fmtDT(r.t_end) : "open"}<br>` +
+      `<span class="k">${sta}</span>` +
+      (r.cargo ? `<br>${r.cargo}` : "") + (r.notes ? `<br><span class="k">${r.notes}</span>` : "");
+    tip.style.display = "block";
+    const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+    let lx = ev.clientX + pad, ly = ev.clientY + pad;
+    if (lx + w > innerWidth) lx = ev.clientX - w - pad;
+    if (ly + h > innerHeight) ly = ev.clientY - h - pad;
+    tip.style.left = lx + "px"; tip.style.top = ly + "px";
+  }
+  function hideTip() { tip.style.display = "none"; }
+
+  function renderLegend() {
+    document.getElementById("tlLegend").innerHTML = LEGEND.map(
+      ([k, lbl]) => `<span><i style="background:${k === "__dredge" ? DREDGE : STATUS[k]}"></i>${lbl}</span>`
+    ).join("");
+  }
+
+  async function load() {
+    try {
+      const from = new Date(t0).toISOString(), to = new Date(t1).toISOString();
+      rows = await api(`/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
+      render();
+    } catch (e) {
+      rows = []; render();
+      emptyEl.textContent = "unavailable (DB offline)"; emptyEl.style.display = "block";
+    }
+  }
+
+  // --- window controls ---
+  function setWindow(a, b) { t0 = a; t1 = b; load(); }
+  function startOfWeek(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x.getTime(); }
+  drawer.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
+    const now = Date.now(), p = b.dataset.preset;
+    if (p === "3d") setWindow(now - 3 * DAY, now + 3 * DAY);
+    else if (p === "week") setWindow(startOfWeek(now), startOfWeek(now) + 7 * DAY);
+    else if (p === "7d") setWindow(now, now + 7 * DAY);
+    else if (p === "30d") setWindow(now, now + 30 * DAY);
+  }));
+  drawer.querySelectorAll("[data-pan]").forEach((b) => b.addEventListener("click", () => {
+    const d = (t1 - t0) / 2 * Number(b.dataset.pan); setWindow(t0 + d, t1 + d);
+  }));
+  document.getElementById("tlToday").addEventListener("click", () => setWindow(Date.now() - 2 * DAY, Date.now() + 7 * DAY));
+  document.getElementById("tlHideCancelled").addEventListener("change", (e) => { hideCancelled = e.target.checked; render(); });
+
+  // --- collapse / resize ---
+  function invalidateMap() { if (typeof map !== "undefined" && map.invalidateSize) setTimeout(() => map.invalidateSize(), 0); }
+  function setCollapsed(c) {
+    drawer.classList.toggle("tl-collapsed", c);
+    stage.classList.toggle("drawer-collapsed", c);
+    document.getElementById("tlToggle").textContent = c ? "▸" : "▾";
+    localStorage.setItem("tlCollapsed", c ? "1" : "0");
+    invalidateMap(); if (!c) render();
+  }
+  document.getElementById("tlToggle").addEventListener("click", () => setCollapsed(!drawer.classList.contains("tl-collapsed")));
+
+  (function resizable() {
+    const handle = document.getElementById("tlResize");
+    let dragging = false;
+    const apply = (h) => { stage.style.setProperty("--drawerH", h + "px"); };
+    const saved = Number(localStorage.getItem("tlHeight"));
+    apply(saved && saved > 120 ? saved : 300);
+    handle.addEventListener("mousedown", (e) => { dragging = true; e.preventDefault(); document.body.style.cursor = "row-resize"; });
+    addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const h = Math.max(120, Math.min(innerHeight * 0.7, innerHeight - e.clientY));
+      apply(h); requestAnimationFrame(() => { invalidateMap(); render(); });
+    });
+    addEventListener("mouseup", () => {
+      if (!dragging) return; dragging = false; document.body.style.cursor = "";
+      localStorage.setItem("tlHeight", parseInt(stage.style.getPropertyValue("--drawerH")) || 300);
+    });
+  })();
+
+  let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(render, 150); });
+
+  renderLegend();
+  setCollapsed(localStorage.getItem("tlCollapsed") === "1");
+  return load;
+})();
+
 // --- Boot ------------------------------------------------------------------
 loadBbox();
-loadReferenceGeo();
+loadReferenceGeo().then(loadTimeline);   // lanes need BERTH_STA loaded first
 loadStats();
 loadSegments();
 loadVessels();
 loadRequests();
 loadPositions();
-setInterval(() => { loadStats(); loadPositions(); }, 15000);
+setInterval(() => { loadStats(); loadPositions(); loadTimeline(); }, 15000);
 </script>
 </body>
 </html>

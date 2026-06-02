@@ -7,10 +7,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app import __version__
@@ -21,6 +22,21 @@ from app.intake.manual import BerthRequestForm, record_manual_request
 from app.models import PositionReport, Vessel, WharfSegment
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
+
+
+@app.exception_handler(OperationalError)
+def _db_unavailable(request: Request, exc: OperationalError) -> JSONResponse:
+    """The database is down/unreachable (e.g. Postgres not started). Return a
+    clean 503 the frontend can show as a banner, instead of dumping a multi-page
+    connection-timeout traceback on every poll of the read-only endpoints."""
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "database unavailable",
+            "hint": "start Postgres/PostGIS (see docker-compose.yml) and retry",
+        },
+    )
+
 
 _STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
@@ -195,12 +211,18 @@ def create_berth_request(
 
 @app.get("/reservations")
 def list_reservations(
-    status: str | None = None, limit: int = 100,
+    status: str | None = None,
+    limit: int = 100,
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = None,
     session: Session = Depends(get_session),
 ) -> list[dict]:
-    """Reservations, newest first, optionally filtered by status. Station/time
-    ranges are returned as bounds; an empty station range (unassigned berth)
-    reports ``station_unassigned: true``."""
+    """Reservations, newest first, optionally filtered by status and by a time
+    window (``from``/``to``, ISO datetimes). The window is an overlap test, so a
+    reservation counts if any part of its ``time_range`` falls inside it. Null
+    bounds are unbounded, so omitting both ``from`` and ``to`` returns everything
+    (back-compatible). Station/time ranges are returned as bounds; an empty
+    station range (unassigned berth) reports ``station_unassigned: true``."""
     rows = session.execute(
         text(
             """
@@ -215,11 +237,12 @@ def list_reservations(
             FROM reservation r
             LEFT JOIN vessel v ON v.id = r.vessel_id
             WHERE (:status IS NULL OR r.status::text = :status)
+              AND r.time_range && tstzrange(:t_from, :t_to, '[]')
             ORDER BY r.created_at DESC
             LIMIT :limit
             """
         ),
-        {"status": status, "limit": limit},
+        {"status": status, "limit": limit, "t_from": from_, "t_to": to},
     ).all()
     return [
         {

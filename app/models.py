@@ -82,6 +82,13 @@ class WharfSegment(Base):
         nullable=False,
     )
 
+    # Digitized berthing-zone polygon (water side of the quay). NULL until
+    # seeded; the occupancy "alongside" test falls back to the centerline buffer
+    # when absent. Added in migration 0005. See app/occupancy/alongside.py.
+    apron: Mapped[object | None] = mapped_column(
+        Geometry(geometry_type="POLYGON", srid=4326, spatial_index=False),
+    )
+
     # Canonical POPA station span this segment covers (feet). Informational /
     # for routing a lat/lon to the right segment.
     popa_sta_start: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)

@@ -34,6 +34,10 @@ SEGMENT_NAME = "POPA Public Wharf"
 _VERTICES_FILE = (
     Path(__file__).parents[2] / "data" / "gis" / "centerline_vertices.json"
 )
+# Digitized berthing-zone polygon ([[lon, lat], ...] closed ring), also from
+# build_centerline.py. Optional — NULL apron just means the occupancy detector
+# falls back to the centerline buffer.
+_APRON_FILE = Path(__file__).parents[2] / "data" / "gis" / "apron_polygon.json"
 
 # PLACEHOLDER fallback (lon, lat, M=POPA station feet) if the derived file is
 # absent — a straight-ish line inside the AIS bounding box.
@@ -60,6 +64,15 @@ def _wharf_ewkt(vertices: list[tuple[float, float, float]]) -> str:
     return f"SRID=4326;LINESTRING M ({coords})"
 
 
+def _apron_ewkt() -> str | None:
+    """EWKT for the apron polygon, or None if it hasn't been digitized yet."""
+    if not _APRON_FILE.exists():
+        return None
+    ring = json.loads(_APRON_FILE.read_text())
+    coords = ", ".join(f"{lon} {lat}" for lon, lat in ring)
+    return f"SRID=4326;POLYGON(({coords}))"
+
+
 def seed_wharf(session: Session) -> int:
     """Insert (or update) the POPA Public Wharf segment. Returns its id."""
     ewkt = _wharf_ewkt(WHARF_VERTICES)
@@ -70,13 +83,15 @@ def seed_wharf(session: Session) -> int:
         text(
             """
             INSERT INTO wharf_segment
-                (name, geom, popa_sta_start, popa_sta_end,
+                (name, geom, apron, popa_sta_start, popa_sta_end,
                  corps_scale, corps_offset, dockno_scale, dockno_offset)
             VALUES
-                (:name, ST_GeomFromEWKT(:ewkt), :sta_start, :sta_end,
+                (:name, ST_GeomFromEWKT(:ewkt), ST_GeomFromEWKT(:apron),
+                 :sta_start, :sta_end,
                  :corps_scale, :corps_offset, :dockno_scale, :dockno_offset)
             ON CONFLICT (name) DO UPDATE SET
                 geom = EXCLUDED.geom,
+                apron = EXCLUDED.apron,
                 popa_sta_start = EXCLUDED.popa_sta_start,
                 popa_sta_end = EXCLUDED.popa_sta_end,
                 corps_scale = EXCLUDED.corps_scale,
@@ -89,6 +104,7 @@ def seed_wharf(session: Session) -> int:
         {
             "name": SEGMENT_NAME,
             "ewkt": ewkt,
+            "apron": _apron_ewkt(),
             "sta_start": sta_start,
             "sta_end": sta_end,
             "corps_scale": DEFAULT_CORPS_SCALE,
