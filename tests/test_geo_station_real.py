@@ -71,12 +71,18 @@ def test_offset_perpendicular_keeps_station(vertices):
     assert got == pytest.approx((m1 + m2) / 2, abs=6.0)
 
 
-def test_centerline_endpoints_match_berth_station_extents(vertices):
+def test_centerline_spans_quay_within_berth_extents(vertices):
+    # The centerline is the surveyed quay face stationed against the berths, so
+    # its span sits INSIDE the berths' station extent. The SW terminus coincides
+    # with the SW berth extent (a few ft of survey slack); the NE terminus is
+    # clipped to the surveyed quay end (~Dock No. 0 / POPA ~3365), short of the
+    # Berth 1 *polygon* corner — the dock stationing's physical start.
     if not _BERTH_STA.exists():
         pytest.skip("berth_stations.json not built")
     berth = json.loads(_BERTH_STA.read_text())
     flat = [v for pair in berth.values() for v in pair]
     stations = [m for *_, m in vertices]
-    # The face line should span exactly the berths' station extent (same source).
-    assert min(stations) == pytest.approx(min(flat), abs=0.5)
-    assert max(stations) == pytest.approx(max(flat), abs=0.5)
+    assert min(stations) >= min(flat) - 0.5            # within the berth extent
+    assert max(stations) <= max(flat) + 0.5
+    assert min(stations) == pytest.approx(min(flat), abs=8.0)  # shares SW terminus
+    assert max(flat) - 200.0 < max(stations) < max(flat)       # NE clipped, modestly

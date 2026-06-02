@@ -1,17 +1,26 @@
-"""Derive the canonical wharf centerline (quay face) + POPA stationing from the
-berth polygons.
+"""Derive the canonical wharf centerline (quay face) + POPA stationing.
 
-Method (validated against the ``width`` / ``berth_leng`` attributes):
-  * Each berth polygon's WATER-SIDE edge is the edge whose length matches the
-    berth ``width`` and which lies on the channel side (away from the inland
-    warehouses). That edge IS the quay face for that berth.
-  * Adjacent berths share their water-corner vertices, so the per-berth face
-    edges chain end-to-end into one continuous face line, SW -> NE.
-  * POPA station = running footage along that face. The berth ``berth_leng``
-    chain anchors the Berth 5/4 junction at station 351 (Berth 4 then runs
-    351->1108->...->3450 at the Berth 1 NE end), and the planar edge lengths
-    match those station deltas to ~1 ft, so station = 351 + signed distance
-    along the face from that anchor.
+The berth polygons are berthing-WATER rectangles: their landward long edge is
+the quay face, their water-side long edge is the outer limit of the berth
+pocket, ~200-270 ft (the berth depth) out into the channel. So the berths give
+clean STATIONING (running footage along the wharf) but NOT a clean quay-face
+geometry — the complex multi-vertex berths (13/17 pts) make the landward edge
+jagged. A separate surveyed quay line (``quayface.*``, a 2-segment ArcGIS export
+of the real bulkhead) provides the clean geometry.
+
+Method:
+  * STATIONING REFERENCE: each berth's along-shore edge length matches its
+    ``width`` attribute, and the ``berth_leng`` chain (351 -> 1108 -> ... ->
+    3450) gives the running POPA footage. Chaining the (water-side) edges and
+    anchoring the Berth 5/4 junction at station 351 reproduces those deltas to
+    ~1 ft. This chain carries correct ALONG-wharf stationing (independent of
+    which side it sits on).
+  * QUAY-FACE GEOMETRY: the surveyed ``quayface`` line is the real bulkhead.
+    We project each stationing-reference vertex perpendicularly onto it and keep
+    that vertex's station, giving a smooth centerline ON the quay with canonical
+    POPA. Endpoints are clipped to the quay's surveyed extent (the NE end lands
+    at POPA ~3360 ~= Dock No. 0, the physical start of the dock stationing —
+    ~90 ft SW of where the Berth 1 *polygon* ends).
 
 Outputs:
   * data/gis/centerline_vertices.json   -> [[lon, lat, M], ...] for the seed
@@ -35,10 +44,11 @@ STATIC_GIS = Path(__file__).parents[2] / "app" / "static" / "gis"
 
 # Pull the canonical Dock No. crosswalk params (no inline stationing math).
 sys.path.insert(0, str(Path(__file__).parents[2]))
-from app.crosswalk import format_station
+from app.crosswalk import dockno_to_popa, format_station, popa_to_dockno
 
 BERTHS = GIS_DIR / "berths"
 WAREHOUSES = GIS_DIR / "warehouses"
+QUAYFACE = GIS_DIR / "quayface"   # surveyed bulkhead line (real quay-face geometry)
 
 ANCHOR_BERTH = "Berth 4"      # its SW water corner is the stationing anchor
 ANCHOR_STATION = 351.0        # running footage at that corner (from berth_leng)
@@ -120,23 +130,86 @@ def main() -> None:
         pts = sorted(face, key=along)            # order SW -> NE
         faces[name] = (pts[0], pts[1])
 
-    # --- chain face edges into one ordered vertex list --------------------
+    # --- chain face edges into one ordered STATIONING REFERENCE ----------
+    # (berth water-side edges; correct along-wharf footage, wrong side — used
+    # only to carry stationing onto the surveyed quay line below.)
     verts = []
     for f in faces.values():
         verts.extend(f)
     verts.sort(key=along)
-    chain = []
+    ref_chain = []
     for p in verts:
-        if not chain or _dist(chain[-1], p) > 15.0:  # dedupe shared corners
-            chain.append(p)
+        if not ref_chain or _dist(ref_chain[-1], p) > 15.0:  # dedupe shared corners
+            ref_chain.append(p)
 
     # --- stationing: anchor Berth 4 SW corner at ANCHOR_STATION -----------
     anchor_pt = faces[ANCHOR_BERTH][0]
     cum = [0.0]
-    for i in range(1, len(chain)):
-        cum.append(cum[-1] + _dist(chain[i - 1], chain[i]))
-    ai = min(range(len(chain)), key=lambda i: _dist(chain[i], anchor_pt))
-    stations = [ANCHOR_STATION + (cum[i] - cum[ai]) for i in range(len(chain))]
+    for i in range(1, len(ref_chain)):
+        cum.append(cum[-1] + _dist(ref_chain[i - 1], ref_chain[i]))
+    ai = min(range(len(ref_chain)), key=lambda i: _dist(ref_chain[i], anchor_pt))
+    ref_stations = [ANCHOR_STATION + (cum[i] - cum[ai]) for i in range(len(ref_chain))]
+
+    # --- surveyed quay face: the real bulkhead geometry -------------------
+    quay, qcrs = _reader(QUAYFACE)
+    q_to_b = Transformer.from_crs(qcrs, bcrs, always_xy=True)
+    quay_edges = []  # (a, b) segments in the berths' planar ft CRS
+    quay_pts = []
+    for sr in quay.iterShapeRecords():
+        pts = [q_to_b.transform(x, y) for x, y in sr.shape.points]
+        quay_pts.extend(pts)
+        quay_edges.extend(zip(pts[:-1], pts[1:]))
+
+    def _project(P, segs):
+        """Nearest point on a polyline (list of (a,b) edges) to P, with the
+        interpolation fraction carried for the matched edge."""
+        best = None  # (dist2, fx, fy, a, b, t)
+        for a, b in segs:
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            seg2 = dx * dx + dy * dy
+            t = 0.0 if seg2 == 0 else ((P[0] - a[0]) * dx + (P[1] - a[1]) * dy) / seg2
+            t = max(0.0, min(1.0, t))
+            fx, fy = a[0] + t * dx, a[1] + t * dy
+            d2 = (P[0] - fx) ** 2 + (P[1] - fy) ** 2
+            if best is None or d2 < best[0]:
+                best = (d2, fx, fy, a, b, t)
+        return best
+
+    # Station of any point = M at its foot on the reference chain.
+    ref_edges = list(zip(zip(ref_chain[:-1], ref_stations[:-1]),
+                         zip(ref_chain[1:], ref_stations[1:])))
+
+    def _ref_station(P):
+        best = None
+        for (a, ma), (b, mb) in ref_edges:
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            seg2 = dx * dx + dy * dy
+            t = 0.0 if seg2 == 0 else ((P[0] - a[0]) * dx + (P[1] - a[1]) * dy) / seg2
+            t = max(0.0, min(1.0, t))
+            fx, fy = a[0] + t * dx, a[1] + t * dy
+            d2 = (P[0] - fx) ** 2 + (P[1] - fy) ** 2
+            if best is None or d2 < best[0]:
+                best = (d2, ma + t * (mb - ma))
+        return best[1]
+
+    # Quay coverage in POPA stationing = where its surveyed ends project to.
+    cov_lo = min(_ref_station(p) for p in quay_pts)
+    cov_hi = max(_ref_station(p) for p in quay_pts)
+    sw_end = min(quay_pts, key=along)   # SW quay terminus (station cov_lo)
+    ne_end = max(quay_pts, key=along)   # NE quay terminus (station cov_hi)
+
+    # Centerline = quay SW end, then every reference vertex inside coverage
+    # projected perpendicularly onto the quay, then quay NE end. Smooth, on the
+    # real bulkhead, carrying canonical POPA station.
+    chain = [sw_end]
+    stations = [cov_lo]
+    for (x, y), m in zip(ref_chain, ref_stations):
+        if cov_lo + 1.0 < m < cov_hi - 1.0:
+            best = _project((x, y), quay_edges)
+            chain.append((best[1], best[2]))
+            stations.append(m)
+    chain.append(ne_end)
+    stations.append(cov_hi)
 
     # --- emit -------------------------------------------------------------
     vertices = []
@@ -200,26 +273,24 @@ def main() -> None:
         json.dumps({"type": "FeatureCollection", "features": marks})
     )
 
-    # Yellow quay-face ticks — the exhibit's SECOND tick series. Referenced from
-    # the NE end of the public wharf (Berth 1): 0 ft at the far-NE quay corner,
-    # increasing SW down the face, one tick every 50 ft, the full length of the
-    # wharf (so every berth is covered). Distinct from the POPA series above:
-    # these sit ON the wharf — each tick runs from the quay edge landward onto
-    # the concrete apron (water_ft=0, no part in the channel), vs. the long POPA
-    # lines that run out into the water. The berth rectangles are ~270 ft deep,
-    # so the labelled round-hundred ticks run nearly that full depth and carry
-    # their label at the landward (top) edge of the berth rectangle; the minor
-    # 50s are short unlabelled ticks at the quay. Result: a ruler with the yellow
-    # numbers along the top of the berths instead of a label on every tick.
-    BERTH_DEPTH_FT = 255.0              # just inside the ~270 ft berth rectangles
-    popa_ne = stations[-1]              # Berth 1 NE quay corner = yellow 0+00
+    # Yellow quay-face ticks — the exhibit's SECOND tick series: the port's
+    # **Dock No.** stationing, the ruler painted on the wharf deck. Anchored at
+    # Dock No. 0 (= POPA 3365 via the crosswalk, the physical NE start of the
+    # dock stationing) and increasing SW, one tick every 50 ft. Distinct from the
+    # POPA series above: these sit ON the wharf — each tick runs from the quay
+    # edge landward onto the apron (water_ft=0, no part in the channel), vs. the
+    # long POPA lines that run out into the water. Labelled round-hundred ticks
+    # run nearly the full berth depth and carry their Dock No. at the landward
+    # (top) edge; the minor 50s are short unlabelled ticks at the quay. All
+    # Dock No. <-> POPA math goes through app.crosswalk — never inline here.
+    BERTH_DEPTH_FT = 255.0              # tick reach landward from the quay face
 
-    def yellow_feature(interp_station, dist, *, major):
-        """One quay-face tick: interpolate the quay point at ``interp_station``
-        (POPA ft), draw it landward, and label it with ``dist`` (ft from Berth 1).
-        Returns None if the point falls off the line. Single source of the
-        Feature schema so the loop and the end-cap tick can't drift apart."""
-        xy = interp_xy(interp_station)
+    def yellow_feature(popa, dockno, *, major):
+        """One Dock No. tick: interpolate the quay point at POPA ``popa``, draw it
+        landward, and label it with its ``dockno``. Returns None if the point
+        falls off the line. Single source of the Feature schema so the loop and
+        the end-cap tick can't drift apart."""
+        xy = interp_xy(popa)
         if xy is None:
             return None
         line = marker_line(xy[0], xy[1],
@@ -229,42 +300,42 @@ def main() -> None:
             "type": "Feature",
             "geometry": {"type": "LineString", "coordinates": line},
             "properties": {
-                "dist_ne": round(dist, 1),
+                "dockno": round(dockno, 1),
                 "major": major,
-                "label": str(int(round(dist))) if major else None,
+                "label": str(int(round(dockno))) if major else None,
             },
         }
 
+    # Dock No. grows as POPA shrinks, so the NE end is the smallest Dock No.
+    dn_ne = popa_to_dockno(popa_hi)
+    dn_sw = popa_to_dockno(popa_lo)
+    first_dn = int(math.ceil(dn_ne / 50.0)) * 50      # first round 50 inside coverage
+    last_dn = int(math.floor(dn_sw / 50.0)) * 50
+
     yellow_marks = []
-    y = 0.0
-    while popa_ne - y >= popa_lo - 1e-6:
-        feat = yellow_feature(popa_ne - y, y, major=(round(y) % 100 == 0))
+    for dn in range(first_dn, last_dn + 1, 50):
+        feat = yellow_feature(dockno_to_popa(float(dn)), float(dn), major=(dn % 100 == 0))
         if feat is not None:
             yellow_marks.append(feat)
-        y += 50.0
 
-    # Close the ruler exactly on the SW (leftmost) edge of Berth 6 — the end of
-    # the wharf face — even though it is not a round 50 ft from Berth 1. Without
-    # this the last 50-ft tick stops ~20 ft inside the berth; the port wants the
-    # final marker lined up with that edge.
-    y_end = popa_ne - popa_lo
-    if y_end - (y - 50.0) > 1.0:        # last placed tick fell short of the edge
-        # Drop the final round-hundred if the edge tick would land almost on top
-        # of it (4600 vs the 4620 terminus), leaving just the edge marker.
-        if yellow_marks and y_end - yellow_marks[-1]["properties"]["dist_ne"] < 50.0:
-            yellow_marks.pop()
-        feat = yellow_feature(popa_lo, y_end, major=True)
+    # Close the ruler exactly on the SW quay terminus, even though it is not a
+    # round 50 ft of Dock No.; without this the last tick stops short of the end.
+    if dn_sw - last_dn > 1.0:
+        if yellow_marks and dn_sw - yellow_marks[-1]["properties"]["dockno"] < 50.0:
+            yellow_marks.pop()    # avoid an end-cap landing on top of the last 50
+        feat = yellow_feature(popa_lo, dn_sw, major=True)
         if feat is not None:
             yellow_marks.append(feat)
     (STATIC_GIS / "yellow_markers.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": yellow_marks})
     )
 
-    # Per-berth station range, taken from the SAME geometry as the line so the
-    # berth extents and the feet markers always agree.
+    # Per-berth station range, from the stationing REFERENCE (the berth-edge
+    # chain that carries canonical berth_leng footage), so berth extents stay
+    # tied to the published lengths even though the drawn line is the quay face.
     def nearest_station(pt):
-        i = min(range(len(chain)), key=lambda i: _dist(chain[i], pt))
-        return stations[i]
+        i = min(range(len(ref_chain)), key=lambda i: _dist(ref_chain[i], pt))
+        return ref_stations[i]
 
     berth_st = {
         name: sorted([round(nearest_station(f[0]), 1), round(nearest_station(f[1]), 1)])

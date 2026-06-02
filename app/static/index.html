@@ -490,11 +490,12 @@ const feetLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 // Yellow quay-face ticks, from yellow_markers.geojson — the exhibit's second
-// tick series. Referenced from the NE end (Berth 1) = 0+00, increasing SW, one
-// tick every 50 ft along the whole face. Each tick sits ON the wharf, running
-// from the quay edge landward onto the apron (vs. the long POPA lines into the
-// channel); the round hundreds carry a yellow label on the landward (dock) end,
-// the 50-ft minors are drawn thinner and unlabelled.
+// tick series: the port's Dock No. stationing painted on the wharf deck,
+// anchored at Dock No. 0 (the NE start) and increasing SW, one tick every 50 ft
+// along the whole face. Each tick sits ON the wharf, running from the quay edge
+// landward onto the apron (vs. the long POPA lines into the channel); the round
+// hundreds carry a yellow Dock No. label on the landward (dock) end, the 50-ft
+// minors are drawn thinner and unlabelled.
 const yellowLayer = L.geoJSON(null, {
   style: (f) => ({ color: "#ffd000", weight: f.properties.major ? 2 : 1, opacity: 0.9 }),
   onEachFeature: (f, layer) => {

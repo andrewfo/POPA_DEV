@@ -124,10 +124,14 @@ not).
 1. ✅ Schema + Alembic migrations + exclusion constraint.
 2. ✅ Stationing crosswalk module (canonical ↔ POPA / Corps / Dock No.) with tests.
 3. ✅ Wharf centerline: a measured (`M` = POPA station) PostGIS line, REAL —
-   derived from the ArcGIS berth polygons by `data/gis/build_centerline.py`
-   (anchor Berth 4 = 351 ft), verified by `tests/test_geo_station_real.py`. Coarse
-   (one chord per berth — the most a rectangular berth source allows); a finer
-   quay survey would densify via the same script.
+   built by `data/gis/build_centerline.py` (anchor Berth 4 = 351 ft), verified by
+   `tests/test_geo_station_real.py`. The ArcGIS berth polygons are berthing-WATER
+   rectangles (their water-side edge is ~250 ft out in the channel), so they give
+   **stationing** but not clean quay-face **geometry**: the script chains the
+   berth edges as a stationing reference, then projects that onto the surveyed
+   bulkhead line (`data/gis/quayface.*`) to place the centerline ON the real quay
+   carrying canonical POPA. The NE end clips to the survey's extent (~Dock No. 0 /
+   POPA ~3365). A finer quay survey densifies via the same script.
 4. ✅ AIS ingestion: aisstream.io websocket client, bounding box around the wharf,
    persist `PositionReport` + `ShipStaticData`, upsert `vessel` by MMSI/IMO.
 5. ✅ Occupancy derivation: detect berthed vessels (near quay, SOG ≈ 0,
@@ -172,8 +176,9 @@ app/
   occupancy/           # step 5: detect.py, project.py, alongside.py, derive.py, run.py
   intake/              # step 7 capture: records.py (CSV parse), ingest.py, source.py,
                        #   run.py (online-form CSV); manual.py (phone/email/operator entry)
-data/gis/              # build_centerline.py / to_geojson.py: derive real centerline + apron
-                       #   from the ArcGIS berth shapefiles -> static GeoJSON + seed JSON
+data/gis/              # build_centerline.py / to_geojson.py: real centerline + apron from
+                       #   berth shapefiles (stationing) + quayface.* survey (quay geometry)
+                       #   -> static GeoJSON + seed JSON
 alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intake dedupe ·
                        #   0004 'email' source · 0005 wharf_segment.apron
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math;
