@@ -19,6 +19,7 @@ from app.db import get_session
 from app.edit import (
     ReservationUpdate,
     VesselUpdate,
+    _station_from_bow,
     _station_range,
     _station_range_for,
     _time_range,
@@ -68,6 +69,30 @@ def test_station_range_for_unassigned_and_no_berth():
     assert _station_range_for((351.0, 1107.3), None, None, unassigned=True).empty
     # No berth, no bounds -> empty (unassigned), same as the plain resolver.
     assert _station_range_for(None, None, None, unassigned=False).empty
+
+
+def test_station_from_bow_upstream_stern_below():
+    # Upstream: bow sits at the high (POPA) end, the stern LOA feet below it.
+    sr = _station_from_bow(900.0, "upstream", 600.0)
+    assert (sr.empty, sr.lo, sr.hi) == (False, 300.0, 900.0)
+
+
+def test_station_from_bow_downstream_stern_above():
+    # Downstream: bow at the low end, the stern LOA feet above it.
+    sr = _station_from_bow(300.0, "downstream", 600.0)
+    assert (sr.empty, sr.lo, sr.hi) == (False, 300.0, 900.0)
+
+
+def test_station_from_bow_requires_direction():
+    with pytest.raises(ValueError):
+        _station_from_bow(900.0, None, 600.0)
+    with pytest.raises(ValueError):
+        _station_from_bow(900.0, "", 600.0)
+
+
+def test_station_from_bow_requires_loa():
+    with pytest.raises(ValueError):
+        _station_from_bow(900.0, "upstream", 0.0)
 
 
 def test_time_range_open_ended_ok():
@@ -163,6 +188,53 @@ def test_create_edit_reservation(client, db_session):
     assert got["status"] == "requested"
     assert got["station_lo_dock"] == 900 and got["station_hi_dock"] == 400
     assert got["t_end"].startswith("2026-07-15")
+
+
+def test_promote_request_from_bow(client, db_session):
+    # The promote-from-request path: a requested row already carries its time
+    # window; the operator supplies only the bow (Dock No.) + heading and the
+    # stern follows from the vessel LOA (metres). 182.88 m ~= 600 ft.
+    vid = _add_vessel(db_session, mmsi=636000099, name="LONGSHIP")
+    db_session.execute(
+        text("UPDATE vessel SET loa = 182.88 WHERE id = :id"), {"id": vid}
+    )
+    rid = client.post("/reservations", json={
+        "vessel_id": vid, "etb": "2026-08-01T00:00:00Z", "status": "requested",
+    }).json()["id"]
+    assert _get_reservation(client, rid)["station_unassigned"] is True
+
+    # bow Dock 400 -> bow POPA 2965; upstream -> bow at the high end, stern below.
+    r = client.patch(f"/reservations/{rid}", json={
+        "bow_dock": 400, "direction": "upstream", "status": "confirmed",
+    })
+    assert r.status_code == 200
+    got = _get_reservation(client, rid)
+    assert got["station_unassigned"] is False
+    assert got["station_hi"] == pytest.approx(2965.0)          # bow is exact
+    assert got["station_hi"] - got["station_lo"] == pytest.approx(600.0, abs=0.1)
+    assert got["station_hi_dock"] == pytest.approx(400.0)      # bow Dock round-trips
+    # Schedule preserved from the request (no ETB/ETD entered on promotion).
+    assert got["t_start"].startswith("2026-08-01")
+    assert got["status"] == "confirmed"
+
+
+def test_promote_from_bow_needs_direction_and_loa(client, db_session):
+    # No LOA on the vessel -> 422 (can't derive the stern from the bow).
+    vid = _add_vessel(db_session, mmsi=636000098)
+    rid = client.post("/reservations", json={
+        "vessel_id": vid, "etb": "2026-08-05T00:00:00Z", "status": "requested",
+    }).json()["id"]
+    assert client.patch(
+        f"/reservations/{rid}", json={"bow_dock": 400, "direction": "upstream"}
+    ).status_code == 422
+
+    # LOA present but no heading -> 422 (an un-oriented hull can't be placed).
+    db_session.execute(
+        text("UPDATE vessel SET loa = 100 WHERE id = :id"), {"id": vid}
+    )
+    assert client.patch(
+        f"/reservations/{rid}", json={"bow_dock": 400}
+    ).status_code == 422
 
 
 def test_assign_then_unassign_station(client, db_session):

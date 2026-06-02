@@ -396,62 +396,11 @@
 
     <!-- ===== Reservations tab ===== -->
     <section class="tab-panel" data-panel="reservations">
-    <!-- ===== New reservation (operator entry — vessel / dredge / layberth) ===== -->
-    <details class="intake" id="newResPanel">
-      <summary>New reservation <span class="sub">· operator / dredge</span></summary>
-      <form id="newResForm" autocomplete="off">
-        <div class="grid2">
-          <div>
-            <label>Type</label>
-            <select name="type">
-              <option value="vessel">Vessel</option>
-              <option value="dredge">Dredge</option>
-              <option value="layberth">Lay berth</option>
-            </select>
-          </div>
-          <div>
-            <label>Status</label>
-            <select name="status">
-              <option value="requested">Requested</option>
-              <option value="confirmed">Confirmed</option>
-              <option value="completed">Completed</option>
-            </select>
-          </div>
-        </div>
-        <label>Vessel <span class="sub">(optional — for dredge/layberth leave blank)</span></label>
-        <select name="vessel_id" id="newResVessel"><option value=""></option></select>
-        <fieldset>
-          <legend>Schedule</legend>
-          <div class="grid2">
-            <div><label>ETB <span class="req">*</span></label><input type="date" name="etb" required /></div>
-            <div><label>ETD</label><input type="date" name="etd" /></div>
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>Berth (Dock No., ft)</legend>
-          <div class="hint" style="margin:0 0 6px">Read off the yellow dock markers — stern first (the larger Dock No.), bow second.</div>
-          <div class="grid2">
-            <div><label>Stern (Dock No.)</label><input type="number" step="any" name="station_lo" /></div>
-            <div><label>Bow (Dock No.)</label><input type="number" step="any" name="station_hi" /></div>
-          </div>
-          <div class="check"><input type="checkbox" id="newResUnassigned" /><label for="newResUnassigned" style="margin:0">Berth unassigned</label></div>
-          <div class="grid2">
-            <div>
-              <label>Direction</label>
-              <select name="direction"><option value="">—</option><option value="upstream">Upstream</option><option value="downstream">Downstream</option></select>
-            </div>
-            <div><label>Priority</label><input type="number" name="priority" /></div>
-          </div>
-        </fieldset>
-        <label>Cargo</label>
-        <input type="text" name="cargo" />
-        <label>Notes</label>
-        <input type="text" name="notes" />
-        <button type="submit" id="nrSubmit">Create reservation</button>
-        <div class="result" id="nrResult"></div>
-      </form>
-    </details>
-    <!-- ===== /New reservation ===== -->
+    <p class="hint" style="margin:0 0 10px">
+      Reservations come from <b>berth requests</b>. Promote a requested row below:
+      enter where the <b>bow</b> sits (Dock No.) and the heading — the stern and
+      the schedule fill in from the request automatically.
+    </p>
 
     <h2>Reservations</h2>
     <div class="filter-bar">
@@ -832,7 +781,6 @@ async function loadVessels() {
   try {
     const vs = await api("/vessels?limit=25");
     VESSELS = vs;
-    populateVesselPicker();
     if (!vs.length) { el.innerHTML = '<div class="empty">no vessels yet — run AIS ingestion</div>'; return; }
     el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA</th><th></th></tr></thead><tbody>${
       vs.map((v) => `<tr><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa ?? "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`).join("")
@@ -842,16 +790,6 @@ async function loadVessels() {
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
-}
-
-// Fill the New-reservation vessel picker from the loaded vessel list.
-function populateVesselPicker() {
-  const sel = document.getElementById("newResVessel");
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = '<option value=""></option>' + VESSELS.map((v) =>
-    `<option value="${v.id}">${esc(v.name || ("MMSI " + (v.mmsi ?? "?")))} (#${v.id})</option>`).join("");
-  sel.value = cur;
 }
 
 // Inline editor for one vessel (dimensions in metres — the canonical store).
@@ -917,9 +855,6 @@ function writeError(w) {
 function warnHtml(warnings) {
   return (warnings && warnings.length) ? `<span class="warn">⚠ ${esc(warnings.join("; "))}</span>` : "";
 }
-// date input value "YYYY-MM-DD" -> midnight-UTC ISO, matching the intake path
-// (reservation time_range is timestamptz; requests are date-granular).
-function dateToIso(d) { return d ? d + "T00:00:00Z" : d; }
 
 async function loadPositions() {
   try {
@@ -973,7 +908,6 @@ async function loadRequests() {
 
 function resCard(r) {
   const fmtDate = (s) => s ? new Date(s).toLocaleDateString() : "—";
-  const dval = (s) => (s ? s.slice(0, 10) : "");
   const color = RES_STATUS_COLOR[r.status] || "#888";
   const imo = r.vessel_imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(r.vessel_imo)}</span>` : "";
   const sta = r.station_unassigned
@@ -983,6 +917,11 @@ function resCard(r) {
   const statusSel = ["requested", "confirmed", "completed", "cancelled"].map((s) => opt(r.status, s, s)).join("");
   const typeSel = ["vessel", "dredge", "layberth"].map((t) => opt(r.type, t, t)).join("");
   const dirSel = ["", "upstream", "downstream"].map((d) => opt(r.direction, d, d || "—")).join("");
+  // The bow's Dock No.: upstream -> bow at the high POPA end (the smaller Dock
+  // No.); downstream -> bow at the low POPA end (the larger Dock No.). Blank when
+  // the berth is unassigned.
+  const bowDock = r.station_unassigned ? ""
+    : (r.direction === "downstream" ? r.station_lo_dock : r.station_hi_dock);
   return `
     <div class="card req-card" data-res="${r.id}">
       <div class="name">${esc(r.vessel_name || "(unnamed)")} ${imo}
@@ -990,7 +929,7 @@ function resCard(r) {
       <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(r.source)}</div>
       <div class="meta">${esc(sta)}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
       <div class="row-actions">
-        ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Assign berth + Confirm</button>' : ""}
+        ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
         <button class="btn-sm" data-act="edit">Edit</button>
         ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
         <button class="btn-sm danger" data-act="delete">Delete</button>
@@ -1000,18 +939,18 @@ function resCard(r) {
           <div><label>Status</label><select name="status">${statusSel}</select></div>
           <div><label>Type</label><select name="type">${typeSel}</select></div>
         </div>
+        <fieldset>
+          <legend>Place vessel</legend>
+          <div class="hint" style="margin:0 0 6px">Schedule comes from the berth request. Enter only the bow position (read off the yellow dock markers) and the heading; the stern follows from the vessel's LOA.</div>
+          <div class="grid2">
+            <div><label>Bow (Dock No.)</label><input type="number" step="any" name="bow_dock" value="${bowDock}" /></div>
+            <div><label>Direction</label><select name="direction">${dirSel}</select></div>
+          </div>
+          <div class="check"><input type="checkbox" name="unassigned" ${r.station_unassigned ? "checked" : ""} /><label style="margin:0">Berth unassigned</label></div>
+        </fieldset>
         <div class="grid2">
-          <div><label>ETB</label><input type="date" name="etb" value="${dval(r.t_start)}" /></div>
-          <div><label>ETD</label><input type="date" name="etd" value="${dval(r.t_end)}" /></div>
-        </div>
-        <div class="grid2">
-          <div><label>Stern (Dock No.)</label><input type="number" step="any" name="station_lo" value="${r.station_unassigned ? "" : r.station_lo_dock}" /></div>
-          <div><label>Bow (Dock No.)</label><input type="number" step="any" name="station_hi" value="${r.station_unassigned ? "" : r.station_hi_dock}" /></div>
-        </div>
-        <div class="check"><input type="checkbox" name="unassigned" ${r.station_unassigned ? "checked" : ""} /><label style="margin:0">Berth unassigned</label></div>
-        <div class="grid2">
-          <div><label>Direction</label><select name="direction">${dirSel}</select></div>
           <div><label>Priority</label><input type="number" name="priority" value="${r.priority ?? ""}" /></div>
+          <div></div>
         </div>
         <label>Cargo</label><input name="cargo" value="${esc(r.cargo)}" />
         <label>Notes</label><input name="notes" value="${esc(r.notes)}" />
@@ -1033,16 +972,17 @@ function wireResCards(container) {
     form.querySelector('[data-act="close"]').addEventListener("click", () => form.classList.remove("open"));
 
     // Promote a berth request to confirmed: open the edit form prefilled with
-    // status=confirmed and drop the operator on the berth (Dock No.) fields, the
-    // one thing a requested row is missing. Saving runs the confirmed-only
-    // no-overlap check (a clash surfaces as a 409 in the mini-result).
+    // status=confirmed and drop the operator on the bow field — the one thing a
+    // requested row is missing (its schedule is already set). Saving runs the
+    // confirmed-only no-overlap check (a clash surfaces as a 409 in the
+    // mini-result).
     const confirmBtn = card.querySelector('[data-act="confirm"]');
     if (confirmBtn) confirmBtn.addEventListener("click", () => {
       form.classList.add("open");
       form.elements.status.value = "confirmed";
       form.elements.unassigned.checked = false;
       form.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      form.elements.station_lo.focus();
+      form.elements.bow_dock.focus();
     });
 
     const cancelBtn = card.querySelector('[data-act="cancel"]');
@@ -1060,10 +1000,15 @@ function wireResCards(container) {
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       res.className = "mini-result";
-      const payload = formPayload(form, ["station_lo", "station_hi", "priority"]);
+      // Only bow + heading place the vessel; the schedule stays as set by the
+      // berth request (no ETB/ETD here). The stern is derived server-side from
+      // the bow, the heading, and the vessel's LOA.
+      const payload = formPayload(form, ["bow_dock", "priority"]);
       payload.unassigned = form.elements.unassigned.checked;
-      payload.etb = dateToIso(payload.etb);
-      payload.etd = dateToIso(payload.etd);
+      // Placing needs both bow + heading. If the heading isn't set, leave the
+      // station range untouched (this is a plain status/cargo edit) rather than
+      // sending a half-placement the server would reject.
+      if (!form.elements.direction.value) delete payload.bow_dock;
       const w = await apiWrite("PATCH", `/reservations/${id}`, payload);
       if (w.ok) {
         res.className = "mini-result ok";
@@ -1122,39 +1067,6 @@ function wireResCards(container) {
       result.textContent = "Failed: " + err.message;
     } finally {
       btn.disabled = false; btn.textContent = "Record berth request";
-    }
-  });
-})();
-
-// --- New reservation (operator entry) --------------------------------------
-(function () {
-  const form = document.getElementById("newResForm");
-  if (!form) return;
-  const result = document.getElementById("nrResult");
-  const btn = document.getElementById("nrSubmit");
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    result.className = "result";
-    btn.disabled = true; btn.textContent = "Creating…";
-    const payload = formPayload(form, ["vessel_id", "station_lo", "station_hi", "priority"]);
-    if (document.getElementById("newResUnassigned").checked) {
-      delete payload.station_lo; delete payload.station_hi;   // unassigned berth -> empty range
-    }
-    payload.etb = dateToIso(payload.etb);
-    payload.etd = dateToIso(payload.etd);
-    try {
-      const w = await apiWrite("POST", "/reservations", payload);
-      if (!w.ok) throw new Error(writeError(w));
-      result.className = "result ok";
-      result.innerHTML = `Created reservation #${w.data.id}.` + warnHtml(w.data.warnings);
-      form.reset();
-      loadRequests(); loadTimeline(); loadStats();
-    } catch (err) {
-      result.className = "result err";
-      result.textContent = "Failed: " + err.message;
-    } finally {
-      btn.disabled = false; btn.textContent = "Create reservation";
     }
   });
 })();

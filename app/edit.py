@@ -49,6 +49,11 @@ from app.models import (
     Vessel,
 )
 
+# Station "M" is feet; vessel LOA is stored in metres (matching AIS dimensions).
+# Used to turn a vessel length into a station span when placing a reservation
+# from the bow alone. Same constant as app/occupancy/project.FEET_PER_M.
+FEET_PER_M = 3.280839895
+
 # Validation before a reservation may be confirmed (CLAUDE.md): draft must be
 # checked against controlling depth for the station/time window. No
 # controlling-depth data layer exists yet, so we cannot enforce it — surface the
@@ -105,7 +110,16 @@ class ReservationUpdate(BaseModel):
     """Partial reservation edit. Fields absent from the request are left as-is;
     time and station ranges are recomputed from the merge of existing bounds and
     whatever the request supplies. Set ``unassigned=True`` to clear the berth
-    (empty station range)."""
+    (empty station range).
+
+    The primary scheduling path is **promoting a berth request**: the request
+    already carries the time window (``time_range``, from intake) and the vessel,
+    so the operator supplies only where the **bow** sits (``bow_dock``, Dock No.
+    feet) and the heading (``direction``). The stern follows from the vessel's
+    LOA — see ``_station_from_bow`` — so neither ETB/ETD nor a stern bound is
+    entered here. (``etb``/``etd`` and explicit ``station_lo/hi`` remain for
+    direct corrections, but the request's window is preserved when they're
+    omitted.)"""
 
     type: str | None = None
     vessel_id: int | None = None
@@ -117,6 +131,10 @@ class ReservationUpdate(BaseModel):
     berth_id: int | None = None
     station_lo: float | None = None
     station_hi: float | None = None
+    # Promote-from-request path: place the vessel by its bow (Dock No. feet) +
+    # heading; the stern is derived from the vessel LOA. Takes precedence over
+    # berth_id / station_lo/hi when supplied.
+    bow_dock: float | None = None
     unassigned: bool | None = None
     direction: str | None = None
     status: str | None = None
@@ -183,6 +201,30 @@ def _station_range_for(
     return _station_range(lo, hi, unassigned=False)
 
 
+def _station_from_bow(
+    bow: float, direction: str | None, loa_ft: float
+) -> StationRange:
+    """Station range from the bow station + heading + vessel length (all POPA
+    feet). Promoting a berth request supplies only where the bow sits and which
+    way the vessel points; the stern follows from the LOA.
+
+    Mirrors the map's hull rendering (``dirUp = direction != 'downstream'`` ->
+    bow toward increasing station): **upstream** -> bow at ``hi``, stern below;
+    **downstream** -> bow at ``lo``, stern above. ``direction`` must be set (an
+    un-oriented hull can't be placed) and the vessel must have a known LOA."""
+    if direction not in ("upstream", "downstream"):
+        raise ValueError(
+            "direction (upstream/downstream) is required to place from the bow"
+        )
+    if loa_ft <= 0:
+        raise ValueError(
+            "vessel LOA is required to place from the bow — set it on the vessel first"
+        )
+    if direction == "downstream":
+        return StationRange(empty=False, lo=float(bow), hi=float(bow) + loa_ft)
+    return StationRange(empty=False, lo=float(bow) - loa_ft, hi=float(bow))
+
+
 def _time_range(etb: dt.datetime | None, etd: dt.datetime | None) -> TimeRange:
     """Resolve a ``[etb, etd)`` window. ``etd`` may be omitted (open-ended).
     Raises ``ValueError`` if ``etd`` precedes ``etb``."""
@@ -247,6 +289,18 @@ def _berth_bounds(session: Session, berth_id: int) -> tuple[float, float]:
     if row is None:
         raise ValueError(f"no such berth {berth_id}")
     return float(row.popa_sta_start), float(row.popa_sta_end)
+
+
+def _vessel_loa_ft(session: Session, vessel_id: int | None) -> float:
+    """The vessel's LOA in **feet** (the store is metres). Returns 0.0 when the
+    vessel or its LOA is unknown; the bow-placement helper turns that into a
+    clean 422 telling the operator to set the length first."""
+    if vessel_id is None:
+        return 0.0
+    loa_m = session.execute(
+        select(Vessel.loa).where(Vessel.id == vessel_id)
+    ).scalar_one_or_none()
+    return float(loa_m) * FEET_PER_M if loa_m is not None else 0.0
 
 
 
@@ -368,6 +422,7 @@ def update_reservation(
 
     # Berth + station range. Precedence:
     #   unassigned -> clear both berth_id and the range;
+    #   else a bow placement (promote-from-request) -> stern from the vessel LOA;
     #   else a newly-assigned berth (no explicit bounds) -> its catalog range;
     #   else explicit lo/hi merged over the current range (berth_id unchanged);
     #   else keep the current range (and berth_id).
@@ -375,6 +430,10 @@ def update_reservation(
     if changes.get("unassigned"):
         berth_id = None
         sr = StationRange(empty=True)
+    elif changes.get("bow_dock") is not None:
+        berth_id = changes.get("berth_id", cur.berth_id)
+        bow = _dock_to_popa(session, changes["bow_dock"])
+        sr = _station_from_bow(bow, direction, _vessel_loa_ft(session, vessel_id))
     elif "berth_id" in changes and changes["berth_id"] is not None and not has_bounds:
         berth_id = changes["berth_id"]
         sr = _station_range_for(_berth_bounds(session, berth_id), None, None, False)
