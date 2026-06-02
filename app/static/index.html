@@ -104,7 +104,7 @@
   .berth-label .sub { color: #ffe6a8; font-weight: 500; font-size: 13px; }
   .wh-label { color: #cdd9e5; font-size: 14px; }
   .sta-label { color: #ff8a8a; font-size: 13px; font-weight: 600; }
-  .ft-label { color: #cfe3f5; font-size: 12px; font-weight: 500; }
+  .ft-label { color: #ffd84d; font-size: 12px; font-weight: 700; text-shadow: 0 0 3px #000, 0 1px 3px #000; }
   .berth-label::before, .wh-label::before, .sta-label::before, .ft-label::before { display: none; }
   a { color: var(--accent); }
   .legend { font-size: 14px; color: var(--muted); margin-top: 6px; }
@@ -238,69 +238,29 @@ const centerlineLayer = L.geoJSON(null, {
     radius: 4, color: "#ff4d4d", fillColor: "#fff", fillOpacity: 1, weight: 2,
   }),
 }).addTo(map);
-// Station markers are drawn as perpendicular tick lines crossing the quay face
-// and running out into the water (see "Wharf Stationing" aerial), not dots on
-// the centerline. Ticks need the centerline tangent + a water-side normal, so
-// they're rendered by renderFeetTicks() once the centerline + berths load.
-const feetLayer = L.layerGroup().addTo(map);
-let FEET_FEATURES = null;          // raw feet-marker features, rendered later
-let CENTER_COORDS = null;          // centerline [lon,lat] vertices
-let CENTER_STATIONS = null;        // matching POPA stations
-let LAND_CENTROID = null;          // [lon,lat] mean of berth polygons (landward)
-
-// Interpolate position + along-shore tangent at a POPA station on the centerline.
-function centerlineAt(s) {
-  if (!CENTER_COORDS || !CENTER_STATIONS) return null;
-  for (let i = 0; i < CENTER_STATIONS.length - 1; i++) {
-    const a = CENTER_STATIONS[i], b = CENTER_STATIONS[i + 1];
-    const lo = Math.min(a, b), hi = Math.max(a, b);
-    if (s >= lo && s <= hi) {
-      const r = b === a ? 0 : (s - a) / (b - a);
-      const A = CENTER_COORDS[i], B = CENTER_COORDS[i + 1];
-      return {
-        lon: A[0] + r * (B[0] - A[0]), lat: A[1] + r * (B[1] - A[1]),
-        dlon: B[0] - A[0], dlat: B[1] - A[1],
-      };
-    }
-  }
-  return null;
-}
-
-function renderFeetTicks() {
-  if (!FEET_FEATURES || !CENTER_COORDS || !LAND_CENTROID) return;
-  feetLayer.clearLayers();
-  for (const f of FEET_FEATURES) {
-    const sta = f.properties.station;
-    const major = f.properties.major;
-    const p = centerlineAt(sta);
-    if (!p) continue;
-    const mPerLat = 111320, mPerLon = 111320 * Math.cos(p.lat * Math.PI / 180);
-    // unit normal to the quay, flipped to point toward the water (away from land)
-    let pe = -p.dlat * mPerLat, pn = p.dlon * mPerLon;
-    const pl = Math.hypot(pe, pn) || 1; pe /= pl; pn /= pl;
-    const le = (p.lon - LAND_CENTROID[0]) * mPerLon;
-    const ln = (p.lat - LAND_CENTROID[1]) * mPerLat;
-    if (pe * le + pn * ln < 0) { pe = -pe; pn = -pn; }
-    // tick runs from the dock face out into the water
-    const out = major ? 70 : 22;       // metres
-    const back = major ? 8 : 4;        // metres onto the dock, so it crosses the face
-    const end = [p.lat + pn * out / mPerLat, p.lon + pe * out / mPerLon];
-    const top = [p.lat - pn * back / mPerLat, p.lon - pe * back / mPerLon];
-    L.polyline([top, end], {
-      color: "#cfe3f5", weight: major ? 1.4 : 0.8,
-      opacity: major ? 0.85 : 0.45,
+// Station markers, straight from feet_markers.geojson: each feature is a
+// LineString perpendicular to the quay, running from a nub on the concrete out
+// into the channel (built with the real water-side normal, so direction/
+// position match the port's "Wharf Stationing" aerial). Labels use the Dock No.
+// value at the water end. Major = every 100 ft (labelled, bold); minor = 50 ft.
+const feetLayer = L.geoJSON(null, {
+  style: (f) => f.properties.major
+    ? { color: "#ffcf1f", weight: 2.5, opacity: 0.95 }
+    : { color: "#ffcf1f", weight: 1.2, opacity: 0.6 },
+  onEachFeature: (f, layer) => {
+    if (!f.properties.label) return;
+    const co = f.geometry.coordinates;
+    const end = co[co.length - 1];                 // water end of the tick
+    L.marker([end[1], end[0]], {
+      icon: L.divIcon({
+        className: "ft-label",
+        html: `<span class="lbl">${f.properties.label}</span>`,
+        iconSize: [0, 0],
+      }),
+      interactive: false,
     }).addTo(feetLayer);
-    if (major) {
-      L.marker(end, {
-        icon: L.divIcon({
-          className: "ft-label",
-          html: `<span class="lbl">${fmtSta(sta)}</span>`,
-          iconSize: [0, 0],
-        }),
-      }).addTo(feetLayer);
-    }
-  }
-}
+  },
+}).addTo(map);
 const vesselLayer = L.layerGroup().addTo(map);
 let probeMarker = null;
 let segmentParams = null; // first segment's affine params, for client-side crosswalk
@@ -344,30 +304,17 @@ async function loadReferenceGeo() {
     const berths = await api("/static/gis/berths.geojson");
     berthLayer.addData(berths);
     if (berths.features.length) map.fitBounds(berthLayer.getBounds(), { padding: [30, 30] });
-    // landward reference: mean of every berth polygon vertex (used to flip the
-    // station ticks so they extend toward the water, not inland).
-    let sx = 0, sy = 0, n = 0;
-    for (const f of berths.features) {
-      const rings = f.geometry.type === "Polygon" ? f.geometry.coordinates : f.geometry.coordinates.flat();
-      for (const ring of rings) for (const [lon, lat] of ring) { sx += lon; sy += lat; n++; }
-    }
-    if (n) LAND_CENTROID = [sx / n, sy / n];
   } catch (e) { /* optional */ }
   try {
     const fm = await api("/static/gis/feet_markers.geojson");
-    FEET_FEATURES = fm.features;
+    feetLayer.addData(fm);
   } catch (e) { /* optional */ }
   try {
     const cl = await api("/static/gis/centerline.geojson");
     centerlineLayer.addData(cl);
     const line = cl.features.find((f) => f.geometry.type === "LineString");
-    if (line) {
-      CENTER_COORDS = line.geometry.coordinates;
-      CENTER_STATIONS = line.properties.stations;
-      applyWharfBearing(line.geometry.coordinates);
-    }
+    if (line) applyWharfBearing(line.geometry.coordinates);
   } catch (e) { /* optional */ }
-  renderFeetTicks();
 }
 
 async function loadSegments() {

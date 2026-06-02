@@ -28,8 +28,14 @@ from pathlib import Path
 import shapefile  # pyshp
 from pyproj import CRS, Transformer
 
+import sys
+
 GIS_DIR = Path(__file__).parent
 STATIC_GIS = Path(__file__).parents[2] / "app" / "static" / "gis"
+
+# Pull the canonical Dock No. crosswalk params (no inline stationing math).
+sys.path.insert(0, str(Path(__file__).parents[2]))
+from app.crosswalk import AffineParams, DEFAULT_DOCKNO_SCALE, DEFAULT_DOCKNO_OFFSET
 
 BERTHS = GIS_DIR / "berths"
 WAREHOUSES = GIS_DIR / "warehouses"
@@ -130,30 +136,57 @@ def main() -> None:
 
     (GIS_DIR / "centerline_vertices.json").write_text(json.dumps(vertices, indent=2))
 
-    # Interpolate a lat/lon for any station along the (monotonic) face line.
-    def interp(t: float):
+    # Interpolate a planar (x, y) in true feet for any POPA station on the
+    # (monotonic) face line; lon/lat is just that point through to_wgs.
+    def interp_xy(t: float):
         for i in range(len(stations) - 1):
             a, b = stations[i], stations[i + 1]
             if a <= t <= b:
                 r = 0.0 if b == a else (t - a) / (b - a)
                 x = chain[i][0] + r * (chain[i + 1][0] - chain[i][0])
                 y = chain[i][1] + r * (chain[i + 1][1] - chain[i][1])
-                return to_wgs.transform(x, y)
+                return (x, y)
         return None
 
-    # Feet markers every 50 ft (labelled every 500), interpolated on the line.
-    lo = math.ceil(stations[0] / 50) * 50
-    hi = math.floor(stations[-1] / 50) * 50
+    # Station markers, to match the port's "Wharf Stationing" aerial: ticks are
+    # drawn at round DOCK No. values (the labelled system in that exhibit, which
+    # runs 3500 at the SW end -> 0 toward the NE), perpendicular to the quay and
+    # extending out into the channel. Each marker is a LineString from a short
+    # landward nub on the concrete to a point out in the water, so the frontend
+    # just draws the line + a label at the water end. `w` is the unit water
+    # normal in the planar US-ft CRS, so offsets below are in true feet.
+    dock = AffineParams(DEFAULT_DOCKNO_SCALE, DEFAULT_DOCKNO_OFFSET)
+    # POPA range that exists on the line -> dock-value range to step through.
+    popa_lo, popa_hi = stations[0], stations[-1]
+    dock_at_lo = dock.from_popa(popa_lo)
+    dock_at_hi = dock.from_popa(popa_hi)
+    dock_min = max(0.0, math.ceil(min(dock_at_lo, dock_at_hi) / 50) * 50)
+    dock_max = min(3500.0, math.floor(max(dock_at_lo, dock_at_hi) / 50) * 50)
+
+    def marker_line(x, y, land_ft, water_ft):
+        a = to_wgs.transform(x - w[0] * land_ft, y - w[1] * land_ft)   # on the dock
+        b = to_wgs.transform(x + w[0] * water_ft, y + w[1] * water_ft)  # into water
+        return [[round(a[0], 7), round(a[1], 7)], [round(b[0], 7), round(b[1], 7)]]
+
     marks = []
-    for s in range(int(lo), int(hi) + 1, 50):
-        ll = interp(float(s))
-        if ll is None:
-            continue
-        marks.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [round(ll[0], 7), round(ll[1], 7)]},
-            "properties": {"station": s, "major": s % 500 == 0},
-        })
+    d = int(dock_min)
+    while d <= int(dock_max):
+        popa = dock.to_popa(float(d))
+        xy = interp_xy(popa)
+        if xy is not None:
+            major = d % 100 == 0
+            line = marker_line(xy[0], xy[1],
+                               land_ft=15 if major else 8,
+                               water_ft=180 if major else 30)
+            marks.append({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": line},
+                "properties": {
+                    "dock": d, "popa": round(popa, 1), "major": major,
+                    "label": str(d) if major else None,
+                },
+            })
+        d += 50
     (STATIC_GIS).mkdir(parents=True, exist_ok=True)
     (STATIC_GIS / "feet_markers.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": marks})
