@@ -37,8 +37,10 @@ docker compose up -d
 # 4. Apply migrations (creates tables, enums, btree_gist exclusion constraint)
 alembic upgrade head
 
-# 5. Seed the first wharf segment (placeholder geometry — see TODO below)
+# 5. Seed the first wharf segment (real centerline + apron polygon, from data/gis/)
 python -m app.seed.wharf_seed
+#   geometry is pre-built; regenerate from the ArcGIS shapefiles with:
+#   python data/gis/build_centerline.py   (needs pyshp, pyproj)
 ```
 
 ## Run
@@ -46,14 +48,14 @@ python -m app.seed.wharf_seed
 ```bash
 # API + read-only Leaflet map (served at /)
 uvicorn app.main:app --reload
-#   GET  /                -> read-only map UI
+#   GET  /                -> map UI + berth occupancy timeline (Gantt drawer)
 #   GET  /health          -> liveness
 #   GET  /health/db       -> DB + PostGIS reachable
 #   GET  /wharf-segments  -> seeded segments + affine params
 #   GET  /vessels         -> vessels seen via AIS
 #   GET  /stats           -> row counts
 #   GET  /geo-to-station?lat=..&lon=..  -> project a point to POPA station
-#   GET  /reservations[?status=requested]  -> reservations (newest first)
+#   GET  /reservations[?status=&from=&to=]  -> reservations (status + time-window filter)
 #   POST /intake/berth-request  -> manual berth request (phone/email); also a form on /
 
 # AIS ingestion (live aisstream.io websocket -> DB). Long-running; reconnects.
@@ -89,23 +91,24 @@ aisstream wants `BoundingBoxes` as `[[[sw_lat, sw_lon], [ne_lat, ne_lon]]]`; the
 config exposes exactly that via `Settings.ais_bounding_box`. Tighten or widen by
 editing the `AIS_BBOX_*` vars — no code change needed.
 
-## Important TODO before real use
+## Wharf geometry (real)
 
-`app/seed/wharf_seed.py` uses **placeholder** lat/lon vertices for the wharf
-centerline. The `M` value on each vertex (the POPA station) is meaningful, but
-the lat/lon must be **digitized from the aerial / port GIS** along the actual
-quay face before `geo_to_station` produces correct stations from real AIS
-positions.
+The centerline and the apron/berthing-zone polygon are **derived from the port's
+ArcGIS berth shapefiles** by `data/gis/build_centerline.py` (anchor Berth 4 =
+station 351 ft) — not placeholders. `app/seed/wharf_seed.py` seeds both into
+`wharf_segment`, and `tests/test_geo_station_real.py` verifies geo→station
+end-to-end with no database. Caveat: the centerline is a coarse 7-vertex line
+(one chord per berth — the most rectangular berth polygons allow); a finer quay
+survey would densify it via the same script.
 
 ## Occupancy derivation (step 5) — built
 
 `python -m app.occupancy.run` reads `position_report`, detects berthed vessels
-(SOG ≈ 0 inside an "alongside" buffer, with hysteresis), projects bow/stern to a
+(SOG ≈ 0 inside the "alongside" zone, with hysteresis), projects bow/stern to a
 `[stern_sta, bow_sta]` POPA station range, and writes idempotent `observed`
-reservations. The "alongside" test is still a swappable centerline buffer
-(`app/occupancy/alongside.py`), not yet a digitized apron polygon — and it
-inherits the placeholder-geometry caveat above. See `app/occupancy/*` and
-`PLAN.md` §2.
+reservations. "Alongside" prefers the digitized **apron polygon**
+(`ST_Contains`), falling back to a centerline buffer when a segment has none
+(`app/occupancy/alongside.py`). See `app/occupancy/*` and `PLAN.md` §2.
 
 ## Project layout
 

@@ -5,6 +5,7 @@ plus one write path: manual berth-request entry (the phone/email channel — see
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Query, Request
@@ -213,16 +214,22 @@ def create_berth_request(
 def list_reservations(
     status: str | None = None,
     limit: int = 100,
-    from_: str | None = Query(default=None, alias="from"),
-    to: str | None = None,
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = None,
     session: Session = Depends(get_session),
 ) -> list[dict]:
     """Reservations, newest first, optionally filtered by status and by a time
-    window (``from``/``to``, ISO datetimes). The window is an overlap test, so a
-    reservation counts if any part of its ``time_range`` falls inside it. Null
-    bounds are unbounded, so omitting both ``from`` and ``to`` returns everything
-    (back-compatible). Station/time ranges are returned as bounds; an empty
-    station range (unassigned berth) reports ``station_unassigned: true``."""
+    window (``from``/``to``, ISO datetimes — FastAPI rejects malformed values
+    with a 422). The window is an overlap test, so a reservation counts if any
+    part of its ``time_range`` falls inside it. Omitting both ``from`` and ``to``
+    returns everything, *including* rows with an empty ``time_range`` (e.g. a
+    same-day request where ETB == ETD), which an overlap test alone would drop.
+    Station/time ranges are returned as bounds; an empty station range
+    (unassigned berth) reports ``station_unassigned: true``."""
+    # Inverted bounds are a no-op window, not a 500: normalize so tstzrange()
+    # never sees lower > upper.
+    if from_ is not None and to is not None and from_ > to:
+        from_, to = to, from_
     rows = session.execute(
         text(
             """
@@ -237,7 +244,8 @@ def list_reservations(
             FROM reservation r
             LEFT JOIN vessel v ON v.id = r.vessel_id
             WHERE (:status IS NULL OR r.status::text = :status)
-              AND r.time_range && tstzrange(:t_from, :t_to, '[]')
+              AND ((:t_from IS NULL AND :t_to IS NULL)
+                   OR r.time_range && tstzrange(:t_from, :t_to, '[]'))
             ORDER BY r.created_at DESC
             LIMIT :limit
             """

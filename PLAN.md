@@ -18,7 +18,7 @@ build order, at the user's request — **berth-request intake _capture_**.
 |---|------|--------|----------|
 | 1 | Schema + Alembic + exclusion constraint | ✅ | `alembic/versions/0001_initial_schema.py`, `app/models.py` |
 | 2 | Stationing crosswalk (POPA ↔ Corps ↔ Dock No.) | ✅ | `app/crosswalk.py`, `tests/test_crosswalk.py` |
-| 3 | Measured wharf centerline (placeholder geom) | ✅ | `app/seed/wharf_seed.py` |
+| 3 | Measured wharf centerline (real, derived from ArcGIS berths) | ✅ | `data/gis/build_centerline.py` → `app/seed/wharf_seed.py` |
 | 4 | AIS ingestion (aisstream.io → DB) | ✅ | `app/ais/*` |
 | 5 | Occupancy derivation | ✅ | `app/occupancy/*`, migration `0002`, `tests/test_occupancy_*` |
 | 6 | Conflict-detection service | ⬜ (next) | — |
@@ -28,6 +28,10 @@ build order, at the user's request — **berth-request intake _capture_**.
 is a later layer", both user-requested):
 - **Read-only Leaflet frontend** — `app/static/index.html`, served from
   `app/main.py`; real port geometry as static GeoJSON in `app/static/gis/`.
+- **Berth occupancy timeline** — a Gantt drawer under the map (discrete berth
+  lanes × time, bars colored by status, sub-row packing surfaces contention);
+  reads `GET /reservations?from=&to=`. A data-viewing view, not the conflict
+  service — see step 6.
 - **Berth-request intake capture (step 7, partial):**
   - online-form path — SharePoint/Adobe-Sign CSV export → `intake_event`
     (`app/intake/records.py` parser, `ingest.py`, `source.py`, `run.py`);
@@ -40,15 +44,22 @@ is a later layer", both user-requested):
 
 ### Known gaps carried forward (do these regardless of feature work)
 
-- **Placeholder centerline geometry.** `app/seed/wharf_seed.py` uses fake
-  lat/lon vertices. The `M` (POPA station) values are meaningful but the lat/lon
-  must be digitized from the port aerial/GIS along the real quay face before
-  `geo_to_station` returns correct stations. **This blocks step 5 from being
-  trustworthy** — everything downstream inherits the error.
-- **"Alongside" is a centerline buffer, not a polygon.** Step 5 ships a
-  swappable `ST_DWithin` buffer (`app/occupancy/alongside.py`,
-  `Settings.berth_buffer_m`); replace with a digitized apron polygon. The
-  predicate is isolated so nothing else changes.
+- **Centerline geometry is REAL** (this was previously mis-flagged as
+  placeholder). `data/gis/build_centerline.py` derives it from the ArcGIS berth
+  polygons (anchor Berth 4 = 351 ft) → `centerline_vertices.json`, which
+  `wharf_seed.py` seeds; `tests/test_geo_station_real.py` verifies it end-to-end
+  (pure, no DB). Residual caveat: it's a coarse 7-vertex line (one chord per
+  berth — the max fidelity rectangular berth polygons allow); a finer quay survey
+  would densify via the same script. The placeholder line remains only as a
+  fallback when the derived file is absent.
+- **Apron polygon built; DB path unexercised.** The "alongside" predicate now
+  prefers a digitized **water-side apron polygon** (`wharf_segment.apron`,
+  migration `0005`; built by `build_centerline.py` → `apron.geojson` /
+  `apron_polygon.json`; `app/occupancy/alongside.py` uses `ST_Contains(apron)`
+  with the `ST_DWithin` buffer as fallback). The polygon + map render are
+  verified; the **seed + `ST_Contains` predicate are unexercised until PostGIS is
+  up** (backward-compatible: NULL apron → old buffer behavior). Optional refinement:
+  tune `APRON_WATER_FT`/`APRON_INLAND_FT` or swap in a surveyed apron.
 - **Requested reservations have no berth.** Manual/online intake creates
   `requested` rows with an **empty `station_range`** (never conflicts); the
   station is assigned by the (not-yet-built) reconciliation layer.
@@ -72,8 +83,9 @@ migration `0002` (`vessel.dim_a/dim_b`, `reservation.derived_key`), and
 SOG + an "alongside" buffer; bow/stern are projected from the AIS antenna +
 A/B dims + heading (COG fallback) and run through `geo_to_station`; writes are
 idempotent via `derived_key`, always `observed`/`ais`, and may overlap planned
-rows by design. Remaining caveats live in §1's "known gaps" (placeholder
-geometry; buffer-not-polygon).
+rows by design. The "alongside" test now prefers the digitized apron polygon
+(buffer fallback). Remaining caveats live in §1's "known gaps" (coarse 7-vertex
+centerline; apron DB-path unexercised until PostGIS is up).
 
 ---
 
@@ -216,9 +228,11 @@ Leaflet **UI** and berth-request intake **capture**. See §1.)
 
 ## 7. Suggested near-term sequence
 
-1. **Digitize real centerline + apron polygon**, re-seed, add an end-to-end
-   geo→station fixture. *(Unblocks everything — step 5 is untrustworthy until
-   then.)*
+1. ~~Digitize real centerline + apron polygon, add a geo→station fixture.~~
+   **Done** — centerline + apron are real and verified (`build_centerline.py`,
+   `tests/test_geo_station_real.py`). What's left here: bring PostGIS up and
+   `alembic upgrade head` → `app.seed.wharf_seed` → run the db-marked tests to
+   exercise the apron seed + `ST_Contains` predicate.
 2. **Step 6**: conflict query/service + API, with the overlap test matrix.
 3. **Reconciliation (step 7 sequel)**: match `requested` intake rows to
    `observed` AIS; assign their `station_range`; promote toward `confirmed`.

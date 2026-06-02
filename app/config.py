@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     # If set, overrides the assembled URL above.
     database_url: str | None = None
+    # Fail fast instead of hanging the driver default (~tens of seconds) when
+    # Postgres is down/unreachable. Tunable for slow/remote PostGIS or CI bring-up.
+    db_connect_timeout: int = 3
 
     # --- AIS ingestion ---
     aisstream_api_key: str = Field(default="", repr=False)

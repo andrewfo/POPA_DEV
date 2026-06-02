@@ -190,7 +190,6 @@
   .tl-chk input { accent-color: var(--accent); }
   .tl-body { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; }
   #timelineDrawer.tl-collapsed .tl-body { display: none; }
-  #timelineDrawer.tl-collapsed { }
   .tl-legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 12px; font-size: 12px; color: var(--muted); }
   .tl-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
   .tl-scroll { flex: 1; min-height: 0; overflow: auto; }
@@ -842,14 +841,24 @@ const loadTimeline = (function () {
   };
   const fmtD = (ms) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const fmtDT = (s) => s ? new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+  // Escape DB-sourced free-text before it goes into innerHTML. Vessel names come
+  // from unauthenticated AIS and cargo/notes from manual intake — both untrusted.
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   // Build berth lanes from BERTH_STA (high station on top), plus an Unassigned
-  // lane at the top for requests with no berth yet.
+  // lane at the top for requests with no berth yet. BERTH_STA is immutable after
+  // load (reassigned wholesale on fetch), so memoize on its object identity
+  // instead of rebuilding the lane list on every render/poll/resize frame.
+  let _lanesCache = null, _lanesKey = null;
   function lanes() {
+    if (_lanesCache && _lanesKey === BERTH_STA) return _lanesCache;
     const berths = Object.entries(BERTH_STA || {})
       .map(([name, r]) => ({ key: name, label: name, lo: Math.min(r[0], r[1]), hi: Math.max(r[0], r[1]), unassigned: false }))
       .sort((a, b) => b.hi - a.hi);
-    return [{ key: "__un", label: "Unassigned", lo: null, hi: null, unassigned: true }, ...berths];
+    _lanesKey = BERTH_STA;
+    _lanesCache = [{ key: "__un", label: "Unassigned", lo: null, hi: null, unassigned: true }, ...berths];
+    return _lanesCache;
   }
 
   // Assign a reservation to one lane by greatest station overlap (fallback:
@@ -970,11 +979,11 @@ const loadTimeline = (function () {
   function showTip(ev, r) {
     const sta = r.station_unassigned ? "unassigned" : `POPA ${fmtSta(r.station_lo)}–${fmtSta(r.station_hi)}`;
     tip.innerHTML =
-      `<b>${r.vessel_name || "(unnamed)"}</b>${r.vessel_imo ? ` <span class="k">IMO ${r.vessel_imo}</span>` : ""}<br>` +
-      `<span class="k">${r.type} · ${r.status} · via ${r.source}</span><br>` +
+      `<b>${esc(r.vessel_name || "(unnamed)")}</b>${r.vessel_imo ? ` <span class="k">IMO ${esc(r.vessel_imo)}</span>` : ""}<br>` +
+      `<span class="k">${esc(r.type)} · ${esc(r.status)} · via ${esc(r.source)}</span><br>` +
       `${fmtDT(r.t_start)} → ${r.t_end ? fmtDT(r.t_end) : "open"}<br>` +
-      `<span class="k">${sta}</span>` +
-      (r.cargo ? `<br>${r.cargo}` : "") + (r.notes ? `<br><span class="k">${r.notes}</span>` : "");
+      `<span class="k">${esc(sta)}</span>` +
+      (r.cargo ? `<br>${esc(r.cargo)}` : "") + (r.notes ? `<br><span class="k">${esc(r.notes)}</span>` : "");
     tip.style.display = "block";
     const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
     let lx = ev.clientX + pad, ly = ev.clientY + pad;
@@ -991,6 +1000,11 @@ const loadTimeline = (function () {
   }
 
   async function load() {
+    // Collapsed: body is hidden and render() no-ops, so skip the /reservations
+    // round-trip entirely (the 15s poll calls this too). A fresh load fires on
+    // expand via setCollapsed().
+    if (drawer.classList.contains("tl-collapsed")) return;
+    emptyEl.textContent = "no reservations in this window";   // clear any prior DB-offline text
     try {
       const from = new Date(t0).toISOString(), to = new Date(t1).toISOString();
       rows = await api(`/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
@@ -1024,7 +1038,8 @@ const loadTimeline = (function () {
     stage.classList.toggle("drawer-collapsed", c);
     document.getElementById("tlToggle").textContent = c ? "▸" : "▾";
     localStorage.setItem("tlCollapsed", c ? "1" : "0");
-    invalidateMap(); if (!c) render();
+    invalidateMap();
+    if (!c) load();   // expanding: fetch fresh data the poll skipped while collapsed
   }
   document.getElementById("tlToggle").addEventListener("click", () => setCollapsed(!drawer.classList.contains("tl-collapsed")));
 
@@ -1037,12 +1052,15 @@ const loadTimeline = (function () {
     handle.addEventListener("mousedown", (e) => { dragging = true; e.preventDefault(); document.body.style.cursor = "row-resize"; });
     addEventListener("mousemove", (e) => {
       if (!dragging) return;
+      // Live-resize the container only; a full SVG rebuild per mouse-move is
+      // wasteful (up to 500 bars × every pixel). Re-render once on drop.
       const h = Math.max(120, Math.min(innerHeight * 0.7, innerHeight - e.clientY));
-      apply(h); requestAnimationFrame(() => { invalidateMap(); render(); });
+      apply(h);
     });
     addEventListener("mouseup", () => {
       if (!dragging) return; dragging = false; document.body.style.cursor = "";
       localStorage.setItem("tlHeight", parseInt(stage.style.getPropertyValue("--drawerH")) || 300);
+      invalidateMap(); render();
     });
   })();
 

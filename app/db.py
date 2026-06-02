@@ -16,7 +16,7 @@ engine = create_engine(
     _settings.sqlalchemy_url,
     pool_pre_ping=True,
     future=True,
-    connect_args={"connect_timeout": 3},
+    connect_args={"connect_timeout": _settings.db_connect_timeout},
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

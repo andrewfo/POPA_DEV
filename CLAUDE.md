@@ -66,7 +66,8 @@ from day one with no manual intake.
 
 - `wharf_segment` — name, canonical measured geometry (`M` = POPA station),
   affine params per external stationing system (corps_scale/offset,
-  dockno_scale/offset)
+  dockno_scale/offset), and a nullable `apron` polygon (digitized water-side
+  berthing zone; the occupancy "alongside" test, migration 0005)
 - `vessel` — IMO/MMSI as canonical key (names are non-unique and misspelled),
   name, LOA, beam, draft
 - `reservation` — vessel_id (nullable for dredging), type
@@ -122,15 +123,20 @@ not).
 
 1. ✅ Schema + Alembic migrations + exclusion constraint.
 2. ✅ Stationing crosswalk module (canonical ↔ POPA / Corps / Dock No.) with tests.
-3. ✅ Wharf centerline: a measured (`M` = POPA station) PostGIS line (PLACEHOLDER
-   vertices — TODO digitize real lat/lon from the aerial/GIS).
+3. ✅ Wharf centerline: a measured (`M` = POPA station) PostGIS line, REAL —
+   derived from the ArcGIS berth polygons by `data/gis/build_centerline.py`
+   (anchor Berth 4 = 351 ft), verified by `tests/test_geo_station_real.py`. Coarse
+   (one chord per berth — the most a rectangular berth source allows); a finer
+   quay survey would densify via the same script.
 4. ✅ AIS ingestion: aisstream.io websocket client, bounding box around the wharf,
    persist `PositionReport` + `ShipStaticData`, upsert `vessel` by MMSI/IMO.
 5. ✅ Occupancy derivation: detect berthed vessels (near quay, SOG ≈ 0,
    sustained, with hysteresis), project bow/stern to station range, write
-   idempotent `observed` reservations (`app/occupancy/*`). "Alongside" is a
-   swappable centerline buffer for now — TODO: replace with a digitized apron
-   polygon (the predicate is isolated in `app/occupancy/alongside.py`).
+   idempotent `observed` reservations (`app/occupancy/*`). "Alongside" now prefers
+   the digitized **apron polygon** (`ST_Contains`), falling back to a centerline
+   buffer when a segment has none (predicate isolated in
+   `app/occupancy/alongside.py`). The apron seed + predicate await a live PostGIS
+   to exercise.
 6. ⬜ Conflict-detection query/service (time × station overlap), surfacing
    observed-vs-planned and dredge collisions, with tests.
 7. 🟡 Request intake — **capture built** ahead of order (`app/intake/*`):
@@ -156,8 +162,8 @@ app/
   models.py            # ORM models (mirror the migration; migration is truth)
   crosswalk.py         # THE stationing module — all position math lives here
   main.py              # FastAPI: read-only endpoints + map page + POST /intake/berth-request
-  static/              # read-only Leaflet UI (index.html) + port GeoJSON (gis/)
-  seed/wharf_seed.py   # seeds the first wharf_segment (placeholder geometry)
+  static/              # Leaflet UI (index.html, map + occupancy timeline) + port GeoJSON (gis/)
+  seed/wharf_seed.py   # seeds wharf_segment: real centerline + apron polygon (from data/gis/)
   ais/
     messages.py        # normalized AISPosition/AISStatic + aisstream parser
     source.py          # AISSource ABC + AisStreamSource (websocket)
@@ -166,9 +172,12 @@ app/
   occupancy/           # step 5: detect.py, project.py, alongside.py, derive.py, run.py
   intake/              # step 7 capture: records.py (CSV parse), ingest.py, source.py,
                        #   run.py (online-form CSV); manual.py (phone/email/operator entry)
-alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intake dedupe · 0004 'email' source
-tests/                 # pure: crosswalk, ais/intake parsers, occupancy math, manual normalize;
-                       #   db-marked (auto-skip): geo→station, occupancy derive, intake landing
+data/gis/              # build_centerline.py / to_geojson.py: derive real centerline + apron
+                       #   from the ArcGIS berth shapefiles -> static GeoJSON + seed JSON
+alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intake dedupe ·
+                       #   0004 'email' source · 0005 wharf_segment.apron
+tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math;
+                       #   db-marked (auto-skip): geo→station, occupancy derive, intake, reservations
 ```
 
 ## Working agreements for future changes

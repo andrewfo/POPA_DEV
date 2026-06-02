@@ -213,24 +213,34 @@ def main() -> None:
     # numbers along the top of the berths instead of a label on every tick.
     BERTH_DEPTH_FT = 255.0              # just inside the ~270 ft berth rectangles
     popa_ne = stations[-1]              # Berth 1 NE quay corner = yellow 0+00
+
+    def yellow_feature(interp_station, dist, *, major):
+        """One quay-face tick: interpolate the quay point at ``interp_station``
+        (POPA ft), draw it landward, and label it with ``dist`` (ft from Berth 1).
+        Returns None if the point falls off the line. Single source of the
+        Feature schema so the loop and the end-cap tick can't drift apart."""
+        xy = interp_xy(interp_station)
+        if xy is None:
+            return None
+        line = marker_line(xy[0], xy[1],
+                           land_ft=BERTH_DEPTH_FT if major else 45,
+                           water_ft=0)
+        return {
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": line},
+            "properties": {
+                "dist_ne": round(dist, 1),
+                "major": major,
+                "label": str(int(round(dist))) if major else None,
+            },
+        }
+
     yellow_marks = []
     y = 0.0
     while popa_ne - y >= popa_lo - 1e-6:
-        xy = interp_xy(popa_ne - y)
-        if xy is not None:
-            major = round(y) % 100 == 0
-            line = marker_line(xy[0], xy[1],
-                               land_ft=BERTH_DEPTH_FT if major else 45,
-                               water_ft=0)
-            yellow_marks.append({
-                "type": "Feature",
-                "geometry": {"type": "LineString", "coordinates": line},
-                "properties": {
-                    "dist_ne": round(y, 1),
-                    "major": major,
-                    "label": str(int(round(y))) if major else None,
-                },
-            })
+        feat = yellow_feature(popa_ne - y, y, major=(round(y) % 100 == 0))
+        if feat is not None:
+            yellow_marks.append(feat)
         y += 50.0
 
     # Close the ruler exactly on the SW (leftmost) edge of Berth 6 — the end of
@@ -243,17 +253,9 @@ def main() -> None:
         # of it (4600 vs the 4620 terminus), leaving just the edge marker.
         if yellow_marks and y_end - yellow_marks[-1]["properties"]["dist_ne"] < 50.0:
             yellow_marks.pop()
-        xy = interp_xy(popa_lo)
-        if xy is not None:
-            yellow_marks.append({
-                "type": "Feature",
-                "geometry": {"type": "LineString",
-                             "coordinates": marker_line(xy[0], xy[1],
-                                                        land_ft=BERTH_DEPTH_FT,
-                                                        water_ft=0)},
-                "properties": {"dist_ne": round(y_end, 1), "major": True,
-                               "label": str(int(round(y_end)))},
-            })
+        feat = yellow_feature(popa_lo, y_end, major=True)
+        if feat is not None:
+            yellow_marks.append(feat)
     (STATIC_GIS / "yellow_markers.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": yellow_marks})
     )
