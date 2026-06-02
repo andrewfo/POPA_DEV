@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     ais_bbox_ne_lat: float = 29.866
     ais_bbox_ne_lon: float = -93.930
 
+    # --- Conflict detection ---
+    # Minimum clear separation required between two CONFIRMED vessels along the
+    # wharf face (feet) — a mooring/standoff gap, not just no-overlap. Enforced
+    # by the no_wharf_overlap exclusion constraint, which pads each station range
+    # by half this gap on each side before the && test (migration 0007). Two
+    # boats with a real gap of exactly this many feet are allowed; anything
+    # tighter is a conflict. NOTE: the DB constraint bakes in the literal value;
+    # changing it here is documentation only — author a new migration to change
+    # what the constraint enforces.
+    min_vessel_gap_ft: float = 75.0
+
     # --- Occupancy derivation (step 5) ---
     # "Alongside" buffer: a vessel within this many metres of the wharf
     # centerline counts as at the quay. Sized for the widest expected beam plus

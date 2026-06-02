@@ -179,6 +179,12 @@ class Reservation(Base):
     """A rectangle in (time) x (station) space: a vessel or dredge op occupying
     a station interval over a time window. The no-overlap exclusion constraint
     (confirmed-only) is added in the migration via btree_gist.
+
+    That constraint enforces a **minimum mooring gap** (75 ft, see
+    ``config.min_vessel_gap_ft``), not bare no-overlap: migration 0007 pads each
+    station range by half the gap on each side before the ``&&`` test, so two
+    confirmed vessels closer than the gap collide. Empty ranges (an unassigned
+    ``requested`` row) stay empty and never conflict.
     """
 
     __tablename__ = "reservation"

@@ -362,3 +362,28 @@ def test_confirmed_overlap_rejected_409(client):
         "station_lo": 2365, "station_hi": 1965, "status": "confirmed",
     })
     assert ok.status_code == 201
+
+
+def test_confirmed_within_min_gap_rejected_409(client):
+    """Two confirmed vessels that don't overlap but sit closer than the 75 ft
+    mooring gap must still collide (migration 0007 buffers the station range)."""
+    # POPA [400, 900] confirmed (Dock No. = 3365 - POPA).
+    first = client.post("/reservations", json={
+        "etb": "2026-12-01T00:00:00Z", "etd": "2026-12-05T00:00:00Z",
+        "station_lo": 2965, "station_hi": 2465, "status": "confirmed",
+    })
+    assert first.status_code == 201
+
+    # POPA [950, 1200]: a real gap of only 50 ft above the first hull -> conflict.
+    too_close = client.post("/reservations", json={
+        "etb": "2026-12-02T00:00:00Z", "etd": "2026-12-06T00:00:00Z",
+        "station_lo": 2415, "station_hi": 2165, "status": "confirmed",
+    })
+    assert too_close.status_code == 409
+
+    # POPA [980, 1200]: an 80 ft gap clears the 75 ft minimum -> allowed.
+    clear = client.post("/reservations", json={
+        "etb": "2026-12-02T00:00:00Z", "etd": "2026-12-06T00:00:00Z",
+        "station_lo": 2385, "station_hi": 2165, "status": "confirmed",
+    })
+    assert clear.status_code == 201
