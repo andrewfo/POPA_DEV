@@ -57,9 +57,11 @@ from day one with no manual intake.
 - Python, FastAPI, SQLAlchemy + GeoAlchemy2, Alembic for migrations
 - pytest for tests
 - Front end was meant for later, but a **read-only Leaflet UI now exists**
-  (`app/static/index.html`, served by `app/main.py`) plus one write surface — the
-  manual berth-request form. Both were added ahead of the build order at the
-  user's request. Keep new UI thin and over the API; the data layer stays the
+  (`app/static/index.html`, served by `app/main.py`) plus write surfaces — the
+  manual berth-request form and a **manual edit surface** for ship data and
+  scheduling (create/edit/cancel/delete vessels & reservations; see
+  `app/edit.py`). All were added ahead of the build order at the user's request.
+  Keep new UI thin and over the API; the data layer stays the
   product.
 
 ## Schema (target)
@@ -111,13 +113,21 @@ station/time window before a reservation can be confirmed.
 No scheduling optimizer / auto-assignment (OR-Tools comes much later). The
 deliverable is a conflict-safe data layer populated from live AIS.
 
-Note: two items the original plan deferred have been pulled forward at the user's
-request and now exist — a **read-only UI** and berth-request intake **capture**
-(online-form CSV + manual phone/email/operator entry; see Build order step 7).
-What remains out of scope is the **request→AIS reconciliation engine** (assigning
-a berth/station to a `requested` row and promoting it toward `confirmed`) and the
-legacy-spreadsheet backfill *commit* (its parser exists, the review pipeline does
-not).
+Note: items the original plan deferred have been pulled forward at the user's
+request and now exist — a **read-only UI**, berth-request intake **capture**
+(online-form CSV + manual phone/email/operator entry; see Build order step 7),
+and a **manual edit surface** (`app/edit.py`): create/edit/cancel/delete vessels
+and reservations, including **manually assigning a berth/station range and
+promoting a row to `confirmed`** — i.e. the *manual* form of reconciliation,
+done by an operator one row at a time. What remains out of scope is the
+**automated request→AIS reconciliation engine** (matching a `requested` row to
+observed AIS and auto-promoting it) and the legacy-spreadsheet backfill *commit*
+(its parser exists, the review pipeline does not). Confirming still cannot run
+the **draft-vs-controlling-depth** gate (no controlling-depth data layer yet);
+the edit surface returns a warning saying the check was skipped rather than
+blocking. The no-overlap (time × station) guarantee is enforced by the
+`confirmed`-only DB exclusion constraint — a confirmed edit that collides
+surfaces as a 409.
 
 ## Build order
 
@@ -147,15 +157,21 @@ not).
    online-form CSV export and **manual phone/email/operator entry**
    (`POST /intake/berth-request` + a form on the map page) both land raw in
    `intake_event` (deduped); manual entry also creates a `requested` reservation
-   with an **empty/unassigned `station_range`**. **Reconciliation** against
-   observed AIS (assigning the berth, promoting toward `confirmed`) and the
-   legacy-backfill *commit* are still TODO.
+   with an **empty/unassigned `station_range`**. A **manual edit surface**
+   (`app/edit.py`, sidebar forms over `PATCH /vessels/{id}`,
+   `POST /reservations`, `PATCH`/`DELETE /reservations/{id}`) now lets an
+   operator correct vessel records and create/edit/cancel/delete reservations,
+   including manually assigning the berth and promoting to `confirmed` (the
+   manual form of reconciliation; a confirmed overlap → 409 via the exclusion
+   constraint). The **automated** reconciliation engine and the legacy-backfill
+   *commit* are still TODO.
 
-**Current state: steps 1–5 complete; step 6 (conflict detection) is the next
-core primitive.** Step 7 intake *capture* landed early at the user's request
-(not reconciliation). DB-integration tests need a live PostGIS (they auto-skip
-without one); pure logic — crosswalk, detector/projection, intake parsing &
-normalization — is unit-tested.
+**Current state: steps 1–5 complete; step 6 (conflict-detection query/service)
+is the next core primitive.** Step 7 intake *capture* plus a manual *edit*
+surface landed early at the user's request (automated reconciliation still
+TODO). DB-integration tests need a live PostGIS (they auto-skip without one);
+pure logic — crosswalk, detector/projection, intake parsing & normalization,
+edit range/validation helpers — is unit-tested.
 
 ## Repo layout
 
@@ -165,8 +181,9 @@ app/
   db.py                # SQLAlchemy engine / session
   models.py            # ORM models (mirror the migration; migration is truth)
   crosswalk.py         # THE stationing module — all position math lives here
-  main.py              # FastAPI: read-only endpoints + map page + POST /intake/berth-request
-  static/              # Leaflet UI (index.html, map + occupancy timeline) + port GeoJSON (gis/)
+  main.py              # FastAPI: read-only endpoints + map page + intake + edit endpoints
+  edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
+  static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
   seed/wharf_seed.py   # seeds wharf_segment: real centerline + apron polygon (from data/gis/)
   ais/
     messages.py        # normalized AISPosition/AISStatic + aisstream parser
@@ -181,8 +198,9 @@ data/gis/              # build_centerline.py / to_geojson.py: real centerline + 
                        #   -> static GeoJSON + seed JSON
 alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intake dedupe ·
                        #   0004 'email' source · 0005 wharf_segment.apron
-tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math;
-                       #   db-marked (auto-skip): geo→station, occupancy derive, intake, reservations
+tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
+                       #   edit range/validation; db-marked (auto-skip): geo→station, occupancy
+                       #   derive, intake, reservations, edit (vessel patch / reservation CRUD / 409)
 ```
 
 ## Working agreements for future changes
@@ -201,3 +219,16 @@ tests/                 # pure: crosswalk, geo→station(real), ais/intake parser
   `requested` reservation projected from intake carries an **empty
   `station_range`** until reconciliation assigns the berth; an empty range never
   conflicts, which is intentional, so don't "fix" it with a placeholder span.
+- The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel
+  edit overwrites the fields it sets (unlike intake, which only fills NULLs to
+  keep AIS dimensions authoritative). Vessel dims are edited in **metres** (the
+  canonical store), not feet. Station ranges are entered as canonical POPA feet —
+  no crosswalk transform, so don't route this through inline stationing math.
+  Range/validation logic lives in pure helpers (`_station_range`, `_time_range`)
+  with unit tests; the session functions don't commit (the endpoint does). Let a
+  confirmed-overlap IntegrityError surface as a 409 — never pre-empt it by
+  blocking `observed`/`tentative` overlaps or by skipping the constraint.
+- DB-marked tests use the `db_session` fixture, which now nests the session in a
+  SAVEPOINT (`join_transaction_mode="create_savepoint"`) so endpoint
+  commits/rollbacks under `TestClient` stay inside the rolled-back transaction.
+  Test write endpoints through `TestClient`, not by committing real rows.

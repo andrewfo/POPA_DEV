@@ -1,6 +1,9 @@
 """FastAPI app. Read-only endpoints over the data layer + a thin Leaflet map,
-plus one write path: manual berth-request entry (the phone/email channel — see
-``app/intake/manual.py``). No conflict service yet.
+plus write paths: manual berth-request entry (the phone/email channel — see
+``app/intake/manual.py``) and the manual edit surface for ship data and
+scheduling (create/edit/cancel/delete vessels & reservations — see
+``app/edit.py``). No automatic conflict service yet; confirmed-vs-confirmed
+overlaps are caught by the DB exclusion constraint and surfaced as a 409.
 """
 from __future__ import annotations
 
@@ -8,17 +11,26 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app import __version__
 from app.config import get_settings
 from app.crosswalk import geo_to_station
 from app.db import get_session
+from app.edit import (
+    ReservationCreate,
+    ReservationUpdate,
+    VesselUpdate,
+    create_reservation,
+    delete_reservation,
+    update_reservation,
+    update_vessel,
+)
 from app.intake.manual import BerthRequestForm, record_manual_request
 from app.models import PositionReport, Vessel, WharfSegment
 
@@ -37,6 +49,40 @@ def _db_unavailable(request: Request, exc: OperationalError) -> JSONResponse:
             "hint": "start Postgres/PostGIS (see docker-compose.yml) and retry",
         },
     )
+
+
+def _do_write(session: Session, fn):
+    """Run a write function and commit, translating DB-layer failures into clean
+    HTTP errors instead of 500s.
+
+    A bad enum / range raises ``ValueError`` -> 422. The exclusion constraint
+    ``no_wharf_overlap`` (confirmed-only, time x station) and the unique-MMSI /
+    "mmsi or imo required" checks raise ``IntegrityError`` -> 409. The raw
+    INSERT/UPDATE executes inside ``fn`` (before commit), so both the call and
+    the commit are wrapped, and the poisoned transaction is rolled back."""
+    try:
+        result = fn()
+        session.commit()
+        return result
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        text_ = str(getattr(exc, "orig", exc))
+        if "no_wharf_overlap" in text_:
+            detail = (
+                "confirmed reservation overlaps another confirmed booking "
+                "(time x station). Adjust the window, the berth, or keep it "
+                "tentative."
+            )
+        elif "mmsi" in text_ and "key" in text_.lower():
+            detail = "another vessel already uses that MMSI"
+        elif "vessel_requires_mmsi_or_imo" in text_:
+            detail = "a vessel needs at least one of MMSI or IMO"
+        else:
+            detail = "write violates a database constraint"
+        raise HTTPException(status_code=409, detail=detail) from exc
 
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -169,6 +215,9 @@ def list_vessels(
             "mmsi": v.mmsi,
             "imo": v.imo,
             "name": v.name,
+            "callsign": v.callsign,
+            "ship_type": v.ship_type,
+            "destination": v.destination,
             "loa": float(v.loa) if v.loa is not None else None,
             "beam": float(v.beam) if v.beam is not None else None,
             "draft": float(v.draft) if v.draft is not None else None,
@@ -234,6 +283,7 @@ def list_reservations(
         text(
             """
             SELECT r.id, r.type, r.status, r.source, r.direction, r.cargo, r.notes,
+                   r.priority,
                    lower(r.time_range)    AS t_start,
                    upper(r.time_range)    AS t_end,
                    isempty(r.station_range) AS sta_unassigned,
@@ -259,6 +309,7 @@ def list_reservations(
             "status": r.status,
             "source": r.source,
             "direction": r.direction,
+            "priority": r.priority,
             "cargo": r.cargo,
             "notes": r.notes,
             "t_start": r.t_start.isoformat() if r.t_start else None,
@@ -271,3 +322,55 @@ def list_reservations(
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Manual edit surface — ship data + scheduling (see app/edit.py)
+# ---------------------------------------------------------------------------
+@app.patch("/vessels/{vessel_id}")
+def edit_vessel(
+    vessel_id: int, upd: VesselUpdate, session: Session = Depends(get_session)
+) -> dict:
+    """Correct a vessel record. Only the fields present in the body overwrite
+    (a manual edit is authoritative — unlike intake, which only fills NULLs).
+    Dimensions are metres. 404 if the vessel does not exist."""
+    result = _do_write(session, lambda: update_vessel(session, vessel_id, upd))
+    if result is None:
+        raise HTTPException(status_code=404, detail="no such vessel")
+    return result
+
+
+@app.post("/reservations", status_code=201)
+def post_reservation(
+    req: ReservationCreate, session: Session = Depends(get_session)
+) -> dict:
+    """Create a reservation (vessel / dredge / layberth). Station bounds are
+    canonical POPA feet (omit for an unassigned berth). Promoting to
+    ``confirmed`` engages the no-overlap exclusion constraint (-> 409 on
+    collision)."""
+    return _do_write(session, lambda: create_reservation(session, req))
+
+
+@app.patch("/reservations/{res_id}")
+def edit_reservation(
+    res_id: int, upd: ReservationUpdate, session: Session = Depends(get_session)
+) -> dict:
+    """Edit a reservation: time window, berth (station range), status (incl.
+    ``confirmed``), type, direction, priority, cargo, notes. Cancelling is a
+    ``status='cancelled'`` edit. 404 if it does not exist; 409 if a confirmed
+    edit overlaps another confirmed booking."""
+    result = _do_write(session, lambda: update_reservation(session, res_id, upd))
+    if result is None:
+        raise HTTPException(status_code=404, detail="no such reservation")
+    return result
+
+
+@app.delete("/reservations/{res_id}", status_code=204)
+def remove_reservation(
+    res_id: int, session: Session = Depends(get_session)
+) -> Response:
+    """Hard-delete a reservation. 404 if it does not exist."""
+    deleted = _do_write(session, lambda: delete_reservation(session, res_id))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="no such reservation")
+    return Response(status_code=204)
