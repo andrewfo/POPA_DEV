@@ -969,7 +969,6 @@ function resCard(r) {
         <button class="btn-sm" data-act="edit-request">Edit request</button>
         <button class="btn-sm" data-act="edit">Edit placement</button>
         ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
-        <button class="btn-sm danger" data-act="delete">Delete</button>
       </div>
       <form class="edit-form" data-edit-request>
         <fieldset>
@@ -1072,11 +1071,9 @@ function wireResCards(container) {
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "cancelled" });
       if (w.ok) { loadRequests(); loadTimeline(); } else alert("Failed: " + writeError(w));
     });
-    card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
-      if (!confirm("Permanently delete this reservation?")) return;
-      const w = await apiWrite("DELETE", `/reservations/${id}`);
-      if (w.ok) { loadRequests(); loadTimeline(); } else alert("Failed: " + writeError(w));
-    });
+    // No delete here: a reservation can only be cancelled (reversible) from this
+    // tab. The hard delete lives on the Berth requests tab, which removes the
+    // request and its reservation together — the one place a request is dropped.
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
