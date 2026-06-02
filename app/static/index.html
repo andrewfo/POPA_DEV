@@ -501,8 +501,8 @@ const yellowLayer = L.geoJSON(null, {
   onEachFeature: (f, layer) => {
     if (!f.properties.label) return;
     const co = f.geometry.coordinates;
-    const land = co[0];                            // dock end of the tick
-    L.marker([land[1], land[0]], {
+    const quay = co[co.length - 1];                // quay-edge end (next to the water)
+    L.marker([quay[1], quay[0]], {
       icon: L.divIcon({
         className: "yk-label",
         html: `<span class="lbl">${f.properties.label}</span>`,
@@ -776,6 +776,14 @@ map.on("click", async (e) => {
       const mPerLat = 111320, mPerLon = 111320 * Math.cos(c.lat * Math.PI / 180);
       let fe = (b[0] - a[0]) * mPerLon, fn = (b[1] - a[1]) * mPerLat;
       const len = Math.hypot(fe, fn) || 1; fe /= len; fn /= len;
+      // The centerline sits ON the quay face, so a hull centred on it straddles
+      // the bulkhead (half on land). Shove the centre to the WATER side by half
+      // the beam + a fender standoff so the vessel lies alongside, in the water.
+      // Water normal = forward rotated -90° (starboard of the NE-bound axis):
+      // (fe, fn) -> (fn, -fe), matching build_centerline's water normal.
+      const off = DUMMY.beam / 2 + 6;                 // metres
+      c.lat += (-fe * off) / mPerLat;
+      c.lon += (fn * off) / mPerLon;
       return { c, fe, fn };
     } catch (e) {
       const c = map.getCenter();

@@ -3,10 +3,14 @@
 The berth polygons are berthing-WATER rectangles: their landward long edge is
 the quay face, their water-side long edge is the outer limit of the berth
 pocket, ~200-270 ft (the berth depth) out into the channel. So the berths give
-clean STATIONING (running footage along the wharf) but NOT a clean quay-face
-geometry — the complex multi-vertex berths (13/17 pts) make the landward edge
-jagged. A separate surveyed quay line (``quayface.*``, a 2-segment ArcGIS export
-of the real bulkhead) provides the clean geometry.
+clean STATIONING (running footage along the wharf) AND, in their landward
+extent, the real dock edge — though the complex multi-vertex berths (13/17 pts)
+make that edge jagged point-by-point.
+
+``quayface.*`` is NOT a bulkhead survey: it is an ArcGIS "Distance And Direction"
+annotation (two rough measurement lines). One of its two segments was drawn
+~120 ft out in the channel, so it cannot be traced as the quay. We use it only
+for the along-shore EXTENT (where to clip the centerline's ends).
 
 Method:
   * STATIONING REFERENCE: each berth's along-shore edge length matches its
@@ -15,12 +19,15 @@ Method:
     anchoring the Berth 5/4 junction at station 351 reproduces those deltas to
     ~1 ft. This chain carries correct ALONG-wharf stationing (independent of
     which side it sits on).
-  * QUAY-FACE GEOMETRY: the surveyed ``quayface`` line is the real bulkhead.
-    We project each stationing-reference vertex perpendicularly onto it and keep
-    that vertex's station, giving a smooth centerline ON the quay with canonical
-    POPA. Endpoints are clipped to the quay's surveyed extent (the NE end lands
-    at POPA ~3360 ~= Dock No. 0, the physical start of the dock stationing —
-    ~90 ft SW of where the Berth 1 *polygon* ends).
+  * QUAY-FACE GEOMETRY: ONE straight line on the real dock edge — direction =
+    the along-shore axis ``u`` (berth-centroid spread, the same axis that orients
+    the ticks and apron normal), perpendicular offset = the median over berths of
+    each berth's most-landward vertex (robust to the jagged notches). Each
+    stationing-reference vertex projects perpendicularly onto this line and keeps
+    its station, giving a dead-straight centerline ON the quay with canonical
+    POPA. Endpoints are clipped to the annotation's along-extent (the NE end
+    lands at POPA ~3360 ~= Dock No. 0, the physical start of the dock stationing
+    — ~90 ft SW of where the Berth 1 *polygon* ends).
 
 Outputs:
   * data/gis/centerline_vertices.json   -> [[lon, lat, M], ...] for the seed
@@ -150,15 +157,34 @@ def main() -> None:
     ai = min(range(len(ref_chain)), key=lambda i: _dist(ref_chain[i], anchor_pt))
     ref_stations = [ANCHOR_STATION + (cum[i] - cum[ai]) for i in range(len(ref_chain))]
 
-    # --- surveyed quay face: the real bulkhead geometry -------------------
+    # --- dock-edge (quay face) geometry: one straight line on the real edge ---
+    # NOTE: data/gis/quayface.* is NOT a bulkhead survey — it is an ArcGIS
+    # "Distance And Direction" annotation (two rough measurement lines). One of
+    # its two segments was drawn ~120 ft out in the channel, so projecting onto
+    # it pushed the centerline off the dock. The authoritative edge is the
+    # LANDWARD side of the berth polygons (source "PoPA Orthomosaics/Record
+    # Drawing" — traced on the aerial). The berths are jagged (merged multi-vertex
+    # edges), so we don't trace them directly; instead we build ONE straight line:
+    #   * direction  = the along-shore axis u (berth-centroid spread) — the same
+    #     axis that orients the ticks and the apron normal, so all stay parallel;
+    #   * offset D   = median over berths of each berth's most-landward vertex
+    #     (its quay corner), robust to the jagged notches.
+    # The quay's along-EXTENT (and thus the centerline's NE/SW clip) is taken from
+    # the annotation line's span, reprojected onto this corrected straight edge.
     quay, qcrs = _reader(QUAYFACE)
     q_to_b = Transformer.from_crs(qcrs, bcrs, always_xy=True)
-    quay_edges = []  # (a, b) segments in the berths' planar ft CRS
-    quay_pts = []
-    for sr in quay.iterShapeRecords():
-        pts = [q_to_b.transform(x, y) for x, y in sr.shape.points]
-        quay_pts.extend(pts)
-        quay_edges.extend(zip(pts[:-1], pts[1:]))
+    span_pts = [q_to_b.transform(x, y) for sr in quay.iterShapeRecords()
+                for x, y in sr.shape.points]
+
+    land_offsets = sorted(min(water(p) for p in sr.shape.points) for sr in recs)
+    m = len(land_offsets)
+    D = (land_offsets[m // 2] if m % 2 else
+         (land_offsets[m // 2 - 1] + land_offsets[m // 2]) / 2)   # median quay offset
+
+    alongs = [along(p) for p in span_pts]
+    on_edge = lambda a: (a * u[0] + D * w[0], a * u[1] + D * w[1])
+    quay_pts = [on_edge(min(alongs)), on_edge(max(alongs))]
+    quay_edges = [(quay_pts[0], quay_pts[1])]
 
     def _project(P, segs):
         """Nearest point on a polyline (list of (a,b) edges) to P, with the
