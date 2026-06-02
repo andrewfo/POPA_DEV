@@ -385,10 +385,11 @@
           </div>
         </fieldset>
         <fieldset>
-          <legend>Berth (POPA station, ft)</legend>
+          <legend>Berth (Dock No., ft)</legend>
+          <div class="hint" style="margin:0 0 6px">Read off the yellow dock markers — stern first (the larger Dock No.), bow second.</div>
           <div class="grid2">
-            <div><label>Stern station</label><input type="number" step="any" name="station_lo" /></div>
-            <div><label>Bow station</label><input type="number" step="any" name="station_hi" /></div>
+            <div><label>Stern (Dock No.)</label><input type="number" step="any" name="station_lo" /></div>
+            <div><label>Bow (Dock No.)</label><input type="number" step="any" name="station_hi" /></div>
           </div>
           <div class="check"><input type="checkbox" id="newResUnassigned" /><label for="newResUnassigned" style="margin:0">Berth unassigned</label></div>
           <div class="grid2">
@@ -926,7 +927,9 @@ function resCard(r) {
   const dval = (s) => (s ? s.slice(0, 10) : "");
   const color = RES_STATUS_COLOR[r.status] || "#888";
   const imo = r.vessel_imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(r.vessel_imo)}</span>` : "";
-  const sta = r.station_unassigned ? "berth unassigned" : `POPA ${fmtSta(r.station_lo)}–${fmtSta(r.station_hi)}`;
+  const sta = r.station_unassigned
+    ? "berth unassigned"
+    : `Dock ${Math.round(Math.min(r.station_lo_dock, r.station_hi_dock))}–${Math.round(Math.max(r.station_lo_dock, r.station_hi_dock))}`;
   const opt = (cur, v, lbl) => `<option value="${v}"${(cur || "") === v ? " selected" : ""}>${lbl}</option>`;
   const statusSel = ["requested", "confirmed", "completed", "cancelled"].map((s) => opt(r.status, s, s)).join("");
   const typeSel = ["vessel", "dredge", "layberth"].map((t) => opt(r.type, t, t)).join("");
@@ -952,8 +955,8 @@ function resCard(r) {
           <div><label>ETD</label><input type="date" name="etd" value="${dval(r.t_end)}" /></div>
         </div>
         <div class="grid2">
-          <div><label>Stern sta (ft)</label><input type="number" step="any" name="station_lo" value="${r.station_unassigned ? "" : r.station_lo}" /></div>
-          <div><label>Bow sta (ft)</label><input type="number" step="any" name="station_hi" value="${r.station_unassigned ? "" : r.station_hi}" /></div>
+          <div><label>Stern (Dock No.)</label><input type="number" step="any" name="station_lo" value="${r.station_unassigned ? "" : r.station_lo_dock}" /></div>
+          <div><label>Bow (Dock No.)</label><input type="number" step="any" name="station_hi" value="${r.station_unassigned ? "" : r.station_hi_dock}" /></div>
         </div>
         <div class="check"><input type="checkbox" name="unassigned" ${r.station_unassigned ? "checked" : ""} /><label style="margin:0">Berth unassigned</label></div>
         <div class="grid2">

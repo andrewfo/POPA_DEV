@@ -231,10 +231,19 @@ tests/                 # pure: crosswalk, geo→station(real), ais/intake parser
 - The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel
   edit overwrites the fields it sets (unlike intake, which only fills NULLs to
   keep AIS dimensions authoritative). Vessel dims are edited in **metres** (the
-  canonical store), not feet. Station ranges are entered as canonical POPA feet —
-  no crosswalk transform, so don't route this through inline stationing math.
-  Range/validation logic lives in pure helpers (`_station_range`, `_time_range`)
-  with unit tests; the session functions don't commit (the endpoint does). Let a
+  canonical store), not feet. Station ranges are entered in **Dock No. feet** —
+  the stationing painted on the wharf (the yellow dock markers on the map), what
+  an operator actually reads off the quay — and converted to canonical POPA on
+  store via the wharf segment's affine params
+  (`crosswalk.segment_dockno_params` → `AffineParams.to_popa`). All stationing
+  math stays in `app/crosswalk.py` (server-side; the UI never converts), and the
+  canonical store stays POPA. Because Dock No. is reversed, the **stern** end (the
+  larger Dock No.) maps to the lower POPA bound: enter stern in `station_lo`, bow
+  in `station_hi` (`/reservations` returns both `station_lo/hi` POPA and
+  `station_lo/hi_dock`; the map outline renders from POPA, the edit forms from
+  Dock). Range/validation logic lives in pure helpers (`_station_range`,
+  `_time_range`) with unit tests; the session functions don't commit (the
+  endpoint does). Let a
   confirmed-overlap IntegrityError surface as a 409 — never pre-empt it by
   blocking `observed`/`tentative` overlaps or by skipping the constraint.
 - DB-marked tests use the `db_session` fixture, which now nests the session in a

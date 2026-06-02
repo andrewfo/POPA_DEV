@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import __version__
 from app.config import get_settings
-from app.crosswalk import geo_to_station
+from app.crosswalk import geo_to_station, segment_dockno_params
 from app.db import get_session
 from app.edit import (
     ReservationCreate,
@@ -304,6 +304,10 @@ def list_reservations(
         ),
         {"status": status, "limit": limit, "t_from": from_, "t_to": to},
     ).all()
+    # Dock No. bounds alongside POPA: the map/timeline render from POPA, but the
+    # edit forms read/write Dock No. (the painted stationing). Convert through the
+    # wharf segment's affine params so the UI never does stationing math itself.
+    dock = segment_dockno_params(session)
     return [
         {
             "id": r.id,
@@ -319,6 +323,9 @@ def list_reservations(
             "station_unassigned": r.sta_unassigned,
             "station_lo": float(r.sta_lo) if r.sta_lo is not None else None,
             "station_hi": float(r.sta_hi) if r.sta_hi is not None else None,
+            # Dock No. equivalents (stern = larger Dock No. = the POPA lower bound).
+            "station_lo_dock": float(dock.from_popa(float(r.sta_lo))) if r.sta_lo is not None else None,
+            "station_hi_dock": float(dock.from_popa(float(r.sta_hi))) if r.sta_hi is not None else None,
             "vessel_name": r.vessel_name,
             "vessel_imo": r.vessel_imo,
             "berth_id": r.berth_id,

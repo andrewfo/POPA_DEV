@@ -73,6 +73,31 @@ def dockno_to_popa(dockno_value: float, params: AffineParams = DEFAULT_DOCKNO) -
     return params.to_popa(dockno_value)
 
 
+def segment_dockno_params(session, segment_id: int | None = None) -> AffineParams:
+    """Load a wharf segment's Dock No. affine params (POPA <-> Dock No.) from the
+    database, so callers convert through the per-segment crosswalk rather than
+    hard-coding the published transform. Falls back to ``DEFAULT_DOCKNO`` when no
+    segment is seeded (e.g. a bare test DB).
+
+    Args:
+        session: a SQLAlchemy Session bound to the database.
+        segment_id: restrict to one ``wharf_segment``; otherwise the first
+            segment (lowest id) is used — there is a single wharf face today.
+    """
+    from sqlalchemy import text
+
+    where = "WHERE id = :sid" if segment_id is not None else ""
+    sql = (
+        "SELECT dockno_scale, dockno_offset FROM wharf_segment "
+        f"{where} ORDER BY id LIMIT 1"
+    )
+    params = {"sid": segment_id} if segment_id is not None else {}
+    row = session.execute(text(sql), params).first()
+    if row is None:
+        return DEFAULT_DOCKNO
+    return AffineParams(float(row.dockno_scale), float(row.dockno_offset))
+
+
 # --- Stationing notation (NN+NN feet) --------------------------------------
 def parse_station(text: str) -> float:
     """Parse stationing notation like '12+02', '-12+02', '108+38.65' to feet.

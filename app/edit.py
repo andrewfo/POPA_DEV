@@ -17,9 +17,14 @@ Two write paths layered over the existing data layer, kept out of ``main.py``
 
 Units: vessel dimensions are stored and edited in **metres** (the canonical AIS
 store), distinct from the feet used on the paper berth-request form. Station
-ranges are entered directly in canonical **POPA feet** — no crosswalk transform
-is involved (the user supplies canonical station), so this does not route
-stationing math outside ``app/crosswalk.py``.
+bounds are entered in **Dock No. feet** — the stationing painted on the wharf
+(the yellow dock markers on the map), which is what an operator reads off the
+quay — and converted to canonical **POPA feet** for storage via the wharf
+segment's affine params (``crosswalk.segment_dockno_params`` ->
+``AffineParams.to_popa``). All stationing math stays inside ``app/crosswalk.py``;
+the canonical store remains POPA. Dock No. is reversed relative to POPA, so the
+**stern** end (the larger Dock No.) maps to the lower POPA bound — enter stern in
+``station_lo`` and bow in ``station_hi`` (an inverted pair is rejected).
 
 The range/validation helpers (``_station_range``, ``_time_range``,
 ``confirm_warnings``) are pure and unit-tested without a DB; the ``*_vessel`` /
@@ -35,6 +40,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
+from app.crosswalk import segment_dockno_params
 from app.models import (
     DIRECTIONS,
     RESERVATION_SOURCES,
@@ -73,8 +79,9 @@ class VesselUpdate(BaseModel):
 
 class ReservationCreate(BaseModel):
     """A new reservation. ``etb`` is required (a reservation must have a time
-    range); everything else is optional. Station bounds are canonical POPA feet
-    and may be omitted (berth unassigned -> empty range, never conflicts)."""
+    range); everything else is optional. Station bounds are **Dock No. feet**
+    (converted to canonical POPA on store) and may be omitted (berth unassigned
+    -> empty range, never conflicts)."""
 
     type: str = "vessel"
     vessel_id: int | None = None
@@ -82,6 +89,7 @@ class ReservationCreate(BaseModel):
     etd: dt.datetime | None = None
     # Assign a named berth: its catalog range fills station_range. Explicit
     # station_lo/hi (a sub-span for a vessel shorter than the berth) override it.
+    # station_lo/hi are Dock No. feet (stern in lo, bow in hi); see module docs.
     berth_id: int | None = None
     station_lo: float | None = None
     station_hi: float | None = None
@@ -105,7 +113,7 @@ class ReservationUpdate(BaseModel):
     etd: dt.datetime | None = None
     # Reassign the berth (its range fills station_range unless explicit
     # station_lo/hi are also given). ``unassigned=True`` clears both the berth
-    # and the station range.
+    # and the station range. station_lo/hi are Dock No. feet (see module docs).
     berth_id: int | None = None
     station_lo: float | None = None
     station_hi: float | None = None
@@ -214,6 +222,21 @@ def _time_sql(tr: TimeRange, params: dict) -> str:
 # ---------------------------------------------------------------------------
 # Session functions — no commit; the endpoint owns the transaction
 # ---------------------------------------------------------------------------
+def _dock_to_popa(session: Session, value: float | None) -> float | None:
+    """Convert an operator-entered Dock No. station (feet) to canonical POPA via
+    the wharf segment's affine params. ``None`` passes through (unset bound).
+
+    All stationing math goes through ``crosswalk`` — this is just the call site.
+    Each bound is converted independently so the ``station_lo`` (stern) slot keeps
+    its meaning across partial edits; since Dock No. is reversed, a stern Dock No.
+    larger than the bow's lands as the lower POPA bound, which ``_station_range``
+    then validates as ``lo < hi``.
+    """
+    if value is None:
+        return None
+    return segment_dockno_params(session).to_popa(value)
+
+
 def _berth_bounds(session: Session, berth_id: int) -> tuple[float, float]:
     """Look up a berth's canonical POPA station range. Raises ``ValueError``
     (-> 422) if the berth id is unknown."""
@@ -255,7 +278,10 @@ def create_reservation(session: Session, req: ReservationCreate) -> dict:
     _validate_enum(req.direction, DIRECTIONS, "direction")
 
     berth_bounds = _berth_bounds(session, req.berth_id) if req.berth_id else None
-    sr = _station_range_for(berth_bounds, req.station_lo, req.station_hi, unassigned=False)
+    # Operator-entered bounds are Dock No.; berth catalog bounds are already POPA.
+    lo = _dock_to_popa(session, req.station_lo)
+    hi = _dock_to_popa(session, req.station_hi)
+    sr = _station_range_for(berth_bounds, lo, hi, unassigned=False)
     tr = _time_range(req.etb, req.etd)
 
     params: dict = {
@@ -316,6 +342,12 @@ def update_reservation(
         return None
 
     changes = upd.model_dump(exclude_unset=True)
+
+    # Convert incoming Dock No. bounds to canonical POPA up front, so the merge
+    # below (which mixes supplied bounds with the stored POPA range) is all-POPA.
+    for k in ("station_lo", "station_hi"):
+        if changes.get(k) is not None:
+            changes[k] = _dock_to_popa(session, changes[k])
 
     # Scalar columns: take the supplied value, else keep the current one.
     type_ = changes.get("type", cur.type)
