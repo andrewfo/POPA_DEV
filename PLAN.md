@@ -9,8 +9,10 @@ contract) and [`README.md`](./README.md) (setup/run). When the two disagree,
 
 ## 1. Where we are today
 
-**Phase 1 (steps 1–4) is complete and pushed.** The repo is a conflict-safe
-data layer that can be seeded from live AIS.
+**Steps 1–5 are complete** (1–4 pushed; step 5 + the items below are in the
+working tree, not yet committed). The repo is a conflict-safe data layer seeded
+from live AIS, with a read-only Leaflet UI and — pulled forward ahead of the
+build order, at the user's request — **berth-request intake _capture_**.
 
 | # | Step | Status | Lands in |
 |---|------|--------|----------|
@@ -18,9 +20,23 @@ data layer that can be seeded from live AIS.
 | 2 | Stationing crosswalk (POPA ↔ Corps ↔ Dock No.) | ✅ | `app/crosswalk.py`, `tests/test_crosswalk.py` |
 | 3 | Measured wharf centerline (placeholder geom) | ✅ | `app/seed/wharf_seed.py` |
 | 4 | AIS ingestion (aisstream.io → DB) | ✅ | `app/ais/*` |
-| 5 | Occupancy derivation | ⬜ | — |
-| 6 | Conflict-detection service | ⬜ | — |
-| 7 | Request intake + reconciliation; legacy backfill | ⬜ (later) | — |
+| 5 | Occupancy derivation | ✅ | `app/occupancy/*`, migration `0002`, `tests/test_occupancy_*` |
+| 6 | Conflict-detection service | ⬜ (next) | — |
+| 7 | Request intake + reconciliation; legacy backfill | 🟡 capture built; reconciliation TODO | `app/intake/*`, migrations `0003`/`0004`, `tests/test_intake_*` |
+
+**Also built ahead of the plan** (deviations from "no UI in phase 1" / "intake
+is a later layer", both user-requested):
+- **Read-only Leaflet frontend** — `app/static/index.html`, served from
+  `app/main.py`; real port geometry as static GeoJSON in `app/static/gis/`.
+- **Berth-request intake capture (step 7, partial):**
+  - online-form path — SharePoint/Adobe-Sign CSV export → `intake_event`
+    (`app/intake/records.py` parser, `ingest.py`, `source.py`, `run.py`);
+  - **manual phone/email/operator entry** — `POST /intake/berth-request` +
+    a form on the map page (`app/intake/manual.py`). Lands raw in
+    `intake_event` *and* creates a `status='requested'` reservation with an
+    **empty (unassigned) `station_range`** — the port assigns the berth later.
+  - What's still TODO for step 7: **reconciliation against observed AIS**, and
+    committing the legacy-spreadsheet backfill (parse exists; review→commit not).
 
 ### Known gaps carried forward (do these regardless of feature work)
 
@@ -29,83 +45,39 @@ data layer that can be seeded from live AIS.
   must be digitized from the port aerial/GIS along the real quay face before
   `geo_to_station` returns correct stations. **This blocks step 5 from being
   trustworthy** — everything downstream inherits the error.
-- **No wharf polygon / quay buffer.** We have a centerline only. Berthing
-  detection needs an "alongside" test (apron polygon or N-metre buffer).
+- **"Alongside" is a centerline buffer, not a polygon.** Step 5 ships a
+  swappable `ST_DWithin` buffer (`app/occupancy/alongside.py`,
+  `Settings.berth_buffer_m`); replace with a digitized apron polygon. The
+  predicate is isolated so nothing else changes.
+- **Requested reservations have no berth.** Manual/online intake creates
+  `requested` rows with an **empty `station_range`** (never conflicts); the
+  station is assigned by the (not-yet-built) reconciliation layer.
+- **Intake detail lives only in `intake_event.raw`.** Manual-entry fields with
+  no normalized column (flag, S/S line, deadweight, bunkers, cargo weights,
+  agency) are kept raw + summarized into `reservation.notes`. Promote to columns
+  if/when they're queried.
 - **No automated reconnect/health proof for the AIS client.** `app/ais/run.py`
   is long-running but we have no soak test or metrics.
 - **DB tests are opt-in** and auto-skip without a database; CI needs a real
-  PostGIS service to exercise them.
+  PostGIS service to exercise them. (Note: on Windows, `engine.connect()` to a
+  dead host can hang — set `?connect_timeout=N` to fail fast.)
 
 ---
 
-## 2. Step 5 — Occupancy derivation (next up)
+## 2. Step 5 — Occupancy derivation ✅ (done)
 
-**Goal:** read `position_report`, decide when a vessel is *berthed*, and write
-`observed` reservations with a correct `[stern_sta, bow_sta]` station range and
-`[ETB, ETD]` time range. No human intake involved.
-
-### 5.1 Prerequisites
-- Replace placeholder centerline with digitized geometry (see §1).
-- Add a **wharf polygon or quay buffer** to `wharf_segment` (or a new
-  `wharf_area` table). Recommended: store an apron polygon; fall back to
-  `ST_Buffer(centerline, N)` if no polygon is available. Decide `N` from the
-  widest expected vessel beam + fender allowance.
-
-### 5.2 Berthed-state detector
-- A vessel is **berthed** when its positions sit inside the wharf buffer at
-  **SOG ≈ 0** (e.g. `< 0.5 kn`) for a **sustained dwell** (e.g. ≥ 20–30 min).
-- Use **hysteresis** to avoid flapping: enter "berthed" after the dwell
-  threshold; exit only after a sustained departure (e.g. SOG > 1 kn or outside
-  buffer for ≥ a few minutes). Two thresholds, not one.
-- Also consider AIS `nav_status` (`5 = moored`, `1 = at anchor`) as a strong
-  hint, but never as sole truth — many vessels don't set it correctly.
-- Output of this stage: a **berthing event** `(vessel_id, t_start, t_end)` where
-  `t_end` is open while the vessel is still alongside.
-
-### 5.3 Bow/stern projection → station range
-- AIS gives a single antenna position plus dimensions A/B/C/D (→ LOA/beam) and
-  heading. Reconstruct bow and stern points:
-  - bow = antenna position projected forward by `A` along heading;
-  - stern = projected aft by `B` along heading.
-- `geo_to_station` each endpoint → `[stern_sta, bow_sta]`. Normalize so
-  `lower ≤ upper` for the `numrange`.
-- If heading is missing, fall back to COG; if both missing, center an
-  LOA-wide interval on the projected antenna station and flag low confidence.
-
-### 5.4 Direction
-- Compare heading/COG against the **channel axis** (derivable from the
-  centerline bearing at that station) → set `upstream | downstream`.
-
-### 5.5 Idempotent writes
-- Re-deriving over the same window **must update**, not duplicate. Need a
-  **stable key**: `(vessel_id, berthing_event_id)` or
-  `(vessel_id, t_start_bucket)`. Add a nullable `derived_key` column +
-  unique index on `reservation`, or a side table mapping berthing events →
-  reservation ids.
-- Status is always `observed`, source `ais`. These rows are allowed to overlap
-  planned reservations by design (the exclusion constraint is `confirmed`-only).
-
-### 5.6 Module shape (proposed)
-```
-app/occupancy/
-  detect.py     # berthing-event detection from position_report (hysteresis)
-  project.py    # bow/stern projection + geo_to_station -> station range
-  derive.py     # orchestrates: events -> observed reservations (idempotent)
-  run.py        # python -m app.occupancy.run  (batch or continuous)
-```
-- Run it as a **periodic batch** first (simplest, testable), then optionally a
-  continuous worker. Keep detection pure/Postgres-driven so it's unit-testable
-  against fixture `position_report` rows.
-
-### 5.7 Tests (required)
-- Detector: synthetic position tracks (arrive → dwell → depart) produce exactly
-  one berthing event with correct `[ETB, ETD]`; flapping inputs don't.
-- Projection: known heading + LOA → expected station range (pure math).
-- Idempotency: running derive twice over the same data yields one reservation.
+Built as designed — see `app/occupancy/{detect,project,alongside,derive,run}.py`,
+migration `0002` (`vessel.dim_a/dim_b`, `reservation.derived_key`), and
+`tests/test_occupancy_*`. Berthing detection uses a two-threshold hysteresis on
+SOG + an "alongside" buffer; bow/stern are projected from the AIS antenna +
+A/B dims + heading (COG fallback) and run through `geo_to_station`; writes are
+idempotent via `derived_key`, always `observed`/`ais`, and may overlap planned
+rows by design. Remaining caveats live in §1's "known gaps" (placeholder
+geometry; buffer-not-polygon).
 
 ---
 
-## 3. Step 6 — Conflict-detection service
+## 3. Step 6 — Conflict-detection service (next up)
 
 **Goal:** surface conflicts as a query/service. One primitive: *time ranges
 overlap AND station ranges overlap*. Covers vessel-vs-vessel, vessel-vs-dredge,
@@ -147,23 +119,36 @@ and observed-vs-planned alike.
 
 ---
 
-## 4. Step 7 — Intake + reconciliation (later layer)
+## 4. Step 7 — Intake + reconciliation (🟡 capture built early)
 
-Deferred per `CLAUDE.md`. Outline only:
+Pulled forward at the user's request. **Capture** now exists; **reconciliation**
+does not.
 
-- **Three channels** (online form, dock-operator entry, phone) all land raw in
-  `intake_event` *before* normalization — audit + reconciliation trail. The
-  table already exists.
-- **Normalize on ingest**: canonical units, enums, IMO/MMSI resolution; keep the
-  raw payload. Produce a candidate `reservation` (status `requested` →
-  `tentative` → `confirmed`).
-- **Reconcile against observed AIS**: match a request to the `observed`
-  reservation(s) for the same vessel/window; surface agreement and discrepancy
-  (requested a berth a vessel isn't actually at, or vice versa).
-- **Legacy spreadsheet backfill** (optional): parse → **human review** → commit.
-  Source is messy — merged cells, free text (`"Chem Orchard - 607'"`), ambiguous
-  `"X or Y"`, inline `CANCELLED`/`TBA`/`?`. Never assume clean auto-parse; the
-  pipeline is parse-then-review, not parse-then-trust.
+**Built:**
+- **Raw landing** — all channels land verbatim in `intake_event` *before*
+  normalization, deduped by a content-hash `dedupe_key` (migration `0003`) so
+  re-imports/re-submits are idempotent.
+- **Online-form path** — SharePoint/Adobe-Sign CSV export → `intake_event`
+  (`app/intake/records.py` conservative parser + `ingest.py` + `source.py` +
+  `python -m app.intake.run`). Messy values become `None` + a warning, never a
+  guess; the raw row is always preserved.
+- **Manual phone/email/operator entry** — `POST /intake/berth-request` and a
+  form on the map page (`app/intake/manual.py`). Normalizes units (feet→metres),
+  upserts `vessel` by IMO, lands `intake_event`, **and** creates a candidate
+  `reservation` (status `requested`, source `phone|email|operator`) with an
+  **empty `station_range`** (berth unassigned). `email` was added to the source
+  enums in migration `0004`. `GET /reservations` lists them.
+
+**Still TODO:**
+- **Reconcile against observed AIS** — match a request to the `observed`
+  reservation(s) for the same vessel/window; assign the real `station_range`;
+  surface agreement vs discrepancy (a request for a berth the vessel isn't at,
+  or vice versa). This is the natural sequel to step 6's overlap primitive.
+- **Legacy spreadsheet backfill commit** — the parser is conservative and
+  tested, but the parse → **human review** → commit pipeline isn't wired. Source
+  is messy (`"Chem Orchard - 607'"`, ambiguous `"X or Y"`, inline
+  `CANCELLED`/`TBA`/`?`). Parse-then-review, not parse-then-trust.
+- **Promote raw-only fields to columns** if queried (flag, DWT, agency, weights).
 
 ---
 
@@ -218,20 +203,25 @@ Not tied to a single step — pick up as the system matures.
 ## 6. Out of scope (still)
 
 - **Scheduling optimizer / auto-assignment** (OR-Tools) — much later.
-- **Front end** — Leaflet over the existing GIS basemap comes after the conflict
-  service exists; phase 1/2 build no UI.
+- **Request→AIS reconciliation engine** — intake *capture* exists (§4), but
+  matching requests to observed occupancy and promoting `requested` → `tentative`
+  → `confirmed` is not built.
 - Anything that requires blocking `observed` overlaps. Re-read the Core model
   section of `CLAUDE.md` before reaching for that.
+
+(No longer out of scope, built ahead of plan at the user's request: a read-only
+Leaflet **UI** and berth-request intake **capture**. See §1.)
 
 ---
 
 ## 7. Suggested near-term sequence
 
 1. **Digitize real centerline + apron polygon**, re-seed, add an end-to-end
-   geo→station fixture. *(Unblocks everything.)*
-2. **Step 5**: berthing detector → bow/stern projection → idempotent `observed`
-   reservations, with tests.
-3. **Step 6**: conflict query/service + API, with the overlap test matrix.
+   geo→station fixture. *(Unblocks everything — step 5 is untrustworthy until
+   then.)*
+2. **Step 6**: conflict query/service + API, with the overlap test matrix.
+3. **Reconciliation (step 7 sequel)**: match `requested` intake rows to
+   `observed` AIS; assign their `station_range`; promote toward `confirmed`.
 4. **Controlling-depth** table + draft validation in the confirm path.
 5. **CI** with a PostGIS service container; AIS reconnect/metrics hardening.
-6. *(Later)* intake + reconciliation; optional legacy backfill.
+6. *(Optional)* wire the legacy-spreadsheet backfill review→commit pipeline.

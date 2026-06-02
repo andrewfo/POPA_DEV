@@ -38,6 +38,22 @@ class Settings(BaseSettings):
     ais_bbox_ne_lat: float = 29.866
     ais_bbox_ne_lon: float = -93.930
 
+    # --- Occupancy derivation (step 5) ---
+    # "Alongside" buffer: a vessel within this many metres of the wharf
+    # centerline counts as at the quay. Sized for the widest expected beam plus
+    # fender/standoff allowance. This is the Option-3 swappable buffer; replace
+    # the predicate in app/occupancy/alongside.py with an apron polygon later
+    # without touching the detector.
+    berth_buffer_m: float = 75.0
+    # Berthed-state detector hysteresis. Enter when SOG <= enter knots and
+    # alongside; require a sustained dwell of >= dwell minutes. Exit only after
+    # a real departure (not alongside, or SOG > depart knots) sustained for
+    # >= depart-gap minutes — two thresholds so it doesn't flap.
+    berth_enter_sog_kn: float = 0.5
+    berth_depart_sog_kn: float = 1.0
+    berth_dwell_min: float = 20.0
+    berth_depart_gap_min: float = 10.0
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def sqlalchemy_url(self) -> str:

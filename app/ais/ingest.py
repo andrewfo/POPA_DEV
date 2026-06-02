@@ -50,6 +50,8 @@ class Ingestor:
             "ship_type": msg.ship_type,
             "loa": msg.loa,
             "beam": msg.beam,
+            "dim_a": msg.dim_a,
+            "dim_b": msg.dim_b,
             "draft": msg.draft,
             "destination": msg.destination,
         }

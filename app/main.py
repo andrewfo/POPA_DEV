@@ -1,6 +1,6 @@
-"""FastAPI app. Phase-1 scope: health + read-only endpoints to confirm the
-data layer is alive, plus a thin Leaflet map (static) over those endpoints.
-No conflict service, intake, or write paths yet.
+"""FastAPI app. Read-only endpoints over the data layer + a thin Leaflet map,
+plus one write path: manual berth-request entry (the phone/email channel — see
+``app/intake/manual.py``). No conflict service yet.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from app import __version__
 from app.config import get_settings
 from app.crosswalk import geo_to_station
 from app.db import get_session
+from app.intake.manual import BerthRequestForm, record_manual_request
 from app.models import PositionReport, Vessel, WharfSegment
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
@@ -177,3 +178,65 @@ def geo_to_station_endpoint(
     """Project a lat/lon onto the wharf centerline -> canonical POPA station."""
     station = geo_to_station(session, lat, lon, segment_id)
     return {"lat": lat, "lon": lon, "popa_station": station}
+
+
+@app.post("/intake/berth-request", status_code=201)
+def create_berth_request(
+    form: BerthRequestForm, session: Session = Depends(get_session)
+) -> dict:
+    """Manual berth-request entry for vessels that call/email instead of using
+    the online form. Lands the raw request in ``intake_event`` and creates a
+    ``status='requested'`` reservation (berth left unassigned). Idempotent on an
+    identical re-submission."""
+    result = record_manual_request(session, form)
+    session.commit()
+    return result
+
+
+@app.get("/reservations")
+def list_reservations(
+    status: str | None = None, limit: int = 100,
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Reservations, newest first, optionally filtered by status. Station/time
+    ranges are returned as bounds; an empty station range (unassigned berth)
+    reports ``station_unassigned: true``."""
+    rows = session.execute(
+        text(
+            """
+            SELECT r.id, r.type, r.status, r.source, r.direction, r.cargo, r.notes,
+                   lower(r.time_range)    AS t_start,
+                   upper(r.time_range)    AS t_end,
+                   isempty(r.station_range) AS sta_unassigned,
+                   lower(r.station_range) AS sta_lo,
+                   upper(r.station_range) AS sta_hi,
+                   r.created_at,
+                   v.name AS vessel_name, v.imo AS vessel_imo
+            FROM reservation r
+            LEFT JOIN vessel v ON v.id = r.vessel_id
+            WHERE (:status IS NULL OR r.status::text = :status)
+            ORDER BY r.created_at DESC
+            LIMIT :limit
+            """
+        ),
+        {"status": status, "limit": limit},
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "type": r.type,
+            "status": r.status,
+            "source": r.source,
+            "direction": r.direction,
+            "cargo": r.cargo,
+            "notes": r.notes,
+            "t_start": r.t_start.isoformat() if r.t_start else None,
+            "t_end": r.t_end.isoformat() if r.t_end else None,
+            "station_unassigned": r.sta_unassigned,
+            "station_lo": float(r.sta_lo) if r.sta_lo is not None else None,
+            "station_hi": float(r.sta_hi) if r.sta_hi is not None else None,
+            "vessel_name": r.vessel_name,
+            "vessel_imo": r.vessel_imo,
+        }
+        for r in rows
+    ]

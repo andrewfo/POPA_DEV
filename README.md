@@ -6,9 +6,12 @@ station (feet) along a measured PostGIS centerline; every reservation is a
 rectangle in (time × station) space and a conflict is "time overlaps **and**
 station overlaps". See [`CLAUDE.md`](./CLAUDE.md) for the full design.
 
-> **Phase 1 (this repo): build steps 1–4 — schema, stationing crosswalk, wharf
-> centerline, and AIS ingestion.** No occupancy derivation, conflict service,
-> intake, or UI yet.
+> **Build steps 1–5 complete** — schema, stationing crosswalk, wharf centerline,
+> AIS ingestion, and occupancy derivation. A **read-only Leaflet UI** and
+> berth-request intake **capture** (online-form CSV + manual phone/email entry)
+> were added ahead of the build order. Still to come: the **conflict-detection
+> service** (step 6) and request→AIS **reconciliation** (step 7). See
+> [`PLAN.md`](./PLAN.md) for status.
 
 ## Prerequisites
 
@@ -41,17 +44,23 @@ python -m app.seed.wharf_seed
 ## Run
 
 ```bash
-# API (health + read-only endpoints)
+# API + read-only Leaflet map (served at /)
 uvicorn app.main:app --reload
-#   GET /health           -> liveness
-#   GET /health/db        -> DB + PostGIS reachable
-#   GET /wharf-segments   -> seeded segments + affine params
-#   GET /vessels          -> vessels seen via AIS
-#   GET /stats            -> row counts
-#   GET /geo-to-station?lat=..&lon=..  -> project a point to POPA station
+#   GET  /                -> read-only map UI
+#   GET  /health          -> liveness
+#   GET  /health/db       -> DB + PostGIS reachable
+#   GET  /wharf-segments  -> seeded segments + affine params
+#   GET  /vessels         -> vessels seen via AIS
+#   GET  /stats           -> row counts
+#   GET  /geo-to-station?lat=..&lon=..  -> project a point to POPA station
+#   GET  /reservations[?status=requested]  -> reservations (newest first)
+#   POST /intake/berth-request  -> manual berth request (phone/email); also a form on /
 
 # AIS ingestion (live aisstream.io websocket -> DB). Long-running; reconnects.
 python -m app.ais.run
+
+# Berth-request intake (online-form CSV export -> intake_event; idempotent)
+python -m app.intake.run path/to/BerthRequests.csv [--dry-run]
 ```
 
 ## Tests
@@ -88,28 +97,15 @@ the lat/lon must be **digitized from the aerial / port GIS** along the actual
 quay face before `geo_to_station` produces correct stations from real AIS
 positions.
 
-## What step 5 (occupancy derivation) will need
+## Occupancy derivation (step 5) — built
 
-Not built yet. It will read `position_report` and emit `observed` reservations.
-It needs:
-
-- **A wharf polygon (or quay buffer).** We have the centerline; berthing
-  detection needs an "alongside" test — a polygon of the wharf apron or a
-  buffer of N metres around the centerline — to decide a vessel is *at* the
-  wharf rather than transiting.
-- **Real centerline geometry.** The placeholder vertices must be replaced (see
-  TODO above) or projected stations will be wrong.
-- **A berthed-state detector.** Sustained SOG ≈ 0 (e.g. < 0.5 kn) inside the
-  wharf buffer for ≥ a dwell threshold (e.g. 20–30 min), with hysteresis to
-  avoid flapping. Defines the `[ETB, ETD]` time range.
-- **Bow/stern projection.** Combine the AIS position, heading, and the vessel's
-  LOA (from `ShipStaticData`) to project bow and stern points, then
-  `geo_to_station` each → `[stern_sta, bow_sta]` station range.
-- **Direction.** Compare heading/COG against the channel axis to set
-  `upstream|downstream`.
-- **Idempotent upserts.** Re-deriving over the same window must update the
-  existing `observed` reservation, not duplicate it (needs a stable key, e.g.
-  vessel + berthing-event id).
+`python -m app.occupancy.run` reads `position_report`, detects berthed vessels
+(SOG ≈ 0 inside an "alongside" buffer, with hysteresis), projects bow/stern to a
+`[stern_sta, bow_sta]` POPA station range, and writes idempotent `observed`
+reservations. The "alongside" test is still a swappable centerline buffer
+(`app/occupancy/alongside.py`), not yet a digitized apron polygon — and it
+inherits the placeholder-geometry caveat above. See `app/occupancy/*` and
+`PLAN.md` §2.
 
 ## Project layout
 

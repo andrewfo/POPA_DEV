@@ -44,9 +44,10 @@ RESERVATION_STATUSES = (
     "cancelled",
     "completed",
 )
-RESERVATION_SOURCES = ("ais", "form", "phone", "operator")
+# 'email' added in migration 0004 (manual berth-request entry channel).
+RESERVATION_SOURCES = ("ais", "form", "phone", "operator", "email")
 DIRECTIONS = ("upstream", "downstream")
-INTAKE_SOURCES = ("ais", "form", "phone", "operator")
+INTAKE_SOURCES = ("ais", "form", "phone", "operator", "email")
 
 reservation_type_enum = Enum(*RESERVATION_TYPES, name="reservation_type")
 reservation_status_enum = Enum(*RESERVATION_STATUSES, name="reservation_status")
@@ -115,6 +116,11 @@ class Vessel(Base):
     ship_type: Mapped[int | None] = mapped_column(Integer)  # AIS numeric type code
     loa: Mapped[float | None] = mapped_column(Numeric(8, 2))  # length overall, m
     beam: Mapped[float | None] = mapped_column(Numeric(8, 2))  # m
+    # AIS position-reference offsets: A = antenna->bow, B = antenna->stern (m).
+    # Kept individually (not just LOA=A+B) so bow/stern projection can place the
+    # antenna correctly within the hull.
+    dim_a: Mapped[float | None] = mapped_column(Numeric(8, 2))
+    dim_b: Mapped[float | None] = mapped_column(Numeric(8, 2))
     draft: Mapped[float | None] = mapped_column(Numeric(6, 2))  # m
     destination: Mapped[str | None] = mapped_column(String(120))
 
@@ -159,6 +165,10 @@ class Reservation(Base):
     priority: Mapped[int | None] = mapped_column(Integer)
     cargo: Mapped[str | None] = mapped_column(String(200))
     notes: Mapped[str | None] = mapped_column(Text)
+    # Stable identity for a derived (observed/AIS) reservation so re-deriving the
+    # same berthing window UPDATEs instead of duplicating. NULL for planned rows;
+    # uniqueness is enforced by a partial index (see migration 0002).
+    derived_key: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -178,6 +188,12 @@ class IntakeEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source: Mapped[str] = mapped_column(intake_source_enum, nullable=False)
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Stable content hash of the raw row, so re-ingesting the same SharePoint /
+    # Adobe Sign export (Power Automate re-exports the whole list) is idempotent
+    # instead of duplicating. NULL is allowed (e.g. a phone intake with no stable
+    # payload); uniqueness is enforced by a partial index (see migration 0003),
+    # mirroring reservation.derived_key.
+    dedupe_key: Mapped[str | None] = mapped_column(Text)
     received_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

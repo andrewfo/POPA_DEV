@@ -35,7 +35,7 @@ STATIC_GIS = Path(__file__).parents[2] / "app" / "static" / "gis"
 
 # Pull the canonical Dock No. crosswalk params (no inline stationing math).
 sys.path.insert(0, str(Path(__file__).parents[2]))
-from app.crosswalk import AffineParams, DEFAULT_DOCKNO_SCALE, DEFAULT_DOCKNO_OFFSET
+from app.crosswalk import format_station
 
 BERTHS = GIS_DIR / "berths"
 WAREHOUSES = GIS_DIR / "warehouses"
@@ -148,48 +148,79 @@ def main() -> None:
                 return (x, y)
         return None
 
-    # Station markers, to match the port's "Wharf Stationing" aerial: ticks are
-    # drawn at round DOCK No. values (the labelled system in that exhibit, which
-    # runs 3500 at the SW end -> 0 toward the NE), perpendicular to the quay and
-    # extending out into the channel. Each marker is a LineString from a short
-    # landward nub on the concrete to a point out in the water, so the frontend
-    # just draws the line + a label at the water end. `w` is the unit water
-    # normal in the planar US-ft CRS, so offsets below are in true feet.
-    dock = AffineParams(DEFAULT_DOCKNO_SCALE, DEFAULT_DOCKNO_OFFSET)
-    # POPA range that exists on the line -> dock-value range to step through.
-    popa_lo, popa_hi = stations[0], stations[-1]
-    dock_at_lo = dock.from_popa(popa_lo)
-    dock_at_hi = dock.from_popa(popa_hi)
-    dock_min = max(0.0, math.ceil(min(dock_at_lo, dock_at_hi) / 50) * 50)
-    dock_max = min(3500.0, math.floor(max(dock_at_lo, dock_at_hi) / 50) * 50)
-
+    # Station ticks, to match the port's "Wharf Stationing with Aerial" exhibit:
+    # thin uniform lines perpendicular to the quay, extending out into the
+    # channel, labelled in canonical POPA stationing (STA "X+YY") every 100 ft
+    # from 0+00 at the SW end to the NE end of the public wharf (~34+50). POPA is
+    # the canonical measure, so each tick reads the same value the exhibit shows.
+    # Each marker is a LineString from a short landward nub on the concrete to a
+    # point out in the water; the frontend draws the line + a label at the water
+    # end. `w` is the unit water normal in the planar US-ft CRS, so the offsets
+    # below are in true feet.
     def marker_line(x, y, land_ft, water_ft):
         a = to_wgs.transform(x - w[0] * land_ft, y - w[1] * land_ft)   # on the dock
         b = to_wgs.transform(x + w[0] * water_ft, y + w[1] * water_ft)  # into water
         return [[round(a[0], 7), round(a[1], 7)], [round(b[0], 7), round(b[1], 7)]]
 
+    # Every round POPA hundred across the WHOLE wharf face (so the ticks span its
+    # full length, including the SW berths that sit at negative POPA), plus the
+    # NE end of the face as the exhibit's final tick (~34+50). The 0+00 .. 34+50
+    # run matches the exhibit exactly; the SW extension is labelled in the same
+    # POPA reference (negative stationing, e.g. "-4+00").
+    popa_lo, popa_hi = stations[0], stations[-1]
+    first = int(math.ceil(popa_lo / 100.0)) * 100   # smallest hundred on the line
+    last = int(math.floor(popa_hi / 100.0)) * 100   # largest hundred on the line
+    tick_popas = [float(p) for p in range(first, last + 1, 100)]
+    if popa_hi - last >= 25:
+        tick_popas.append(round(popa_hi / 50.0) * 50.0)
+
     marks = []
-    d = int(dock_min)
-    while d <= int(dock_max):
-        popa = dock.to_popa(float(d))
+    for popa in tick_popas:
         xy = interp_xy(popa)
-        if xy is not None:
-            major = d % 100 == 0
-            line = marker_line(xy[0], xy[1],
-                               land_ft=15 if major else 8,
-                               water_ft=180 if major else 30)
-            marks.append({
-                "type": "Feature",
-                "geometry": {"type": "LineString", "coordinates": line},
-                "properties": {
-                    "dock": d, "popa": round(popa, 1), "major": major,
-                    "label": str(d) if major else None,
-                },
-            })
-        d += 50
+        if xy is None:
+            continue
+        line = marker_line(xy[0], xy[1], land_ft=10, water_ft=300)
+        marks.append({
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": line},
+            "properties": {"popa": round(popa, 1), "label": format_station(popa)},
+        })
     (STATIC_GIS).mkdir(parents=True, exist_ok=True)
     (STATIC_GIS / "feet_markers.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": marks})
+    )
+
+    # Yellow quay-face ticks — the exhibit's SECOND tick series. Referenced from
+    # the NE end of the public wharf (Berth 1): 0 ft at the far-NE quay corner,
+    # increasing SW down the face, one tick every 50 ft, the full length of the
+    # wharf (so every berth is covered). Distinct from the POPA series above:
+    # these sit ON the wharf — each tick runs from the quay edge landward onto
+    # the concrete apron (water_ft=0, no part in the channel), vs. the long POPA
+    # lines that run out into the water. Labelled at the round hundreds (minor
+    # 50s left unlabelled) so the result reads like a ruler instead of stacking a
+    # label on every tick.
+    popa_ne = stations[-1]              # Berth 1 NE quay corner = yellow 0+00
+    yellow_marks = []
+    y = 0.0
+    while popa_ne - y >= popa_lo - 1e-6:
+        xy = interp_xy(popa_ne - y)
+        if xy is not None:
+            major = round(y) % 100 == 0
+            line = marker_line(xy[0], xy[1],
+                               land_ft=60 if major else 40,
+                               water_ft=0)
+            yellow_marks.append({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": line},
+                "properties": {
+                    "dist_ne": round(y, 1),
+                    "major": major,
+                    "label": format_station(y) if major else None,
+                },
+            })
+        y += 50.0
+    (STATIC_GIS / "yellow_markers.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": yellow_marks})
     )
 
     # Per-berth station range, taken from the SAME geometry as the line so the

@@ -42,6 +42,8 @@ class AISStatic:
     ship_type: int | None = None
     loa: float | None = None
     beam: float | None = None
+    dim_a: float | None = None  # antenna -> bow, m
+    dim_b: float | None = None  # antenna -> stern, m
     draft: float | None = None
     destination: str | None = None
     raw: dict = field(default_factory=dict)
@@ -132,6 +134,8 @@ def parse_aisstream(envelope: dict) -> AISPosition | AISStatic | None:
             ship_type=sd.get("Type"),
             loa=float(loa) if loa else None,
             beam=float(beam) if beam else None,
+            dim_a=float(a) if a is not None else None,
+            dim_b=float(b) if b is not None else None,
             draft=(
                 float(sd["MaximumStaticDraught"])
                 if sd.get("MaximumStaticDraught")

@@ -94,21 +94,70 @@
   .leaflet-popup-content { font: 15px system-ui, sans-serif; }
   /* Permanent map labels. The tooltip box keeps Leaflet's positioning transform;
      the inner .lbl is counter-rotated so text stays upright when the map rotates. */
-  .berth-label, .wh-label, .sta-label, .ft-label {
+  .berth-label, .wh-label, .sta-label, .ft-label, .yk-label {
     background: none; border: none; box-shadow: none; text-shadow: 0 1px 3px #000;
   }
   .berth-label .lbl, .wh-label .lbl, .sta-label .lbl, .ft-label .lbl {
     display: inline-block; transform: rotate(var(--counter, 0deg)); transform-origin: center center;
   }
+  /* Station labels run vertically along the tick, reading bottom-to-top (water
+     end up toward the quay), to match the exhibit's labelling. The map is
+     rotated so the wharf is horizontal and the ticks are vertical on screen, so
+     this is a fixed -90deg (the marker icons are not rotated by the map). */
+  .ft-label .lbl {
+    transform: rotate(-90deg); transform-origin: center center;
+    white-space: nowrap;
+  }
+  /* Yellow quay-face ticks (second exhibit series, referenced from Berth 1).
+     Same vertical-on-screen orientation as the POPA labels. */
+  .yk-label .lbl {
+    transform: rotate(-90deg); transform-origin: center center;
+    white-space: nowrap;
+  }
   .berth-label { color: #ffce5a; font-weight: 700; font-size: 16px; text-align: center; line-height: 1.15; }
   .berth-label .sub { color: #ffe6a8; font-weight: 500; font-size: 13px; }
   .wh-label { color: #cdd9e5; font-size: 14px; }
   .sta-label { color: #ff8a8a; font-size: 13px; font-weight: 600; }
-  .ft-label { color: #ffd84d; font-size: 12px; font-weight: 700; text-shadow: 0 0 3px #000, 0 1px 3px #000; }
-  .berth-label::before, .wh-label::before, .sta-label::before, .ft-label::before { display: none; }
+  .ft-label { color: #f0f0f0; font-size: 12px; font-weight: 600; text-shadow: 0 0 3px #000, 0 1px 2px #000; }
+  .yk-label { color: #ffd000; font-size: 11px; font-weight: 700; text-shadow: 0 0 3px #000, 0 1px 2px #000; }
+  .berth-label::before, .wh-label::before, .sta-label::before, .ft-label::before, .yk-label::before { display: none; }
   a { color: var(--accent); }
   .legend { font-size: 14px; color: var(--muted); margin-top: 6px; }
   .legend i { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
+
+  /* Manual berth-request form */
+  details.intake { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  details.intake > summary {
+    cursor: pointer; user-select: none; padding: 11px 13px; font-weight: 600;
+    list-style: none; display: flex; align-items: center; gap: 8px;
+  }
+  details.intake > summary::-webkit-details-marker { display: none; }
+  details.intake > summary::before { content: "＋"; color: var(--accent); font-weight: 700; }
+  details.intake[open] > summary::before { content: "－"; }
+  details.intake > summary .sub { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .intake form { padding: 4px 13px 13px; }
+  .intake fieldset { border: none; border-top: 1px dashed var(--line); margin: 0; padding: 10px 0 0; }
+  .intake legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; padding: 0; }
+  .intake label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  .intake label .req { color: var(--warn); }
+  .intake input[type=text], .intake input[type=number], .intake input[type=date], .intake select {
+    width: 100%; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font: inherit; font-size: 14px;
+  }
+  .intake .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .intake .grid3 { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 0 10px; }
+  .intake .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; color: var(--ink); }
+  .intake .check input { width: auto; }
+  .intake button {
+    margin-top: 14px; width: 100%; padding: 10px; border: none; border-radius: 8px;
+    background: var(--accent); color: #04243d; font: inherit; font-weight: 700; cursor: pointer;
+  }
+  .intake button:disabled { opacity: .6; cursor: default; }
+  .intake .result { margin-top: 10px; font-size: 14px; padding: 9px 11px; border-radius: 8px; display: none; }
+  .intake .result.ok { background: rgba(61,220,151,.12); border: 1px solid var(--good); color: var(--good); display: block; }
+  .intake .result.err { background: rgba(255,107,107,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
+  .intake .result .warn { color: var(--warn); display: block; margin-top: 4px; font-size: 13px; }
+  .req-card .meta b { color: var(--ink); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -123,6 +172,85 @@
       <div class="stat"><div class="n" id="statVessels">—</div><div class="l">Vessels</div></div>
       <div class="stat"><div class="n" id="statPositions">—</div><div class="l">Position reports</div></div>
     </div>
+
+    <!-- ===== Manual berth-request entry (phone/email channel) ===== -->
+    <details class="intake" id="intakePanel">
+      <summary>New berth request <span class="sub">· phone / email</span></summary>
+      <form id="berthRequestForm" autocomplete="off">
+        <div class="grid2">
+          <div>
+            <label>Received via</label>
+            <select name="source">
+              <option value="phone">Phone</option>
+              <option value="email">Email</option>
+              <option value="operator">Operator entry</option>
+            </select>
+          </div>
+          <div>
+            <label>Date</label>
+            <input type="date" name="request_date" />
+          </div>
+        </div>
+
+        <fieldset>
+          <legend>Vessel</legend>
+          <label>Vessel <span class="req">*</span></label>
+          <input type="text" name="vessel" required />
+          <div class="grid2">
+            <div><label>S/S Line</label><input type="text" name="ss_line" /></div>
+            <div><label>Flag</label><input type="text" name="flag" /></div>
+          </div>
+          <label>Destinations</label>
+          <input type="text" name="destinations" />
+          <div class="grid3">
+            <div><label>IMO Number <span class="req">*</span></label><input type="number" name="imo" required /></div>
+            <div><label>LOA (ft) <span class="req">*</span></label><input type="number" step="any" name="length_ft" /></div>
+            <div><label>Beam (ft)</label><input type="number" step="any" name="beam_ft" /></div>
+          </div>
+          <div class="grid3">
+            <div><label>Draft (ft)</label><input type="number" step="any" name="draft_ft" /></div>
+            <div><label>Deadweight (lbs)</label><input type="number" step="any" name="deadweight_lbs" /></div>
+            <div class="check"><input type="checkbox" name="bunkers" id="bunkers" /><label for="bunkers" style="margin:0">Taking bunkers</label></div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Schedule</legend>
+          <div class="grid2">
+            <div><label>Due from</label><input type="text" name="due_from" /></div>
+            <div><label>On date (ETB) <span class="req">*</span></label><input type="date" name="etb" /></div>
+          </div>
+          <div class="grid2">
+            <div><label>To sail for</label><input type="text" name="sail_for" /></div>
+            <div><label>On date (ETD)</label><input type="date" name="etd" /></div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Cargo</legend>
+          <div class="grid2">
+            <div><label>Inbound</label><input type="text" name="inbound_cargo" /></div>
+            <div><label>Weight (net tons)</label><input type="number" step="any" name="inbound_tons" /></div>
+          </div>
+          <div class="grid2">
+            <div><label>Outbound</label><input type="text" name="outbound_cargo" /></div>
+            <div><label>Weight (net tons)</label><input type="number" step="any" name="outbound_tons" /></div>
+          </div>
+          <label>Begin receiving outbound cargo on</label>
+          <input type="date" name="outbound_cargo_start" />
+        </fieldset>
+
+        <fieldset>
+          <legend>Agency</legend>
+          <label>Agency / Owner</label>
+          <input type="text" name="agency" />
+        </fieldset>
+
+        <button type="submit" id="brSubmit">Record berth request</button>
+        <div class="result" id="brResult"></div>
+      </form>
+    </details>
+    <!-- ===== /Manual berth-request entry ===== -->
 
     <!-- ===== DUMMY SHIP control (visualization only — delete this block to remove) ===== -->
     <div class="probe" id="dummyShipControl" style="margin-bottom:14px">
@@ -145,6 +273,9 @@
 
     <h2>Wharf segments</h2>
     <div id="segments"><div class="empty">loading…</div></div>
+
+    <h2>Berth requests</h2>
+    <div id="requests"><div class="empty">none yet</div></div>
 
     <h2>Recent vessels</h2>
     <div id="vessels"><div class="empty">loading…</div></div>
@@ -202,8 +333,9 @@ function applyWharfBearing(coords) {
   map.setBearing(90 - brng);                             // put NE end to the right
   syncLabelCounter();
 }
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+// Aerial imagery, to match the port's "Wharf Stationing with Aerial" exhibit.
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics",
 }).addTo(map);
 
 const wharfLayer = L.geoJSON(null, {
@@ -232,21 +364,22 @@ const warehouseLayer = L.geoJSON(null, {
     layer.bindTooltip(`<span class="lbl">${p.label || p.name}</span>`, { permanent: true, direction: "center", className: "wh-label" });
   },
 }).addTo(map);
+// The quay-face centerline is kept faint — the exhibit shows no drawn line, the
+// ticks read off the photo's quay edge. (Still loaded: it drives the bearing.)
 const centerlineLayer = L.geoJSON(null, {
-  style: { color: "#ff4d4d", weight: 3, opacity: 0.95 },
+  style: { color: "#ff4d4d", weight: 1.5, opacity: 0.35 },
   pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-    radius: 4, color: "#ff4d4d", fillColor: "#fff", fillOpacity: 1, weight: 2,
+    radius: 2, color: "#ff4d4d", fillColor: "#fff", fillOpacity: 0.5, weight: 1, opacity: 0.4,
   }),
 }).addTo(map);
-// Station markers, straight from feet_markers.geojson: each feature is a
+// Station ticks, straight from feet_markers.geojson: each feature is a
 // LineString perpendicular to the quay, running from a nub on the concrete out
 // into the channel (built with the real water-side normal, so direction/
-// position match the port's "Wharf Stationing" aerial). Labels use the Dock No.
-// value at the water end. Major = every 100 ft (labelled, bold); minor = 50 ft.
+// position match the port's "Wharf Stationing with Aerial" exhibit). Drawn as
+// thin uniform light lines every 100 ft, labelled in POPA stationing
+// (STA "X+YY") at the water end — the same reference the exhibit uses.
 const feetLayer = L.geoJSON(null, {
-  style: (f) => f.properties.major
-    ? { color: "#ffcf1f", weight: 2.5, opacity: 0.95 }
-    : { color: "#ffcf1f", weight: 1.2, opacity: 0.6 },
+  style: () => ({ color: "#f4f4f4", weight: 1, opacity: 0.85 }),
   onEachFeature: (f, layer) => {
     if (!f.properties.label) return;
     const co = f.geometry.coordinates;
@@ -259,6 +392,28 @@ const feetLayer = L.geoJSON(null, {
       }),
       interactive: false,
     }).addTo(feetLayer);
+  },
+}).addTo(map);
+// Yellow quay-face ticks, from yellow_markers.geojson — the exhibit's second
+// tick series. Referenced from the NE end (Berth 1) = 0+00, increasing SW, one
+// tick every 50 ft along the whole face. Each tick sits ON the wharf, running
+// from the quay edge landward onto the apron (vs. the long POPA lines into the
+// channel); the round hundreds carry a yellow label on the landward (dock) end,
+// the 50-ft minors are drawn thinner and unlabelled.
+const yellowLayer = L.geoJSON(null, {
+  style: (f) => ({ color: "#ffd000", weight: f.properties.major ? 2 : 1, opacity: 0.9 }),
+  onEachFeature: (f, layer) => {
+    if (!f.properties.label) return;
+    const co = f.geometry.coordinates;
+    const land = co[0];                            // dock end of the tick
+    L.marker([land[1], land[0]], {
+      icon: L.divIcon({
+        className: "yk-label",
+        html: `<span class="lbl">${f.properties.label}</span>`,
+        iconSize: [0, 0],
+      }),
+      interactive: false,
+    }).addTo(yellowLayer);
   },
 }).addTo(map);
 const vesselLayer = L.layerGroup().addTo(map);
@@ -308,6 +463,10 @@ async function loadReferenceGeo() {
   try {
     const fm = await api("/static/gis/feet_markers.geojson");
     feetLayer.addData(fm);
+  } catch (e) { /* optional */ }
+  try {
+    const ym = await api("/static/gis/yellow_markers.geojson");
+    yellowLayer.addData(ym);
   } catch (e) { /* optional */ }
   try {
     const cl = await api("/static/gis/centerline.geojson");
@@ -374,6 +533,72 @@ async function loadPositions() {
     }
   } catch (e) { /* no positions */ }
 }
+
+// --- Berth requests (read) -------------------------------------------------
+async function loadRequests() {
+  const el = document.getElementById("requests");
+  try {
+    const rs = await api("/reservations?status=requested&limit=25");
+    if (!rs.length) { el.innerHTML = '<div class="empty">none yet</div>'; return; }
+    const fmtDate = (s) => s ? new Date(s).toLocaleDateString() : "—";
+    el.innerHTML = rs.map((r) => `
+      <div class="card req-card">
+        <div class="name">${r.vessel_name || "(unnamed)"} ${r.vessel_imo ? `<span style="color:var(--muted);font-weight:400">IMO ${r.vessel_imo}</span>` : ""}</div>
+        <div class="meta">ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${r.source}</div>
+        <div class="meta">${r.station_unassigned ? "berth unassigned" : `POPA ${fmtSta(r.station_lo)}–${fmtSta(r.station_hi)}`}${r.cargo ? " · " + r.cargo : ""}</div>
+      </div>`).join("");
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+  }
+}
+
+// --- Berth requests (write) ------------------------------------------------
+(function () {
+  const form = document.getElementById("berthRequestForm");
+  if (!form) return;
+  const result = document.getElementById("brResult");
+  const btn = document.getElementById("brSubmit");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    result.className = "result";
+    btn.disabled = true; btn.textContent = "Recording…";
+
+    // Build a typed JSON payload: skip blanks, coerce numbers, bunkers->bool.
+    const numFields = new Set(["imo", "length_ft", "beam_ft", "draft_ft", "deadweight_lbs", "inbound_tons", "outbound_tons"]);
+    const payload = {};
+    for (const [k, v] of new FormData(form).entries()) {
+      if (k === "bunkers") continue;            // handled below
+      if (v === "" || v == null) continue;
+      payload[k] = numFields.has(k) ? Number(v) : v;
+    }
+    payload.bunkers = form.elements.bunkers.checked;
+
+    try {
+      const r = await fetch("/intake/berth-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : ("HTTP " + r.status));
+      result.className = "result ok";
+      const msg = data.duplicate
+        ? "Already on file — duplicate request, nothing added."
+        : `Recorded. Reservation #${data.reservation_id ?? "—"} (requested), vessel #${data.vessel_id ?? "—"}.`;
+      const warns = (data.warnings && data.warnings.length)
+        ? `<span class="warn">⚠ ${data.warnings.join("; ")}</span>` : "";
+      result.innerHTML = msg + warns;
+      if (!data.duplicate) form.reset();
+      loadRequests(); loadVessels(); loadStats();
+    } catch (err) {
+      result.className = "result err";
+      result.textContent = "Failed: " + err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = "Record berth request";
+    }
+  });
+})();
 
 // --- Click-to-station probe ------------------------------------------------
 map.on("click", async (e) => {
@@ -470,6 +695,7 @@ loadReferenceGeo();
 loadStats();
 loadSegments();
 loadVessels();
+loadRequests();
 loadPositions();
 setInterval(() => { loadStats(); loadPositions(); }, 15000);
 </script>
