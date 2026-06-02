@@ -671,11 +671,16 @@ const yellowLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 const vesselLayer = L.layerGroup().addTo(map);
+// All vessels in the bbox as plain red dots; hover shows the vessel name.
+// Populated from the same /positions/recent fetch as vesselLayer (deduped per
+// MMSI). Toggleable in the layer control below.
+const aisDotLayer = L.layerGroup().addTo(map);
 
 // Show/hide toggles for the reference overlays. Each layer (and its child
 // label markers) is added to the map above, so unchecking removes the ticks/
 // labels/berths together. Kept expanded so the toggles are visible at a glance.
 L.control.layers(null, {
+  "All vessels (red dots)": aisDotLayer,
   "Berths": berthLayer,
   "Berthing zone (apron)": apronLayer,
   "Dock markers (yellow)": yellowLayer,
@@ -870,6 +875,7 @@ async function loadPositions() {
   try {
     const ps = await api("/positions/recent?limit=500");
     vesselLayer.clearLayers();
+    aisDotLayer.clearLayers();
     const seen = new Set();
     for (const p of ps) {
       if (p.mmsi && seen.has(p.mmsi)) continue; // most-recent per vessel
@@ -885,6 +891,12 @@ async function loadPositions() {
         `SOG ${p.sog ?? "—"} kn${moored ? " · <b>moored</b>" : ""}<br>` +
         `${p.msg_ts ? new Date(p.msg_ts).toLocaleString() : ""}`
       ).addTo(vesselLayer);
+      // Plain red dot for the "all vessels" layer; name shown on hover.
+      L.circleMarker([p.lat, p.lon], {
+        radius: 5, weight: 1, color: "#ff3b30", fillColor: "#ff3b30", fillOpacity: 0.85,
+      }).bindTooltip(p.vessel_name || ("MMSI " + (p.mmsi ?? "?")), {
+        direction: "top", offset: [0, -4],
+      }).addTo(aisDotLayer);
     }
   } catch (e) { /* no positions */ }
 }
