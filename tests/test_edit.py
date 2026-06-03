@@ -333,6 +333,35 @@ def test_cancel_and_delete(client):
     assert client.delete(f"/reservations/{rid}").status_code == 404
 
 
+def test_cancel_clears_placement(client, db_session):
+    bid = _add_berth(db_session, name="Test Berth Cancel", lo=351.0, hi=1107.3)
+    rid = client.post("/reservations", json={
+        "etb": "2026-09-05T00:00:00Z", "status": "tentative", "berth_id": bid,
+    }).json()["id"]
+    placed = _get_reservation(client, rid)
+    assert placed["station_unassigned"] is False and placed["berth_id"] == bid
+
+    # Cancelling frees the berth and the station range (the visit is no longer
+    # alongside); the time window is kept as the historical record.
+    client.patch(f"/reservations/{rid}", json={"status": "cancelled"})
+    got = _get_reservation(client, rid)
+    assert got["status"] == "cancelled"
+    assert got["station_unassigned"] is True and got["berth_id"] is None
+    assert got["t_start"] is not None
+
+
+def test_cancel_with_concurrent_berth_assignment_still_unplaces(client, db_session):
+    bid = _add_berth(db_session, name="Test Berth Cancel2", lo=351.0, hi=1107.3)
+    rid = client.post("/reservations", json={
+        "etb": "2026-09-06T00:00:00Z", "status": "tentative",
+    }).json()["id"]
+
+    # A single edit that both assigns a berth and cancels still ends unplaced.
+    client.patch(f"/reservations/{rid}", json={"berth_id": bid, "status": "cancelled"})
+    got = _get_reservation(client, rid)
+    assert got["station_unassigned"] is True and got["berth_id"] is None
+
+
 def test_confirm_returns_depth_warning(client):
     created = client.post("/reservations", json={
         "etb": "2026-10-01T00:00:00Z", "etd": "2026-10-03T00:00:00Z",

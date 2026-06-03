@@ -456,6 +456,16 @@ def update_reservation(
         else:
             sr = StationRange(empty=False, lo=float(cur.s_lo), hi=float(cur.s_hi))
 
+    # Cancelling drops the placement: a cancelled visit is no longer alongside,
+    # so it must free its berth and station range (an empty range never
+    # conflicts). This overrides any berth/bounds resolved above — e.g. a single
+    # edit that both reassigns a berth and sets status='cancelled' still ends up
+    # unplaced. The time range is kept as the historical record of when it was
+    # meant to occur.
+    if status == "cancelled":
+        berth_id = None
+        sr = StationRange(empty=True)
+
     params: dict = {
         "id": res_id,
         "type": type_,
