@@ -10,113 +10,201 @@
   integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
   crossorigin=""
 />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+  rel="stylesheet"
+/>
+<meta name="color-scheme" content="dark" />
 <style>
   :root {
-    --bg: #0d1b2a;
-    --panel: #16273b;
-    --panel-2: #1d3148;
-    --line: #2a4259;
-    --ink: #e6edf3;
-    --muted: #8aa0b6;
-    --accent: #46b1ff;
-    --good: #3ddc97;
-    --bad: #ff6b6b;
-    --warn: #ffce5a;
+    /* ===== Type — grotesque UI + true monospace for every data readout ===== */
+    --font-ui:   "Archivo", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+    /* ===== Palette — nautical chart / ECDIS night ===== */
+    --bg:      #0a0f14;   /* chart-night base */
+    --panel:   #0f161d;   /* docked panel */
+    --panel-2: #15202b;   /* inset control */
+    --line:    #21323f;   /* hairline divider */
+    --line-2:  #31485a;   /* stronger / hover border */
+
+    --ink:     #e7e3d8;   /* chart-paper off-white */
+    --ink-dim: #aeb8c0;
+    --muted:   #6f7d8a;   /* labels, secondary text */
+
+    /* signal colours — buoys & safety, used sparingly for state */
+    --blue:    #2d8fd0;   /* depth blue  — interactive · confirmed · structure */
+    --green:   #3fae6e;   /* starboard   — good · observed · moored */
+    --amber:   #e0a83a;   /* caution     — requested · live contact · warnings */
+    --red:     #d94f43;   /* port red    — ALERT only: now-line · conflict */
+    --cyan:    #57c7dd;   /* playhead cursor (a tool, not a status) */
+
+    /* reservation status palette (kept in sync with the JS STATUS maps) */
+    --st-observed:  #3fae6e;
+    --st-requested: #e0a83a;
+    --st-tentative: #6f9fb5;
+    --st-confirmed: #2d8fd0;
+    --st-completed: #5b6b78;
+    --st-cancelled: #344452;
+
+    /* spacing (tight) + one small radius */
+    --s1: 2px; --s2: 4px; --s3: 8px; --s4: 12px; --s5: 16px; --s6: 22px;
+    --r: 3px;
+
+    /* legacy aliases so existing inline var() refs keep resolving */
+    --accent: var(--blue);
+    --good:   var(--green);
+    --bad:    var(--red);
+    --warn:   var(--amber);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
-    font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    font: 14px/1.45 var(--font-ui);
     color: var(--ink);
     background: var(--bg);
     display: grid;
     grid-template-rows: auto 1fr;
     height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
+  /* Numeric / identifier readouts use the mono face everywhere. */
+  .mono, td.num, .stat .n, .probe .row b { font-family: var(--font-mono); }
+
+  /* ===== Top status strip — VTS bar, no hero / no gradient ===== */
   header {
-    display: flex; align-items: center; gap: 16px;
-    padding: 12px 18px;
-    background: linear-gradient(90deg, #16273b, #0d1b2a);
+    display: flex; align-items: center; gap: var(--s5);
+    padding: 0 var(--s4); height: 44px;
+    background: var(--panel);
     border-bottom: 1px solid var(--line);
   }
-  header h1 { font-size: 19px; margin: 0; letter-spacing: .2px; }
-  header h1 span { color: var(--muted); font-weight: 400; }
+  #sidebarToggle {
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+    border-radius: var(--r); width: 26px; height: 26px; padding: 0; cursor: pointer;
+    font-size: 13px; display: flex; align-items: center; justify-content: center;
+  }
+  #sidebarToggle:hover { color: var(--ink); border-color: var(--line-2); }
+  header h1 {
+    font-size: 13px; margin: 0; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.6px;
+  }
+  header h1 span { color: var(--muted); font-weight: 500; letter-spacing: .6px; }
+  #clock {
+    margin-left: auto; font-family: var(--font-mono); font-size: 12px;
+    color: var(--ink-dim); letter-spacing: .4px;
+  }
   .badge {
-    margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
-    padding: 5px 11px; border-radius: 999px; font-size: 14px;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 4px 10px; border-radius: var(--r); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .9px; color: var(--muted);
     background: var(--panel-2); border: 1px solid var(--line);
   }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
-  .dot.ok { background: var(--good); box-shadow: 0 0 0 3px rgba(61,220,151,.18); }
-  .dot.down { background: var(--bad); box-shadow: 0 0 0 3px rgba(255,107,107,.18); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--good); box-shadow: 0 0 0 3px rgba(63,174,110,.2); }
+  .dot.down { background: var(--bad); box-shadow: 0 0 0 3px rgba(217,79,67,.2); }
 
-  /* Left sidebar is drag-resizable; --sidebarW persists in localStorage. The
-     middle track is the grab handle between the sidebar and the map/stage. */
-  main { display: grid; grid-template-columns: var(--sidebarW, 340px) 6px 1fr; min-height: 0; }
+  /* Left sidebar is drag-resizable (--sidebarW, persisted) and collapsible via
+     the header toggle (body.sidebar-collapsed). The middle track is the grab
+     handle between the sidebar and the map/stage. */
+  main { display: grid; grid-template-columns: var(--sidebarW, 320px) 5px 1fr; min-height: 0; }
+  body.sidebar-collapsed main { grid-template-columns: 0 5px 1fr; }
+  body.sidebar-collapsed aside { display: none; }
   aside {
-    overflow-y: auto; padding: 16px; border-right: 1px solid var(--line);
-    background: var(--bg);
+    overflow-y: auto; padding: var(--s4); border-right: 1px solid var(--line);
+    background: var(--panel);
   }
   #sidebarResize { cursor: col-resize; background: var(--line); }
-  #sidebarResize:hover { background: var(--accent); }
+  #sidebarResize:hover { background: var(--blue); }
 
   /* Sidebar tabs: Overview / Reservations / Berth requests. Each .tab-panel is
      shown only when active; the panels share the one scrolling aside. */
   nav.tabs {
-    display: flex; gap: 4px; margin: 4px 0 16px;
+    display: flex; gap: 0; margin: 0 0 var(--s4);
     border-bottom: 1px solid var(--line);
   }
   nav.tabs .tab {
     flex: 1; padding: 9px 6px; border: none; background: none; cursor: pointer;
-    color: var(--muted); font: inherit; font-size: 13px; font-weight: 600;
+    color: var(--muted); font-family: var(--font-ui); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .8px;
     border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
   nav.tabs .tab:hover { color: var(--ink); }
-  nav.tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  nav.tabs .tab.active { color: var(--ink); border-bottom-color: var(--blue); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
   /* The map shares the right pane with the timeline drawer, stacked vertically.
      --drawerH is the drawer's expanded height (drag-resizable, persisted). */
   #stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr var(--drawerH, 300px); }
-  #stage.drawer-collapsed { grid-template-rows: 1fr 38px; }
-  #map { min-height: 0; height: 100%; background: #0a131e; }
-
-  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
-  .stat {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 10px; padding: 12px 14px;
+  #stage.drawer-collapsed { grid-template-rows: 1fr 34px; }
+  #map { min-height: 0; height: 100%; background: #060b0f; }
+  /* Custom-tinted basemap: dim + cool the aerial imagery so the chart overlays
+     and signal colours read clearly on top (the "VTS over imagery" look). */
+  .basemap-tinted { filter: saturate(.5) brightness(.62) contrast(1.06) hue-rotate(-6deg); }
+  /* Live coordinate read-out, bottom-left of the map. */
+  #coordHud {
+    position: absolute; left: 10px; bottom: 12px; z-index: 800; pointer-events: none;
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); letter-spacing: .4px;
+    background: rgba(10,15,20,.8); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 4px 9px;
   }
-  .stat .n { font-size: 28px; font-weight: 600; }
-  .stat .l { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  #coordHud .k { color: var(--muted); }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin-bottom: var(--s5); }
+  .stat {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 10px 12px;
+  }
+  .stat .n { font-size: 26px; font-weight: 600; line-height: 1; }
+  .stat .l { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-top: 5px; }
 
   h2 {
-    font-size: 14px; text-transform: uppercase; letter-spacing: .8px;
-    color: var(--muted); margin: 22px 0 8px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin: var(--s6) 0 var(--s3);
+    padding-bottom: 5px; border-bottom: 1px solid var(--line);
   }
   .card {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 9px 11px; margin-bottom: var(--s2);
   }
   .card .name { font-weight: 600; }
-  .card .meta { color: var(--muted); font-size: 14px; margin-top: 2px; }
+  .card .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .card .meta b { font-family: var(--font-mono); color: var(--ink-dim); font-weight: 500; }
   .empty { color: var(--muted); font-style: italic; padding: 8px 2px; }
 
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 500; font-size: 13px; text-transform: uppercase; letter-spacing: .5px; }
-  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; }
+  td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
 
   .probe {
     background: var(--panel-2); border: 1px solid var(--line);
-    border-radius: 10px; padding: 12px; margin-top: 6px;
+    border-radius: var(--r); padding: 11px; margin-top: 6px;
   }
-  .probe .hint { color: var(--muted); font-size: 14px; }
-  .probe .row { display: flex; justify-content: space-between; padding: 4px 0; }
-  .probe .row b { font-variant-numeric: tabular-nums; }
-  .crosswalk { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
+  .probe .hint { color: var(--muted); font-size: 12px; }
+  .probe .row { display: flex; justify-content: space-between; padding: 3px 0; }
+  .probe .row span { color: var(--muted); font-size: 12px; }
+  .probe .row b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .crosswalk { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
 
-  .leaflet-popup-content { font: 15px system-ui, sans-serif; }
+  .leaflet-popup-content { font: 13px var(--font-ui); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line-2); border-radius: var(--r); box-shadow: none;
+  }
+  .leaflet-popup-content b { letter-spacing: .3px; }
+  .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+  .leaflet-bar, .leaflet-control-layers {
+    background: var(--panel) !important; border: 1px solid var(--line) !important;
+    border-radius: var(--r) !important; box-shadow: none !important;
+  }
+  .leaflet-bar a { background: var(--panel); color: var(--ink); border-bottom: 1px solid var(--line); }
+  .leaflet-bar a:hover { background: var(--panel-2); }
+  .leaflet-control-layers-expanded { color: var(--ink); padding: 8px 10px; font-size: 12px; }
+  .leaflet-control-attribution { background: rgba(10,15,20,.7) !important; }
+  .leaflet-control-attribution, .leaflet-control-attribution a { color: var(--muted) !important; }
   /* Permanent map labels. The tooltip box keeps Leaflet's positioning transform;
      the inner .lbl is counter-rotated so text stays upright when the map rotates. */
   .berth-label, .wh-label, .sta-label, .ft-label, .yk-label {
@@ -139,149 +227,161 @@
     transform: rotate(-90deg); transform-origin: center center;
     white-space: nowrap;
   }
-  .berth-label { color: #2dd4bf; font-weight: 700; font-size: 16px; text-align: center; line-height: 1.15; }
-  .berth-label .sub { color: #99f6e4; font-weight: 500; font-size: 13px; }
-  .wh-label { color: #cdd9e5; font-size: 14px; }
-  .sta-label { color: #ff8a8a; font-size: 13px; font-weight: 600; }
-  .ft-label { color: #f0f0f0; font-size: 12px; font-weight: 600; text-shadow: 0 0 3px #000, 0 1px 2px #000; }
-  .yk-label { color: #ffd000; font-size: 11px; font-weight: 700; text-shadow: 0 0 3px #000, 0 1px 2px #000; }
+  .berth-label { color: var(--blue); font-weight: 700; font-size: 14px; text-align: center; line-height: 1.15; letter-spacing: .5px; }
+  .berth-label .sub { color: var(--ink-dim); font-weight: 500; font-size: 12px; }
+  .wh-label { color: var(--ink-dim); font-size: 12px; }
+  .sta-label { color: var(--red); font-size: 12px; font-weight: 600; font-family: var(--font-mono); }
+  .ft-label { color: var(--ink); font-size: 11px; font-weight: 600; font-family: var(--font-mono); text-shadow: 0 0 3px #000, 0 1px 2px #000; }
+  .yk-label { color: var(--amber); font-size: 11px; font-weight: 700; font-family: var(--font-mono); text-shadow: 0 0 3px #000, 0 1px 2px #000; }
   .berth-label::before, .wh-label::before, .sta-label::before, .ft-label::before, .yk-label::before { display: none; }
-  a { color: var(--accent); }
-  .legend { font-size: 14px; color: var(--muted); margin-top: 6px; }
-  .legend i { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
+  a { color: var(--blue); }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
 
   /* Manual berth-request form */
-  details.intake { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  details.intake { margin-bottom: var(--s4); border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
   details.intake > summary {
-    cursor: pointer; user-select: none; padding: 11px 13px; font-weight: 600;
+    cursor: pointer; user-select: none; padding: 10px 12px; font-weight: 700; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .6px;
     list-style: none; display: flex; align-items: center; gap: 8px;
   }
   details.intake > summary::-webkit-details-marker { display: none; }
-  details.intake > summary::before { content: "＋"; color: var(--accent); font-weight: 700; }
-  details.intake[open] > summary::before { content: "－"; }
-  details.intake > summary .sub { color: var(--muted); font-weight: 400; font-size: 13px; }
-  .intake form { padding: 4px 13px 13px; }
-  .intake fieldset { border: none; border-top: 1px dashed var(--line); margin: 0; padding: 10px 0 0; }
-  .intake legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; padding: 0; }
-  .intake label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
-  .intake label .req { color: var(--warn); }
+  details.intake > summary::before { content: "+"; color: var(--blue); font-weight: 700; font-family: var(--font-mono); }
+  details.intake[open] > summary::before { content: "–"; }
+  details.intake > summary .sub { color: var(--muted); font-weight: 400; font-size: 11px; text-transform: none; letter-spacing: .3px; }
+  .intake form { padding: 4px 12px 12px; }
+  .intake fieldset { border: none; border-top: 1px solid var(--line); margin: 0; padding: 10px 0 0; }
+  .intake legend { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .8px; padding: 0; }
+  .intake label { display: block; font-size: 10px; color: var(--muted); margin: 8px 0 3px; text-transform: uppercase; letter-spacing: .4px; }
+  .intake label .req { color: var(--amber); }
   .intake input[type=text], .intake input[type=number], .intake input[type=date], .intake input[type=datetime-local], .intake select {
-    width: 100%; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line);
-    background: var(--panel-2); color: var(--ink); font: inherit; font-size: 14px;
+    width: 100%; padding: 6px 8px; border-radius: var(--r); border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 13px;
   }
+  .intake input:focus, .intake select:focus,
+  .edit-form input:focus, .edit-form select:focus,
+  .filter-bar select:focus { outline: none; border-color: var(--blue); }
   .intake .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
   .intake .grid3 { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 0 10px; }
-  .intake .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; color: var(--ink); }
+  .intake .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--ink); }
   .intake .check input { width: auto; }
   .intake button {
-    margin-top: 14px; width: 100%; padding: 10px; border: none; border-radius: 8px;
-    background: var(--accent); color: #04243d; font: inherit; font-weight: 700; cursor: pointer;
+    margin-top: 14px; width: 100%; padding: 9px; border: 1px solid var(--blue); border-radius: var(--r);
+    background: var(--blue); color: #04243d; font-family: var(--font-ui); font-weight: 700; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .8px; cursor: pointer;
   }
   .intake button:disabled { opacity: .6; cursor: default; }
-  .intake .result { margin-top: 10px; font-size: 14px; padding: 9px 11px; border-radius: 8px; display: none; }
-  .intake .result.ok { background: rgba(61,220,151,.12); border: 1px solid var(--good); color: var(--good); display: block; }
-  .intake .result.err { background: rgba(255,107,107,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
-  .intake .result .warn { color: var(--warn); display: block; margin-top: 4px; font-size: 13px; }
-  .req-card .meta b { color: var(--ink); font-weight: 600; }
+  .intake button#brCancelEdit { background: var(--panel-2); color: var(--ink); border-color: var(--line); }
+  .intake .result { margin-top: 10px; font-size: 12px; padding: 8px 10px; border-radius: var(--r); display: none; }
+  .intake .result.ok { background: rgba(63,174,110,.12); border: 1px solid var(--good); color: var(--good); display: block; }
+  .intake .result.err { background: rgba(217,79,67,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
+  .intake .result .warn { color: var(--warn); display: block; margin-top: 4px; font-size: 12px; }
+  .req-card .meta b { color: var(--ink); font-weight: 600; font-family: var(--font-mono); }
 
   /* Edit surface (vessels + reservations) */
-  .filter-bar { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
-  .filter-bar label { font-size: 12px; color: var(--muted); }
+  .filter-bar { margin: 0 0 var(--s3); display: flex; align-items: center; gap: 8px; }
+  .filter-bar label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
   .filter-bar select {
-    padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
-    background: var(--panel-2); color: var(--ink); font: inherit; font-size: 13px;
+    padding: 5px 8px; border-radius: var(--r); border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font-family: var(--font-ui); font-size: 12px;
   }
   .status-badge {
-    display: inline-block; padding: 1px 7px; border-radius: 999px;
-    font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .4px; color: #04121f; vertical-align: 1px;
+    display: inline-block; padding: 1px 7px; border-radius: var(--r);
+    font-family: var(--font-ui); font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .6px; color: #04121f; vertical-align: 1px;
   }
-  .row-actions { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+  .row-actions { display: flex; gap: 5px; margin-top: 9px; flex-wrap: wrap; }
   .btn-sm {
-    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer;
+    background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 4px 9px; font-family: var(--font-ui); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .5px; cursor: pointer;
   }
-  .btn-sm:hover { border-color: var(--accent); }
+  .btn-sm:hover { border-color: var(--blue); color: var(--ink); }
   .btn-sm.danger:hover { border-color: var(--bad); color: var(--bad); }
-  .btn-sm.primary { background: var(--accent); color: #04243d; font-weight: 700; border-color: var(--accent); }
-  .edit-form { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 10px; display: none; }
+  .btn-sm.primary { background: var(--blue); color: #04243d; font-weight: 700; border-color: var(--blue); }
+  .edit-form { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; display: none; }
   .edit-form.open { display: block; }
-  .edit-form label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  .edit-form fieldset { border: none; border-top: 1px solid var(--line); margin: 10px 0 0; padding: 8px 0 0; }
+  .edit-form legend { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .8px; padding: 0; }
+  .edit-form .hint { color: var(--muted); font-size: 11px; }
+  .edit-form label { display: block; font-size: 10px; color: var(--muted); margin: 8px 0 3px; text-transform: uppercase; letter-spacing: .4px; }
   .edit-form input, .edit-form select {
-    width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
-    background: var(--panel-2); color: var(--ink); font: inherit; font-size: 13px;
+    width: 100%; padding: 6px 8px; border-radius: var(--r); border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
   }
   .edit-form .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
-  .edit-form .check { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 13px; color: var(--ink); }
+  .edit-form .check { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: var(--ink); }
   .edit-form .check input { width: auto; }
-  .mini-result { font-size: 13px; margin-top: 8px; padding: 7px 9px; border-radius: 7px; display: none; }
-  .mini-result.ok { background: rgba(61,220,151,.12); border: 1px solid var(--good); color: var(--good); display: block; }
-  .mini-result.err { background: rgba(255,107,107,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
+  .mini-result { font-size: 12px; margin-top: 8px; padding: 7px 9px; border-radius: var(--r); display: none; }
+  .mini-result.ok { background: rgba(63,174,110,.12); border: 1px solid var(--good); color: var(--good); display: block; }
+  .mini-result.err { background: rgba(217,79,67,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
   .mini-result .warn { color: var(--warn); display: block; margin-top: 4px; }
   td.act { text-align: right; }
-  td.act .btn-sm { padding: 2px 8px; font-size: 12px; }
+  td.act .btn-sm { padding: 2px 8px; font-size: 11px; }
 
   /* Berth occupancy timeline drawer */
   #timelineDrawer {
     position: relative; min-height: 0; display: flex; flex-direction: column;
-    background: var(--bg); border-top: 1px solid var(--line);
+    background: var(--panel); border-top: 1px solid var(--line);
   }
   #tlResize {
     position: absolute; top: -3px; left: 0; right: 0; height: 7px; cursor: row-resize; z-index: 5;
   }
-  #tlResize:hover { background: rgba(70,177,255,.25); }
+  #tlResize:hover { background: rgba(45,143,208,.3); }
   .tl-head {
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
-    font-size: 14px;
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 6px 11px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+    font-size: 12px;
   }
-  .tl-head strong { font-size: 14px; }
-  .tl-sub { color: var(--muted); font-size: 13px; }
-  .tl-controls { margin-left: auto; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .tl-head strong { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+  .tl-sub { color: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+  .tl-controls { margin-left: auto; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   .tl-btn {
-    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 7px; padding: 4px 9px; font: inherit; font-size: 13px; cursor: pointer;
+    background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 3px 8px; font-family: var(--font-ui); font-size: 11px; cursor: pointer;
   }
-  .tl-btn:hover { border-color: var(--accent); }
-  .tl-btn.active { background: var(--accent); color: #04243d; font-weight: 700; border-color: var(--accent); }
+  .tl-btn:hover { border-color: var(--blue); color: var(--ink); }
+  .tl-btn.active { background: var(--blue); color: #04243d; font-weight: 700; border-color: var(--blue); }
   .tl-btn.tl-caret { padding: 2px 8px; }
-  .tl-mode { color: var(--accent); font-weight: 700; font-size: 13px; }
-  .tl-chk { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
-  .tl-chk input { accent-color: var(--accent); }
+  .tl-mode { color: var(--blue); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .tl-chk { color: var(--muted); font-size: 11px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .tl-chk input { accent-color: var(--blue); }
   .tl-body { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; }
   #timelineDrawer.tl-collapsed .tl-body { display: none; }
-  .tl-legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 12px; font-size: 12px; color: var(--muted); }
-  .tl-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .tl-legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 5px 11px; font-size: 11px; color: var(--muted); }
+  .tl-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
   .tl-scroll { flex: 1; min-height: 0; overflow: auto; }
   #tlSvg { display: block; }
   .tl-empty { display: none; color: var(--muted); font-style: italic; padding: 14px; }
   .tl-tip {
     position: fixed; z-index: 1000; display: none; max-width: 320px; pointer-events: none;
-    background: var(--panel-2); border: 1px solid var(--accent); border-radius: 8px;
-    padding: 8px 10px; font-size: 13px; box-shadow: 0 6px 22px rgba(0,0,0,.5);
+    background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r);
+    padding: 8px 10px; font-size: 12px; box-shadow: none;
   }
   .tl-tip b { color: var(--ink); }
-  .tl-tip .k { color: var(--muted); }
+  .tl-tip .k { color: var(--muted); font-family: var(--font-mono); }
   /* SVG element classes */
-  .tl-lane-band { fill: var(--panel); opacity: .45; }
-  .tl-lane-band.alt { fill: var(--panel-2); opacity: .35; }
-  .tl-lane-label { fill: var(--ink); font: 600 12px system-ui, sans-serif; }
+  .tl-lane-band { fill: var(--panel-2); opacity: .5; }
+  .tl-lane-band.alt { fill: var(--panel); opacity: .6; }
+  .tl-lane-label { fill: var(--ink-dim); font-family: var(--font-ui); font-weight: 600; font-size: 11px; }
   .tl-lane-label.unassigned { fill: var(--warn); }
   .tl-grid { stroke: var(--line); stroke-width: 1; }
-  .tl-axis-label { fill: var(--muted); font: 11px system-ui, sans-serif; }
+  .tl-axis-label { fill: var(--muted); font-family: var(--font-mono); font-size: 10px; }
   .tl-now { stroke: var(--bad); stroke-width: 1.5; stroke-dasharray: 4 3; }
-  .tl-now-label { fill: var(--bad); font: 600 10px system-ui, sans-serif; }
-  .tl-cursor { stroke: #46e0ff; stroke-width: 2; }
-  .tl-cursor-handle { fill: #46e0ff; stroke: #04121f; stroke-width: 1; cursor: ew-resize; }
+  .tl-now-label { fill: var(--bad); font-family: var(--font-mono); font-weight: 600; font-size: 10px; }
+  .tl-cursor { stroke: var(--cyan); stroke-width: 2; }
+  .tl-cursor-handle { fill: var(--cyan); stroke: #04121f; stroke-width: 1; cursor: ew-resize; }
   #tlSvg { cursor: ew-resize; }
-  #tlSpeed { padding: 3px 4px; }
-  .tl-bar { rx: 3; cursor: pointer; stroke-width: 1; }
-  .tl-bar-label { fill: #04121f; font: 600 11px system-ui, sans-serif; pointer-events: none; }
+  #tlSpeed { padding: 3px 4px; font-family: var(--font-mono); }
+  .tl-bar { rx: 2; cursor: pointer; stroke-width: 1; }
+  .tl-bar-label { fill: #04121f; font-family: var(--font-ui); font-weight: 600; font-size: 11px; pointer-events: none; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Port of Port Arthur <span>· Berth &amp; Dredging Data Layer</span></h1>
+  <button id="sidebarToggle" type="button" title="Collapse / expand the panel" aria-label="Toggle side panel">⇤</button>
+  <h1>Port of Port Arthur <span>· Berth &amp; Dredging VTS</span></h1>
+  <span id="clock">—</span>
   <div class="badge"><span id="statusDot" class="dot"></span><span id="statusText">checking…</span></div>
 </header>
 
@@ -454,7 +554,7 @@
   <div id="sidebarResize" title="Drag to resize sidebar"></div>
 
   <div id="stage">
-    <div id="map"></div>
+    <div id="map"><div id="coordHud"><span class="k">LAT —  LON —</span></div></div>
 
     <!-- ===== Berth occupancy timeline (Gantt drawer under the map) ===== -->
     <section id="timelineDrawer" class="tl-collapsed">
@@ -502,6 +602,23 @@
 <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <script>
 const api = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(p + " → " + r.status); return r.json(); });
+
+// Design tokens, read once from the CSS custom properties so the JS-drawn layers
+// (Leaflet styles, the SVG timeline, vessel outlines) share the stylesheet's
+// palette — no duplicated hex. The colour tokens are literal values (no nested
+// var()), so getPropertyValue returns a usable colour string.
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const PAL = {
+  bg: cssVar("--bg"), panel: cssVar("--panel"), panel2: cssVar("--panel-2"),
+  line: cssVar("--line"), ink: cssVar("--ink"), inkDim: cssVar("--ink-dim"), muted: cssVar("--muted"),
+  blue: cssVar("--blue"), green: cssVar("--green"), amber: cssVar("--amber"),
+  red: cssVar("--red"), cyan: cssVar("--cyan"),
+};
+const STATUS_COLORS = {
+  observed: cssVar("--st-observed"), requested: cssVar("--st-requested"),
+  tentative: cssVar("--st-tentative"), confirmed: cssVar("--st-confirmed"),
+  completed: cssVar("--st-completed"), cancelled: cssVar("--st-cancelled"),
+};
 const fmtSta = (ft) => {
   if (ft === null || ft === undefined) return "—";
   const neg = ft < 0 ? "-" : "";
@@ -514,10 +631,7 @@ const fmtSta = (ft) => {
 const esc = (v) => (v == null ? "" : String(v).replace(/[&<>"']/g, (c) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
 // Status -> badge colour (mirrors the occupancy-timeline palette).
-const RES_STATUS_COLOR = {
-  observed: "#3ddc97", requested: "#ffce5a", tentative: "#46b1ff",
-  confirmed: "#7c5cff", completed: "#5a6b7d", cancelled: "#39495a",
-};
+const RES_STATUS_COLOR = STATUS_COLORS;   // status -> badge colour (chart palette)
 let VESSELS = [];   // last-fetched vessel list (id/name/dims), for edit + the new-reservation picker
 // JSON write helper: returns {ok, status, data}; 204 (delete) has no body.
 async function apiWrite(method, url, body) {
@@ -577,18 +691,19 @@ function applyWharfBearing(coords) {
 }
 // Aerial imagery, to match the port's "Wharf Stationing with Aerial" exhibit.
 L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-  maxZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics",
+  maxZoom: 19, className: "basemap-tinted",
+  attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics",
 }).addTo(map);
 
 const wharfLayer = L.geoJSON(null, {
-  style: { color: "#46b1ff", weight: 5, opacity: 0.9 },
+  style: { color: PAL.blue, weight: 4, opacity: 0.95 },
   onEachFeature: (f, layer) => {
     const p = f.properties;
     layer.bindPopup(`<b>${p.name}</b><br>POPA ${fmtSta(p.popa_sta_start)} → ${fmtSta(p.popa_sta_end)}`);
   },
 }).addTo(map);
 const berthLayer = L.geoJSON(null, {
-  style: { color: "#2dd4bf", weight: 2, fillColor: "#2dd4bf", fillOpacity: 0.18 },
+  style: { color: PAL.blue, weight: 1, dashArray: "3 3", fillColor: PAL.blue, fillOpacity: 0.06 },
   onEachFeature: (f, layer) => {
     const p = f.properties;
     const rng = BERTH_STA[p.name];
@@ -600,7 +715,7 @@ const berthLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 const warehouseLayer = L.geoJSON(null, {
-  style: { color: "#8aa0b6", weight: 1, fillColor: "#33485f", fillOpacity: 0.35 },
+  style: { color: PAL.muted, weight: 1, fillColor: "#1b2935", fillOpacity: 0.4 },
   onEachFeature: (f, layer) => {
     const p = f.properties;
     layer.bindTooltip(`<span class="lbl">${p.label || p.name}</span>`, { permanent: true, direction: "center", className: "wh-label" });
@@ -612,7 +727,7 @@ const warehouseLayer = L.geoJSON(null, {
 // symmetric centerline buffer). Drawn as a faint teal fill so it reads as a zone,
 // not a feature.
 const apronLayer = L.geoJSON(null, {
-  style: { color: "#2dd4bf", weight: 1, opacity: 0.6, fillColor: "#2dd4bf", fillOpacity: 0.10, dashArray: "4 4" },
+  style: { color: PAL.green, weight: 1, opacity: 0.6, fillColor: PAL.green, fillOpacity: 0.10, dashArray: "4 4" },
   onEachFeature: (f, layer) => {
     const p = f.properties || {};
     layer.bindPopup(`<b>Berthing zone (apron)</b><br>${p.inland_ft ?? "?"} ft inland · ${p.water_ft ?? "?"} ft water`);
@@ -621,9 +736,9 @@ const apronLayer = L.geoJSON(null, {
 // The quay-face centerline is kept faint — the exhibit shows no drawn line, the
 // ticks read off the photo's quay edge. (Still loaded: it drives the bearing.)
 const centerlineLayer = L.geoJSON(null, {
-  style: { color: "#ff4d4d", weight: 1.5, opacity: 0.35 },
+  style: { color: PAL.muted, weight: 1.5, opacity: 0.35 },
   pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-    radius: 2, color: "#ff4d4d", fillColor: "#fff", fillOpacity: 0.5, weight: 1, opacity: 0.4,
+    radius: 2, color: PAL.muted, fillColor: PAL.ink, fillOpacity: 0.5, weight: 1, opacity: 0.4,
   }),
 }).addTo(map);
 // Station ticks, straight from feet_markers.geojson: each feature is a
@@ -633,7 +748,7 @@ const centerlineLayer = L.geoJSON(null, {
 // thin uniform light lines every 100 ft, labelled in POPA stationing
 // (STA "X+YY") at the water end — the same reference the exhibit uses.
 const feetLayer = L.geoJSON(null, {
-  style: () => ({ color: "#f4f4f4", weight: 1, opacity: 0.85 }),
+  style: () => ({ color: PAL.inkDim, weight: 1, opacity: 0.8 }),
   onEachFeature: (f, layer) => {
     if (!f.properties.label) return;
     const co = f.geometry.coordinates;
@@ -656,7 +771,7 @@ const feetLayer = L.geoJSON(null, {
 // hundreds carry a yellow Dock No. label on the landward (dock) end, the 50-ft
 // minors are drawn thinner and unlabelled.
 const yellowLayer = L.geoJSON(null, {
-  style: (f) => ({ color: "#ffd000", weight: f.properties.major ? 2 : 1, opacity: 0.9 }),
+  style: (f) => ({ color: PAL.amber, weight: f.properties.major ? 2 : 1, opacity: 0.95 }),
   onEachFeature: (f, layer) => {
     if (!f.properties.label) return;
     const co = f.geometry.coordinates;
@@ -681,7 +796,7 @@ const aisDotLayer = L.layerGroup().addTo(map);
 // label markers) is added to the map above, so unchecking removes the ticks/
 // labels/berths together. Kept expanded so the toggles are visible at a glance.
 L.control.layers(null, {
-  "All vessels (red dots)": aisDotLayer,
+  "AIS contacts": aisDotLayer,
   "Berths": berthLayer,
   "Berthing zone (apron)": apronLayer,
   "Dock markers (yellow)": yellowLayer,
@@ -715,7 +830,7 @@ async function loadBbox() {
   try {
     const b = await api("/config/bbox");
     const bounds = [[b.sw.lat, b.sw.lon], [b.ne.lat, b.ne.lon]];
-    L.rectangle(bounds, { color: "#46b1ff", weight: 1, dashArray: "5 5", fill: false }).addTo(map);
+    L.rectangle(bounds, { color: PAL.blue, weight: 1, dashArray: "5 5", fill: false }).addTo(map);
   } catch (e) { /* keep default view */ }
 }
 
@@ -784,8 +899,8 @@ async function loadVessels() {
     const vs = await api("/vessels?limit=25");
     VESSELS = vs;
     if (!vs.length) { el.innerHTML = '<div class="empty">no vessels yet — run AIS ingestion</div>'; return; }
-    el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA</th><th></th></tr></thead><tbody>${
-      vs.map((v) => `<tr><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa ?? "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`).join("")
+    el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA (ft)</th><th></th></tr></thead><tbody>${
+      vs.map((v) => `<tr><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa != null ? Math.round(Number(v.loa) * 3.280839895) : "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`).join("")
     }</tbody></table>`;
     el.querySelectorAll("[data-edit-vessel]").forEach((b) =>
       b.addEventListener("click", () => openVesselEditor(Number(b.dataset.editVessel))));
@@ -870,8 +985,8 @@ async function loadPositions() {
       const moored = (p.sog ?? 99) < 0.5;
       L.circleMarker([p.lat, p.lon], {
         radius: 6, weight: 1.5,
-        color: moored ? "#3ddc97" : "#46b1ff",
-        fillColor: moored ? "#3ddc97" : "#46b1ff",
+        color: moored ? PAL.green : PAL.blue,
+        fillColor: moored ? PAL.green : PAL.blue,
         fillOpacity: 0.55,
       }).bindPopup(
         `<b>${p.vessel_name || "(unnamed)"}</b><br>MMSI ${p.mmsi ?? "—"}<br>` +
@@ -880,7 +995,7 @@ async function loadPositions() {
       ).addTo(vesselLayer);
       // Plain red dot for the "all vessels" layer; name shown on hover.
       L.circleMarker([p.lat, p.lon], {
-        radius: 5, weight: 1, color: "#ff3b30", fillColor: "#ff3b30", fillOpacity: 0.85,
+        radius: 5, weight: 1, color: PAL.amber, fillColor: PAL.amber, fillOpacity: 0.85,
       }).bindTooltip(p.vessel_name || ("MMSI " + (p.mmsi ?? "?")), {
         direction: "top", offset: [0, -4],
       }).addTo(aisDotLayer);
@@ -1363,8 +1478,8 @@ map.on("click", async (e) => {
 // crosswalk.geo_to_station. Only 'observed' (AIS ground truth) and 'confirmed'
 // reservations are drawn.
 (function () {
-  const STATUS = { observed: "#3ddc97", confirmed: "#7c5cff" };
-  const DREDGE = "#ff8a5a";
+  const STATUS = { observed: STATUS_COLORS.observed, confirmed: STATUS_COLORS.confirmed };
+  const DREDGE = PAL.amber;
   const FT_PER_M = 3.280839895;
 
   const shipLayer = L.layerGroup().addTo(map);
@@ -1500,11 +1615,8 @@ const loadTimeline = (function () {
   const H = 3600e3, DAY = 24 * H;
 
   // status -> colour; dredge overrides by type. Mirrors the reservation enums.
-  const STATUS = {
-    observed:  "#3ddc97", requested: "#ffce5a", tentative: "#46b1ff",
-    confirmed: "#7c5cff", completed: "#5a6b7d", cancelled: "#39495a",
-  };
-  const DREDGE = "#ff8a5a";
+  const STATUS = STATUS_COLORS;
+  const DREDGE = PAL.amber;
   const LEGEND = [
     ["observed", "Observed (AIS)"], ["requested", "Requested"],
     ["tentative", "Tentative"], ["confirmed", "Confirmed"],
@@ -1907,6 +2019,35 @@ const loadTimeline = (function () {
     localStorage.setItem("sidebarW", parseInt(mainEl.style.getPropertyValue("--sidebarW")) || 340);
     if (typeof map !== "undefined" && map.invalidateSize) setTimeout(() => map.invalidateSize(), 0);
   });
+})();
+
+// --- Header clock (Central), sidebar collapse, map coordinate read-out -------
+(function () {
+  const c = document.getElementById("clock");
+  if (!c) return;
+  const tick = () => { c.textContent = new Date().toLocaleString(undefined, {
+    timeZone: CENTRAL_TZ, month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) + " CT"; };
+  tick(); setInterval(tick, 1000);
+})();
+(function () {
+  const btn = document.getElementById("sidebarToggle");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const collapsed = document.body.classList.toggle("sidebar-collapsed");
+    btn.textContent = collapsed ? "⇥" : "⇤";
+    if (typeof map !== "undefined" && map.invalidateSize) setTimeout(() => map.invalidateSize(), 0);
+  });
+})();
+(function () {
+  const hud = document.getElementById("coordHud");
+  if (!hud) return;
+  const blank = '<span class="k">LAT —  LON —</span>';
+  map.on("mousemove", (e) => {
+    hud.innerHTML = `<span class="k">LAT</span> ${e.latlng.lat.toFixed(5)}` +
+                    `&nbsp;&nbsp;<span class="k">LON</span> ${e.latlng.lng.toFixed(5)}`;
+  });
+  map.on("mouseout", () => { hud.innerHTML = blank; });
 })();
 
 // --- Boot ------------------------------------------------------------------
