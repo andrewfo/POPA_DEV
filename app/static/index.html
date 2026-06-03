@@ -1486,6 +1486,15 @@ function wireResCards(container) {
     payload.bunkers = form.elements.bunkers.checked;
 
     const editing = editingId;
+    // Guard a content-empty NEW request: the native `required` attributes
+    // normally block this, but never POST a blank form (which would land a
+    // stray empty berth-request card). Editing in place is always allowed.
+    if (!editing && !payload.vessel) {
+      result.className = "result err";
+      result.textContent = "Enter at least a vessel name before recording a request.";
+      btn.disabled = false; btn.textContent = "Record berth request";
+      return;
+    }
     const [method, url] = editing
       ? ["PATCH", `/intake/berth-requests/${editing}`]
       : ["POST", "/intake/berth-request"];
@@ -1498,16 +1507,18 @@ function wireResCards(container) {
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : ("HTTP " + r.status));
-      result.className = "result ok";
+      result.className = data.skipped ? "result err" : "result ok";
       const msg = editing
         ? `Updated request #${editing}. Reservation #${data.reservation_id ?? "—"}, vessel #${data.vessel_id ?? "—"}.`
-        : data.duplicate
-          ? "Already on file — duplicate request, nothing added."
-          : `Recorded. Reservation #${data.reservation_id ?? "—"} (requested), vessel #${data.vessel_id ?? "—"}.`;
+        : data.skipped
+          ? "Nothing recorded — the request was empty."
+          : data.duplicate
+            ? "Already on file — duplicate request, nothing added."
+            : `Recorded. Reservation #${data.reservation_id ?? "—"} (requested), vessel #${data.vessel_id ?? "—"}.`;
       const warns = (data.warnings && data.warnings.length)
         ? `<span class="warn">⚠ ${data.warnings.join("; ")}</span>` : "";
       result.innerHTML = msg + warns;
-      if (editing || !data.duplicate) resetForm();
+      if (editing || (!data.duplicate && !data.skipped)) resetForm();
       loadRequests(); loadBerthRequests(); loadVessels(); loadStats();
     } catch (err) {
       result.className = "result err";

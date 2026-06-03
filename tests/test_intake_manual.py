@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import datetime as dt
 
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 
 import pytest
 
+from app.db import get_session
 from app.intake.manual import (
     FEET_PER_M,
     BerthRequestForm,
@@ -20,6 +22,7 @@ from app.intake.manual import (
     record_manual_request,
     update_manual_request,
 )
+from app.main import app
 from app.models import IntakeEvent, Reservation, Vessel
 from app.tz import CENTRAL
 
@@ -192,15 +195,17 @@ def test_missing_etb_lands_intake_without_reservation(db_session):
 def test_edit_overwrites_raw_and_reprojects_reservation(db_session):
     out = record_manual_request(db_session, _form(imo=9777888, draft_ft=31.1))
     rid = out["reservation_id"]
+    ev0, _ = _counts(db_session)
 
     edited = update_manual_request(
         db_session,
         out["intake_event_id"],
         _form(imo=9777888, draft_ft=33.0, inbound_cargo="grain"),
     )
-    # Same rows reused — an edit, not a new request.
+    # Same rows reused — an edit, not a new request (no extra intake_event).
     assert edited["intake_event_id"] == out["intake_event_id"]
     assert edited["reservation_id"] == rid
+    assert _counts(db_session)[0] == ev0
 
     ev = db_session.execute(
         select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
@@ -210,10 +215,55 @@ def test_edit_overwrites_raw_and_reprojects_reservation(db_session):
         select(Reservation).where(Reservation.id == rid)
     ).scalar_one()
     assert res.cargo == "IN: grain (12000 t)"  # reservation re-projected
-    # Draft correction flows to the vessel only where it was NULL (intake keeps
-    # AIS dims authoritative); name/IMO unchanged.
+    # An explicit edit is authoritative: the corrected draft overwrites the
+    # vessel row (unlike the create path, which only fills NULLs).
     v = db_session.execute(select(Vessel).where(Vessel.imo == 9777888)).scalar_one()
     assert v.name == "SAGA ADVENTURE"
+    assert float(v.draft) == round(33.0 / FEET_PER_M, 2)
+
+
+def test_edit_propagates_vessel_name_and_loa(db_session):
+    # Bug #2: changing the name / LOA on a berth request must reach the vessel
+    # row (and therefore the reservations view), even though a vessel already
+    # exists for this IMO.
+    out = record_manual_request(db_session, _form(imo=9881199, vessel="OLD NAME"))
+
+    update_manual_request(
+        db_session,
+        out["intake_event_id"],
+        _form(imo=9881199, vessel="NEW NAME", length_ft=620.0),
+    )
+
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9881199)).scalar_one()
+    assert v.name == "NEW NAME"
+    assert float(v.loa) == round(620.0 / FEET_PER_M, 2)
+
+
+def test_edit_blank_field_keeps_existing_vessel_dim(db_session):
+    # Authoritative-but-not-destructive: a value the operator leaves blank does
+    # NOT wipe the stored dimension (the request form isn't a vessel eraser).
+    out = record_manual_request(db_session, _form(imo=9882200, beam_ft=91.5))
+
+    update_manual_request(
+        db_session,
+        out["intake_event_id"],
+        _form(imo=9882200, beam_ft=None),  # beam cleared on the form
+    )
+
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9882200)).scalar_one()
+    assert float(v.beam) == round(91.5 / FEET_PER_M, 2)  # preserved
+
+
+def test_empty_submission_records_nothing(db_session):
+    # Bug #1 safety net: a content-empty POST (no vessel / imo / etb) must not
+    # land a blank berth-request card.
+    ev0, res0 = _counts(db_session)
+    out = record_manual_request(
+        db_session, BerthRequestForm(source="phone")
+    )
+    assert out["skipped"] is True
+    assert out["intake_event_id"] is None
+    assert _counts(db_session) == (ev0, res0)
 
 
 def test_edit_creates_reservation_when_arrival_date_added(db_session):
@@ -296,3 +346,55 @@ def test_delete_rejects_online_form_rows(db_session):
 def test_delete_missing_event_raises_lookup(db_session):
     with pytest.raises(LookupError):
         delete_manual_request(db_session, 999999)
+
+
+# --- DB: end-to-end through the HTTP endpoints -----------------------------
+@pytest.fixture
+def client(db_session):
+    app.dependency_overrides[get_session] = lambda: db_session
+    # Whole-app HTTP Basic is active iff OPERATOR_USER+PASSWORD are set (blank in
+    # CI -> open). Attach credentials when configured so this runs either way.
+    from app.config import get_settings
+
+    s = get_settings()
+    c = TestClient(app)
+    if s.operator_user and s.operator_password:
+        import base64
+
+        token = base64.b64encode(
+            f"{s.operator_user}:{s.operator_password}".encode()
+        ).decode()
+        c.headers["Authorization"] = f"Basic {token}"
+    try:
+        yield c
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+
+def test_edit_request_endpoint_updates_reservation_view(client, db_session):
+    # The user's scenario: record a request, edit the name through PATCH, and
+    # confirm the Reservations view reflects it — with no extra berth-request row.
+    created = client.post(
+        "/intake/berth-request",
+        json={"source": "phone", "vessel": "OLD NAME", "imo": 9090909,
+              "draft_ft": 31.1, "etb": "2026-07-10T08:00"},
+    )
+    assert created.status_code == 201
+    body = created.json()
+    intake_id, res_id = body["intake_event_id"], body["reservation_id"]
+    ev_before = len(client.get("/intake/berth-requests", params={"limit": 500}).json())
+
+    patched = client.patch(
+        f"/intake/berth-requests/{intake_id}",
+        json={"source": "phone", "vessel": "NEW NAME", "imo": 9090909,
+              "draft_ft": 31.1, "etb": "2026-07-10T08:00"},
+    )
+    assert patched.status_code == 200
+
+    # Reservations view shows the corrected name (bug #2)...
+    rows = client.get("/reservations", params={"limit": 500}).json()
+    res = next(r for r in rows if r["id"] == res_id)
+    assert res["vessel_name"] == "NEW NAME"
+    # ...and no phantom berth-request card was created (bug #1).
+    ev_after = len(client.get("/intake/berth-requests", params={"limit": 500}).json())
+    assert ev_after == ev_before

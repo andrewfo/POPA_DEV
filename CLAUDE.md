@@ -292,13 +292,21 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   duplicate. It is restricted to manual channels (`phone|email|operator`); any
   legacy online-form row stays immutable, and the edit leaves the reservation's
   berth/`station_range`, direction, and `status` alone (the request governs
-  vessel/time/cargo only). `delete_manual_request` / `DELETE
+  vessel/time/cargo only). Unlike the **create** path (which only NULL-fills the
+  vessel to keep AIS dims authoritative), an **edit is authoritative for the
+  vessel record**: a provided name/LOA/beam/draft overwrites
+  (`_upsert_vessel(..., overwrite=True)`, `COALESCE(new, existing)`) so a
+  correction reaches the reservations view — but a field left blank never wipes a
+  stored dimension. A content-empty submission (no vessel/imo/etb) is refused
+  outright (`record_manual_request` returns `skipped`, lands no row) so a stray
+  POST can't create a blank request card. `delete_manual_request` / `DELETE
   /intake/berth-requests/{id}` likewise removes a manual row outright (raw event
   + its projected reservation), same channel restriction. New *channels* still
   never skip the raw landing.
 - The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel
-  edit overwrites the fields it sets (unlike intake, which only fills NULLs to
-  keep AIS dimensions authoritative). Vessel dims are edited in **metres** (the
+  edit overwrites the fields it sets (unlike intake *capture/create*, which only
+  fills NULLs to keep AIS dimensions authoritative — though a manual request
+  *edit* is also authoritative for the vessel, see above). Vessel dims are edited in **metres** (the
   canonical store), not feet. Station ranges are entered in **Dock No. feet** —
   the stationing painted on the wharf (the yellow dock markers on the map), what
   an operator actually reads off the quay — and converted to canonical POPA on

@@ -204,11 +204,22 @@ def normalize_form(form: BerthRequestForm) -> NormalizedRequest:
 
 
 # --- persistence -----------------------------------------------------------
-def _upsert_vessel(session: Session, req: NormalizedRequest) -> int | None:
+def _upsert_vessel(
+    session: Session, req: NormalizedRequest, *, overwrite: bool = False
+) -> int | None:
     """Find-or-create a vessel by IMO (IMO isn't a unique key in this schema —
-    AIS keys on MMSI — so we look it up explicitly). Existing detail is never
-    clobbered: we only fill columns that are currently NULL, leaving
-    AIS-sourced dimensions authoritative."""
+    AIS keys on MMSI — so we look it up explicitly).
+
+    ``overwrite`` chooses how an *existing* vessel's columns are merged:
+
+    - ``False`` (default, the **create** path): never clobber existing detail —
+      only fill columns that are currently NULL (``COALESCE(existing, new)``),
+      leaving AIS-sourced dimensions authoritative.
+    - ``True`` (the **edit** path, ``update_manual_request``): an operator
+      correcting the record is authoritative, so a *provided* value wins
+      (``COALESCE(new, existing)``). A field the operator left blank (``new`` is
+      NULL) still keeps the existing value — the request form isn't the place to
+      wipe a dimension; that's the dedicated edit surface (``app/edit.py``)."""
     if req.imo is None:
         return None  # nothing to key on; reservation carries the name in notes
 
@@ -223,14 +234,17 @@ def _upsert_vessel(session: Session, req: NormalizedRequest) -> int | None:
         "draft": req.draft_m,
     }
     if existing is not None:
+        merged = (
+            # overwrite: new wins when provided, else keep existing.
+            {k: func.coalesce(v, getattr(Vessel, k)) for k, v in fields.items()}
+            if overwrite
+            # default: keep what we already know, only fill NULLs.
+            else {k: func.coalesce(getattr(Vessel, k), v) for k, v in fields.items()}
+        )
         session.execute(
             update(Vessel)
             .where(Vessel.id == existing)
-            .values(
-                # COALESCE(existing, new): keep what we already know.
-                **{k: func.coalesce(getattr(Vessel, k), v) for k, v in fields.items()},
-                updated_at=func.now(),
-            )
+            .values(**merged, updated_at=func.now())
         )
         return existing
 
@@ -281,6 +295,21 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     Returns a summary dict for the API response.
     """
     req = normalize_form(form)
+
+    # 0. Refuse a content-empty submission. With nothing to key, schedule, or
+    #    even name a vessel by, landing it would only create a blank
+    #    berth-request card (and a stray audit row) — never what an operator
+    #    wants. The form marks vessel/imo/draft required, so this only catches a
+    #    stray/empty POST; a real request always carries at least one of these.
+    if req.vessel_name is None and req.imo is None and req.etb is None:
+        return {
+            "skipped": True,
+            "duplicate": False,
+            "intake_event_id": None,
+            "reservation_id": None,
+            "vessel_id": None,
+            "warnings": req.warnings + ["empty request — nothing recorded"],
+        }
 
     # 1. Land the raw request. ON CONFLICT DO NOTHING on the content hash makes a
     #    duplicate submission a no-op; if nothing lands, don't create a second
@@ -426,7 +455,10 @@ def update_manual_request(
         .values(source=req.source, raw=req.raw, dedupe_key=key)
     )
 
-    vessel_id = _upsert_vessel(session, req)
+    # An explicit operator edit is authoritative: a value the operator supplies
+    # (e.g. a corrected name or LOA) overwrites the vessel row, so the change
+    # propagates to the reservation view — unlike the NULL-fill-only create path.
+    vessel_id = _upsert_vessel(session, req, overwrite=True)
     reservation_id = existing.reservation_id
 
     if reservation_id is not None:
