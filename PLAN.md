@@ -247,7 +247,12 @@ Not tied to a single step — pick up as the system matures.
   active iff `OPERATOR_USER`+`OPERATOR_PASSWORD` set; `/health` exempt). Secrets
   via gitignored `.env.prod` (`.env.prod.example` template). Smoke-tested end to
   end: migrate ran 0001→0008 + seeded, api healthy, auth 401/200 correct, AIS
-  ingested. Remaining: TLS upstream, and Docker `secrets:` over the env file.
+  ingested. The host + network playbook is **[`DEPLOY.md`](./DEPLOY.md)**:
+  recommended topology is a 24/7 Linux+Docker host on a private **Tailscale**
+  network (encrypted, free HTTPS via `tailscale serve`, no domain) — so the api
+  port binds to **`127.0.0.1` only** (Tailscale/reverse-proxy is the sole front
+  door; flip to `0.0.0.0` + your own TLS for LAN/public). Remaining: Docker
+  `secrets:` over the env file; backups of the DB volume.
 - Healthcheck that reports last-AIS-message age (stale feed = silent failure).
 
 ### 5.5 Data quality
