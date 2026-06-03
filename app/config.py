@@ -50,11 +50,12 @@ class Settings(BaseSettings):
     graph_login_url: str = "https://login.microsoftonline.com"
 
     # Bounding box around the POPA public wharf (Sabine-Neches waterway).
-    # Snug to the quay (centerline spans lat 29.8541..29.8638, lon
-    # -93.9445..-93.9351) with margin pushed SE onto the channel — the water
-    # side where vessels transit/berth — and kept off the city to the N/E.
-    ais_bbox_sw_lat: float = 29.850
-    ais_bbox_sw_lon: float = -93.946
+    # Snug to the quay on the city side (centerline spans lat 29.8541..29.8638,
+    # lon -93.9445..-93.9351; NE corner kept off the city to the N/E) and pushed
+    # SW out into the navigation channel — the water side where vessels
+    # transit/berth — so the SW corner reaches well into the waterway.
+    ais_bbox_sw_lat: float = 29.823
+    ais_bbox_sw_lon: float = -93.9586
     ais_bbox_ne_lat: float = 29.866
     ais_bbox_ne_lon: float = -93.930
 

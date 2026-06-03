@@ -95,8 +95,11 @@ public wharf on the Sabine-Neches waterway:
 
 | Corner | Latitude | Longitude |
 |--------|----------|-----------|
-| SW     | 29.855   | −93.945   |
-| NE     | 29.885   | −93.920   |
+| SW     | 29.823   | −93.9586  |
+| NE     | 29.866   | −93.930   |
+
+The SW corner reaches out into the navigation channel (the water side where
+vessels transit/berth); the NE corner stays snug to the quay, off the city.
 
 aisstream wants `BoundingBoxes` as `[[[sw_lat, sw_lon], [ne_lat, ne_lon]]]`; the
 config exposes exactly that via `Settings.ais_bounding_box`. Tighten or widen by
