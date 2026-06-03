@@ -375,6 +375,22 @@
   #tlSpeed { padding: 3px 4px; font-family: var(--font-mono); }
   .tl-bar { rx: 2; cursor: pointer; stroke-width: 1; }
   .tl-bar-label { fill: #04121f; font-family: var(--font-ui); font-weight: 600; font-size: 11px; pointer-events: none; }
+
+  /* AIS contacts — a solid dot with an outward-pulsing ring. Colour is the
+     vessel's state: moored = starboard green, underway = port red. Built as a
+     divIcon (not an SVG circleMarker) so the ring can animate via CSS. */
+  .ais-contact .ais-dot, .ais-contact .ais-pulse {
+    position: absolute; left: 0; top: 0; width: 14px; height: 14px;
+    border-radius: 50%; box-sizing: border-box;
+  }
+  .ais-contact .ais-dot { border: 1.5px solid #04121f; }
+  .ais-contact .ais-pulse { animation: ais-pulse 1.8s ease-out infinite; }
+  .ais-contact.moored   .ais-dot, .ais-contact.moored   .ais-pulse { background: var(--green); }
+  .ais-contact.underway .ais-dot, .ais-contact.underway .ais-pulse { background: var(--red); }
+  @keyframes ais-pulse {
+    0%   { transform: scale(1);   opacity: .55; }
+    100% { transform: scale(2.8); opacity: 0; }
+  }
 </style>
 </head>
 <body>
@@ -786,17 +802,22 @@ const yellowLayer = L.geoJSON(null, {
     }).addTo(yellowLayer);
   },
 }).addTo(map);
+// AIS contacts: one pulsing dot per vessel (most-recent position, deduped per
+// MMSI), coloured by state — moored green, underway red. Toggleable as a whole
+// via the "AIS contacts" overlay in the layer control below.
 const vesselLayer = L.layerGroup().addTo(map);
-// All vessels in the bbox as plain red dots; hover shows the vessel name.
-// Populated from the same /positions/recent fetch as vesselLayer (deduped per
-// MMSI). Toggleable in the layer control below.
-const aisDotLayer = L.layerGroup().addTo(map);
+// Pulsing divIcon for a contact; `moored` picks the colour/state class.
+const aisIcon = (moored) => L.divIcon({
+  className: "ais-contact " + (moored ? "moored" : "underway"),
+  html: '<span class="ais-pulse"></span><span class="ais-dot"></span>',
+  iconSize: [14, 14], iconAnchor: [7, 7],
+});
 
 // Show/hide toggles for the reference overlays. Each layer (and its child
 // label markers) is added to the map above, so unchecking removes the ticks/
 // labels/berths together. Kept expanded so the toggles are visible at a glance.
 L.control.layers(null, {
-  "AIS contacts": aisDotLayer,
+  "AIS contacts": vesselLayer,
   "Berths": berthLayer,
   "Berthing zone (apron)": apronLayer,
   "Dock markers (yellow)": yellowLayer,
@@ -977,28 +998,18 @@ async function loadPositions() {
   try {
     const ps = await api("/positions/recent?limit=500");
     vesselLayer.clearLayers();
-    aisDotLayer.clearLayers();
     const seen = new Set();
     for (const p of ps) {
       if (p.mmsi && seen.has(p.mmsi)) continue; // most-recent per vessel
       if (p.mmsi) seen.add(p.mmsi);
       const moored = (p.sog ?? 99) < 0.5;
-      L.circleMarker([p.lat, p.lon], {
-        radius: 6, weight: 1.5,
-        color: moored ? PAL.green : PAL.blue,
-        fillColor: moored ? PAL.green : PAL.blue,
-        fillOpacity: 0.55,
-      }).bindPopup(
+      L.marker([p.lat, p.lon], { icon: aisIcon(moored) }).bindPopup(
         `<b>${p.vessel_name || "(unnamed)"}</b><br>MMSI ${p.mmsi ?? "—"}<br>` +
         `SOG ${p.sog ?? "—"} kn${moored ? " · <b>moored</b>" : ""}<br>` +
         `${p.msg_ts ? new Date(p.msg_ts).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : ""}`
-      ).addTo(vesselLayer);
-      // Plain red dot for the "all vessels" layer; name shown on hover.
-      L.circleMarker([p.lat, p.lon], {
-        radius: 5, weight: 1, color: PAL.amber, fillColor: PAL.amber, fillOpacity: 0.85,
-      }).bindTooltip(p.vessel_name || ("MMSI " + (p.mmsi ?? "?")), {
-        direction: "top", offset: [0, -4],
-      }).addTo(aisDotLayer);
+      ).bindTooltip(p.vessel_name || ("MMSI " + (p.mmsi ?? "?")), {
+        direction: "top", offset: [0, -10],
+      }).addTo(vesselLayer);
     }
   } catch (e) { /* no positions */ }
 }
