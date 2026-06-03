@@ -428,13 +428,24 @@ def update_reservation(
     tr = _time_range(etb, etd)
 
     # Berth + station range. Precedence:
-    #   unassigned -> clear both berth_id and the range;
+    #   cancelled -> drop the placement (free berth + empty range), short-circuit;
+    #   else unassigned -> clear both berth_id and the range;
     #   else a bow placement (promote-from-request) -> stern from the vessel LOA;
     #   else a newly-assigned berth (no explicit bounds) -> its catalog range;
     #   else explicit lo/hi merged over the current range (berth_id unchanged);
     #   else keep the current range (and berth_id).
     has_bounds = "station_lo" in changes or "station_hi" in changes
-    if changes.get("unassigned"):
+    if status == "cancelled":
+        # Cancelling drops the placement entirely: a cancelled visit is no longer
+        # alongside, so it frees its berth and station range (an empty range never
+        # conflicts). Resolved FIRST and short-circuiting the placement branches:
+        # the edit form re-sends the row's existing bow_dock + heading, and a
+        # stale bow placement must neither (a) re-place a cancelled row nor (b)
+        # fail (e.g. unknown LOA -> 422) and block the cancel. The time range is
+        # kept as the historical record of when the visit was meant to occur.
+        berth_id = None
+        sr = StationRange(empty=True)
+    elif changes.get("unassigned"):
         berth_id = None
         sr = StationRange(empty=True)
     elif changes.get("bow_dock") is not None:
@@ -455,16 +466,6 @@ def update_reservation(
             sr = StationRange(empty=True)
         else:
             sr = StationRange(empty=False, lo=float(cur.s_lo), hi=float(cur.s_hi))
-
-    # Cancelling drops the placement: a cancelled visit is no longer alongside,
-    # so it must free its berth and station range (an empty range never
-    # conflicts). This overrides any berth/bounds resolved above — e.g. a single
-    # edit that both reassigns a berth and sets status='cancelled' still ends up
-    # unplaced. The time range is kept as the historical record of when it was
-    # meant to occur.
-    if status == "cancelled":
-        berth_id = None
-        sr = StationRange(empty=True)
 
     params: dict = {
         "id": res_id,

@@ -362,6 +362,25 @@ def test_cancel_with_concurrent_berth_assignment_still_unplaces(client, db_sessi
     assert got["station_unassigned"] is True and got["berth_id"] is None
 
 
+def test_cancel_ignores_resent_bow_placement_without_loa(client, db_session):
+    # Regression: the "Edit placement" form re-sends the row's bow_dock + heading.
+    # On a vessel with no LOA, bow placement can't resolve a stern — it must NOT
+    # 422 and block the cancel. status=cancelled short-circuits placement, so the
+    # stale bow_dock/direction are ignored and the row ends unplaced.
+    vid = _add_vessel(db_session, mmsi=636000077, name="NO LOA")  # loa is NULL
+    rid = client.post("/reservations", json={
+        "etb": "2026-09-07T00:00:00Z", "status": "tentative", "vessel_id": vid,
+    }).json()["id"]
+
+    r = client.patch(f"/reservations/{rid}", json={
+        "status": "cancelled", "bow_dock": 1500.0, "direction": "upstream",
+    })
+    assert r.status_code == 200
+    got = _get_reservation(client, rid)
+    assert got["status"] == "cancelled"
+    assert got["station_unassigned"] is True and got["berth_id"] is None
+
+
 def test_confirm_returns_depth_warning(client):
     created = client.post("/reservations", json={
         "etb": "2026-10-01T00:00:00Z", "etd": "2026-10-03T00:00:00Z",

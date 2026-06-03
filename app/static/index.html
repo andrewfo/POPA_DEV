@@ -1278,6 +1278,7 @@ function resCard(r) {
         <button class="btn-sm" data-act="edit-request">Edit request</button>
         <button class="btn-sm" data-act="edit">Edit placement</button>
         ${r.status === "confirmed" ? '<button class="btn-sm" data-act="unconfirm">Unconfirm</button>' : ""}
+        ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
       </div>
       <form class="edit-form" data-edit-request>
         <fieldset>
@@ -1387,10 +1388,18 @@ function wireResCards(container) {
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "requested" });
       if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); } else alert("Failed: " + writeError(w));
     });
-    // No cancel/delete here: this tab only ever unconfirms (reversible). A true
-    // "this visit isn't happening" is the status dropdown -> cancelled on the
-    // edit form, or the hard delete on the Berth requests tab (which removes the
-    // request and its reservation together — the one place a request is dropped).
+    // Cancel: mark the visit as not happening. Sends ONLY status=cancelled (no
+    // bow/heading), so the server clears the placement — frees the berth, empties
+    // the station range — without re-running bow placement (which could fail on a
+    // vessel with no LOA). The row then drops out of the "active" list and, being
+    // cancelled, is hidden from the timeline by default. Reversible by editing the
+    // status back; a hard delete (row + reservation) lives on the Berth requests tab.
+    const cancelBtn = card.querySelector('[data-act="cancel"]');
+    if (cancelBtn) cancelBtn.addEventListener("click", async () => {
+      if (!confirm("Cancel this reservation? It is removed from the schedule (freed from its berth) and hidden from the timeline. The record is kept.")) return;
+      const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "cancelled" });
+      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); } else alert("Failed: " + writeError(w));
+    });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
