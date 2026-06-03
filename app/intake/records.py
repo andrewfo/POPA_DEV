@@ -76,9 +76,13 @@ def _clean_str(value) -> str | None:
 
 
 def _parse_date(value, warnings: list[str], label: str) -> dt.date | None:
-    """Parse the export's ``M/D/YYYY`` dates. Returns None (with a warning) on
-    anything we can't read; obvious year typos are left for human review, not
-    'corrected' here."""
+    """Parse a request date. Returns None (with a warning) on anything we can't
+    read; obvious year typos are left for human review, not 'corrected' here.
+
+    Accepts both the CSV export's ``M/D/YYYY`` and the ISO-8601 that Microsoft
+    Graph returns for SharePoint date columns (``2026-06-01T07:00:00Z``) — same
+    canonical date, different source wire format. Date understanding stays in
+    this one place; a source adapter only has to hand us the value as a string."""
     s = _clean_str(value)
     if not s:
         return None
@@ -87,6 +91,11 @@ def _parse_date(value, warnings: list[str], label: str) -> dt.date | None:
             return dt.datetime.strptime(s, fmt).date()
         except ValueError:
             continue
+    # ISO 8601 (Graph): tolerate a trailing 'Z' and take the date component.
+    try:
+        return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
     warnings.append(f"unparseable {label}: {s!r}")
     return None
 
