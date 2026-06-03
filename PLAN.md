@@ -245,7 +245,7 @@ Not tied to a single step — pick up as the system matures.
   worker count) → `api` / `ais` / `occupancy`, wired with health + completion
   gates and `restart: unless-stopped`. **Whole-app HTTP Basic** auth (`app/auth.py`,
   active iff `OPERATOR_USER`+`OPERATOR_PASSWORD` set; `/health` exempt). Secrets
-  via gitignored `.env.prod` (`.env.prod.example` template). Smoke-tested end to
+  via gitignored `.env` (`.env.example` template). Smoke-tested end to
   end: migrate ran 0001→0008 + seeded, api healthy, auth 401/200 correct, AIS
   ingested. The host + network playbook is **[`DEPLOY.md`](./DEPLOY.md)**:
   run on a 24/7 Docker host reachable only over a network IT sanctions

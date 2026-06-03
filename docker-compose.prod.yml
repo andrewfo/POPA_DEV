@@ -4,11 +4,11 @@
 # one-shot migrate/seed, the live AIS ingestor, and the occupancy worker — over
 # a Postgres/PostGIS database. Bring up:
 #
-#   cp .env.prod.example .env.prod     # then edit: real DB password, operator
+#   cp .env.example .env               # then edit: real DB password, operator
 #                                      #   credentials, AIS key
 #   docker compose -f docker-compose.prod.yml up -d --build
 #
-# Secrets come from .env.prod (gitignored) injected via `env_file` into each
+# Secrets come from .env (gitignored) injected via `env_file` into each
 # container's environment. For stronger isolation, switch to file-backed Docker
 # `secrets:` (the hardening upgrade over an env file).
 #
@@ -27,7 +27,7 @@ x-app-env: &app-env
 x-app: &app
   build: .
   image: popa-wharf:latest          # built once; reused by every app role
-  env_file: .env.prod
+  env_file: .env
   environment: *app-env
   depends_on:
     db:
@@ -40,7 +40,7 @@ services:
     image: postgis/postgis:16-3.4
     container_name: popa_wharf_db_prod
     restart: unless-stopped
-    env_file: .env.prod             # POSTGRES_USER/PASSWORD/DB straight into the image
+    env_file: .env                  # POSTGRES_USER/PASSWORD/DB straight into the image
     volumes:
       - popa_wharf_pgdata_prod:/var/lib/postgresql/data
     healthcheck:
@@ -81,7 +81,7 @@ services:
       retries: 5
       start_period: 20s
     # CMD in the Dockerfile already runs gunicorn; override WEB_CONCURRENCY via
-    # .env.prod to change the worker count.
+    # .env to change the worker count.
 
   ais:
     <<: *app

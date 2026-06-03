@@ -38,10 +38,10 @@ cd SlackWater
 ## 3. Configure secrets
 
 ```bash
-cp .env.prod.example .env.prod
+cp .env.example .env
 ```
 
-Edit `.env.prod` (it's gitignored — it never leaves the host):
+Edit `.env` (it's gitignored — it never leaves the host):
 
 - `POSTGRES_PASSWORD` — a strong, unique password.
 - `OPERATOR_USER` / `OPERATOR_PASSWORD` — the single login operators use. Setting
@@ -115,7 +115,7 @@ automatically**, existing ones are skipped. That's the whole release process.
 - **Logs:** `docker compose -f docker-compose.prod.yml logs -f [api|ais|occupancy]`
 - **Stop / start:** `... stop` / `... start`. **Tear down:** `... down`
   (add `-v` to also delete the data volume — destructive).
-- **Rotate the operator password:** edit `.env.prod`, then
+- **Rotate the operator password:** edit `.env`, then
   `docker compose -f docker-compose.prod.yml up -d` (recreates the API).
 - **Backups:** the database lives in the `popa_wharf_pgdata_prod` volume.
   Schedule a dump, e.g.

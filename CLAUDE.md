@@ -251,7 +251,7 @@ scripts/
   dev.ps1              # same, for Windows (PowerShell)
 Dockerfile             # production app image (one image runs all four roles); CMD = gunicorn API
 docker-compose.prod.yml# prod stack: db + one-shot migrate/seed + api + ais + occupancy (NOT the dev compose)
-.env.prod.example      # prod secrets/config template (DB password, operator creds, AIS key) -> .env.prod
+.env.example           # single config/secrets template (DB, operator creds, AIS key, prod worker knobs) -> .env
 DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a sanctioned net; Azure/Entra option)
 ```
 

@@ -87,7 +87,7 @@ playbook (reverse proxy + TLS over a sanctioned network). In brief:
 ```bash
 # 1. Secrets: copy and fill in (gitignored). Set a strong DB password, the
 #    operator login, and your AIS key.
-cp .env.prod.example .env.prod
+cp .env.example .env
 
 # 2. Build the image and bring up the full stack:
 #    db + a one-shot migrate/seed + api (gunicorn) + ais ingestor + occupancy.
