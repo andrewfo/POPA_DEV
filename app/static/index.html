@@ -664,6 +664,13 @@ const STATUS_COLORS = {
   tentative: cssVar("--st-tentative"), confirmed: cssVar("--st-confirmed"),
   completed: cssVar("--st-completed"), cancelled: cssVar("--st-cancelled"),
 };
+// Metres -> feet. The canonical store is metres (vessel LOA/beam/draft); feet is
+// display only. One constant so every readout converts identically.
+const FT_PER_M = 3.280839895;
+// SOG (kn) below which a contact reads "stopped". Filled from /config/bbox so the
+// map's green/red colouring uses the exact threshold the server's "moored now"
+// count does; this default holds only until that fetch resolves.
+let MOORED_SOG = 0.5;
 const fmtSta = (ft) => {
   if (ft === null || ft === undefined) return "—";
   const neg = ft < 0 ? "-" : "";
@@ -903,6 +910,7 @@ async function loadStats() {
 async function loadBbox() {
   try {
     const b = await api("/config/bbox");
+    if (typeof b.moored_sog_kn === "number") MOORED_SOG = b.moored_sog_kn;
     const bounds = [[b.sw.lat, b.sw.lon], [b.ne.lat, b.ne.lon]];
     L.rectangle(bounds, { color: PAL.blue, weight: 1, dashArray: "5 5", fill: false }).addTo(map);
   } catch (e) { /* keep default view */ }
@@ -972,7 +980,7 @@ async function loadVessels() {
     el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA (ft)</th><th></th></tr></thead><tbody>${
       vs.map((v) => {
         const loc = v.mmsi != null ? ` class="locatable" data-locate-mmsi="${v.mmsi}" title="Click to locate on the chart"` : "";
-        return `<tr${loc}><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa != null ? Math.round(Number(v.loa) * 3.280839895) : "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`;
+        return `<tr${loc}><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa != null ? Math.round(Number(v.loa) * FT_PER_M) : "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`;
       }).join("")
     }</tbody></table>`;
     el.querySelectorAll("[data-edit-vessel]").forEach((b) =>
@@ -1067,7 +1075,7 @@ async function loadPositions() {
       // Green = moored: stopped (SOG below the berth-enter threshold) AND
       // alongside (in the berthing zone, per the server's apron/buffer test). A
       // vessel stopped mid-channel stays red/underway.
-      const stopped = (p.sog ?? 99) < 0.5;
+      const stopped = (p.sog ?? 99) < MOORED_SOG;
       const moored = stopped && p.alongside;
       const stateNote = moored ? " · <b>moored</b>"
         : (stopped ? " · stopped (off berth)" : "");
@@ -1562,7 +1570,7 @@ map.on("click", async (e) => {
 (function () {
   const STATUS = { observed: STATUS_COLORS.observed, confirmed: STATUS_COLORS.confirmed };
   const DREDGE = PAL.amber;
-  const FT_PER_M = 3.280839895;
+  // FT_PER_M is module-scope (defined near the palette tokens).
 
   const shipLayer = L.layerGroup().addTo(map);
   const toggle = document.getElementById("shipOutlineToggle");

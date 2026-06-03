@@ -4,7 +4,7 @@
 water-side berthing-zone strip — point-in-polygon via ``ST_Contains``) and falls
 back to a symmetric **centerline buffer** (``ST_DWithin`` on geography, metres,
 ``Settings.berth_buffer_m``) for any segment that has no apron seeded yet. Both
-live in the one expression in ``_alongside_sql``; nothing else in the occupancy
+live in the one expression in ``alongside_sql``; nothing else in the occupancy
 package sees geometry — the detector consumes a pre-classified ``alongside``
 boolean. (Apron added in migration 0005; built by
 ``data/gis/build_centerline.py``, seeded by ``app/seed/wharf_seed.py``.)
@@ -35,12 +35,28 @@ class PosRow:
 
 # The predicate. ``seg.apron`` is the digitized berthing-zone polygon (or NULL);
 # ``seg.g`` is the (2D) centerline; ``point_sql`` is the position. Apron wins when
-# present (point-in-polygon); otherwise the metres-buffer of the centerline.
-def _alongside_sql(point_sql: str) -> str:
+# present (point-in-polygon); otherwise the metres-buffer of the centerline. It
+# reads the ``seg`` lateral that ``nearest_segment_lateral`` (or load_samples'
+# CROSS-JOIN variant) supplies, and binds ``:buffer_m``.
+def alongside_sql(point_sql: str) -> str:
     return (
         f"CASE WHEN seg.apron IS NOT NULL "
         f"THEN ST_Contains(seg.apron, {point_sql}) "
         f"ELSE ST_DWithin(seg.g::geography, ({point_sql})::geography, :buffer_m) END"
+    )
+
+
+# The nearest-wharf-segment lateral that ``alongside_sql`` reads (alias ``seg``,
+# columns ``g``/``apron``). LEFT (not CROSS) so a point still returns when no
+# segment is seeded — alongside just comes back NULL/false rather than the row
+# vanishing. Shared by every read-side query that classifies a point (the
+# positions feed and the "moored now" stat) so they can't drift apart.
+def nearest_segment_lateral(point_sql: str) -> str:
+    return (
+        "LEFT JOIN LATERAL ("
+        "  SELECT ST_Force2D(ws.geom) AS g, ws.apron AS apron "
+        f"  FROM wharf_segment ws ORDER BY ws.geom <-> {point_sql} LIMIT 1"
+        ") seg ON true"
     )
 
 
@@ -71,7 +87,7 @@ def load_samples(
             pr.cog AS cog,
             pr.heading AS heading,
             pr.nav_status AS nav_status,
-            {_alongside_sql(point)} AS alongside
+            {alongside_sql(point)} AS alongside
         FROM position_report pr
         CROSS JOIN LATERAL (
             SELECT ST_Force2D(ws.geom) AS g, ws.apron AS apron
