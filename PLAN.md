@@ -9,10 +9,10 @@ contract) and [`README.md`](./README.md) (setup/run). When the two disagree,
 
 ## 1. Where we are today
 
-**Steps 1–5 are complete** (1–4 pushed; step 5 + the items below are in the
-working tree, not yet committed). The repo is a conflict-safe data layer seeded
-from live AIS, with a read-only Leaflet UI and — pulled forward ahead of the
-build order, at the user's request — **berth-request intake _capture_**.
+**Steps 1–5 are complete** (all committed). The repo is a conflict-safe data
+layer seeded from live AIS, with a read-only Leaflet UI and — pulled forward
+ahead of the build order, at the user's request — **berth-request intake
+_capture_**.
 
 | # | Step | Status | Lands in |
 |---|------|--------|----------|
