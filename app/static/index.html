@@ -1180,13 +1180,17 @@ async function loadPositions() {
       const moored = stopped && p.alongside;
       const stateNote = moored ? " · <b>moored</b>"
         : (stopped ? " · stopped (off berth)" : "");
-      const marker = L.marker([p.lat, p.lon], { icon: aisIcon(moored) }).bindPopup(
+      // One info block, shared by the click popup and the hover tooltip, so
+      // hovering a dot shows exactly what clicking it (or a "Recent vessels"
+      // row, which opens this popup) does.
+      const info =
         `<b>${p.vessel_name || "(unnamed)"}</b><br>MMSI ${p.mmsi ?? "—"}<br>` +
         `SOG ${p.sog ?? "—"} kn${stateNote}<br>` +
-        `${p.msg_ts ? new Date(p.msg_ts).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : ""}`
-      ).bindTooltip(p.vessel_name || ("MMSI " + (p.mmsi ?? "?")), {
-        direction: "top", offset: [0, -10],
-      }).addTo(vesselLayer);
+        `${p.msg_ts ? new Date(p.msg_ts).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : ""}`;
+      const marker = L.marker([p.lat, p.lon], { icon: aisIcon(moored) })
+        .bindPopup(info)
+        .bindTooltip(info, { direction: "top", offset: [0, -10] })
+        .addTo(vesselLayer);
       if (p.mmsi != null) POSITION_MARKERS[p.mmsi] = marker;
     }
   } catch (e) { /* no positions */ }
