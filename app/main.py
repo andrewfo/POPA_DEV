@@ -37,7 +37,7 @@ from app.intake.manual import (
     record_manual_request,
     update_manual_request,
 )
-from app.models import PositionReport, Vessel, WharfSegment
+from app.models import Vessel, WharfSegment
 from app.occupancy.alongside import _alongside_sql
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
@@ -299,11 +299,23 @@ def stats(session: Session = Depends(get_session)) -> dict:
             "buffer_m": settings.berth_buffer_m,
         },
     ).scalar_one()
+    # Arrivals in the next 24h = non-cancelled reservations whose ETB (the lower
+    # bound of time_range) falls within [now, now+24h]. The forward-looking view
+    # an operator preps berths against — counterpart to "Moored now" (right now).
+    arrivals_24h = session.execute(
+        text(
+            """
+            SELECT count(*)
+            FROM reservation
+            WHERE status <> 'cancelled'
+              AND lower(time_range) >= now()
+              AND lower(time_range) < now() + interval '24 hours'
+            """
+        )
+    ).scalar_one()
     return {
         "vessels": session.execute(select(func.count(Vessel.id))).scalar_one(),
-        "position_reports": session.execute(
-            select(func.count(PositionReport.id))
-        ).scalar_one(),
+        "arrivals_24h": arrivals_24h,
         "berth_requests": session.execute(
             text("SELECT count(*) FROM intake_event")
         ).scalar_one(),
