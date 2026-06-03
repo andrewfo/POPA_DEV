@@ -394,6 +394,28 @@
     0%   { transform: scale(1);   opacity: .55; }
     100% { transform: scale(2.8); opacity: 0; }
   }
+  /* Transient "locate" halo: a few cyan pings fired when a vessel row in the
+     sidebar is clicked, to find its contact on the chart. Cyan = a tool, not a
+     status (matches the timeline playhead). */
+  .locate-halo span {
+    position: absolute; left: 0; top: 0; width: 46px; height: 46px;
+    margin: -23px 0 0 -23px; border-radius: 50%;
+    border: 2.5px solid var(--cyan);
+    animation: locate-ping 1s ease-out 3;
+  }
+  @keyframes locate-ping {
+    0%   { transform: scale(.35); opacity: 1; }
+    100% { transform: scale(1.4); opacity: 0; }
+  }
+  /* Sidebar vessel rows are click-to-locate; show the affordance. */
+  #vessels tbody tr.locatable { cursor: pointer; }
+  #vessels tbody tr.locatable:hover { background: var(--panel-2); }
+  /* Flash amber when a clicked vessel has no recent AIS contact to locate. */
+  #vessels tbody tr.locate-miss { animation: locate-miss .7s ease-out; }
+  @keyframes locate-miss {
+    0%, 100% { background: transparent; }
+    25%      { background: rgba(224,168,58,.28); }
+  }
 </style>
 </head>
 <body>
@@ -809,6 +831,30 @@ const aisIcon = (moored) => L.divIcon({
   iconSize: [14, 14], iconAnchor: [7, 7],
 });
 
+// MMSI -> the live AIS contact marker, rebuilt each loadPositions(). Lets a
+// sidebar vessel row jump the map to its contact. Separate transient layer for
+// the cyan "locate" halo so we can clear it without touching the contacts.
+let POSITION_MARKERS = {};
+const locateLayer = L.layerGroup().addTo(map);
+
+// Centre the chart on a vessel's most-recent AIS contact and flash a halo over
+// it. Returns false when the vessel has no recent position to locate.
+function locateVesselOnMap(mmsi) {
+  const m = mmsi != null ? POSITION_MARKERS[mmsi] : null;
+  if (!m) return false;
+  const ll = m.getLatLng();
+  map.setView(ll, Math.max(map.getZoom(), 15), { animate: true });
+  m.openPopup();
+  locateLayer.clearLayers();
+  L.marker(ll, {
+    icon: L.divIcon({ className: "locate-halo", html: "<span></span>",
+      iconSize: [0, 0] }),
+    interactive: false, zIndexOffset: -1000,
+  }).addTo(locateLayer);
+  setTimeout(() => locateLayer.clearLayers(), 3200);
+  return true;
+}
+
 // Show/hide toggles for the reference overlays. Each layer (and its child
 // label markers) is added to the map above, so unchecking removes the ticks/
 // labels/berths together. Kept expanded so the toggles are visible at a glance.
@@ -924,10 +970,22 @@ async function loadVessels() {
     VESSELS = vs;
     if (!vs.length) { el.innerHTML = '<div class="empty">no vessels yet — run AIS ingestion</div>'; return; }
     el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA (ft)</th><th></th></tr></thead><tbody>${
-      vs.map((v) => `<tr><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa != null ? Math.round(Number(v.loa) * 3.280839895) : "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`).join("")
+      vs.map((v) => {
+        const loc = v.mmsi != null ? ` class="locatable" data-locate-mmsi="${v.mmsi}" title="Click to locate on the chart"` : "";
+        return `<tr${loc}><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa != null ? Math.round(Number(v.loa) * 3.280839895) : "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`;
+      }).join("")
     }</tbody></table>`;
     el.querySelectorAll("[data-edit-vessel]").forEach((b) =>
-      b.addEventListener("click", () => openVesselEditor(Number(b.dataset.editVessel))));
+      b.addEventListener("click", (e) => { e.stopPropagation(); openVesselEditor(Number(b.dataset.editVessel)); }));
+    // Click a row (anywhere but the Edit button) to centre the chart on that
+    // vessel's live AIS contact and flash a locate halo over it.
+    el.querySelectorAll("tr.locatable").forEach((tr) =>
+      tr.addEventListener("click", () => {
+        if (!locateVesselOnMap(Number(tr.dataset.locateMmsi))) {
+          tr.classList.remove("locate-miss"); void tr.offsetWidth; // restart anim
+          tr.classList.add("locate-miss");
+        }
+      }));
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
@@ -1001,6 +1059,7 @@ async function loadPositions() {
   try {
     const ps = await api("/positions/recent?limit=500");
     vesselLayer.clearLayers();
+    POSITION_MARKERS = {};
     const seen = new Set();
     for (const p of ps) {
       if (p.mmsi && seen.has(p.mmsi)) continue; // most-recent per vessel
@@ -1012,13 +1071,14 @@ async function loadPositions() {
       const moored = stopped && p.alongside;
       const stateNote = moored ? " · <b>moored</b>"
         : (stopped ? " · stopped (off berth)" : "");
-      L.marker([p.lat, p.lon], { icon: aisIcon(moored) }).bindPopup(
+      const marker = L.marker([p.lat, p.lon], { icon: aisIcon(moored) }).bindPopup(
         `<b>${p.vessel_name || "(unnamed)"}</b><br>MMSI ${p.mmsi ?? "—"}<br>` +
         `SOG ${p.sog ?? "—"} kn${stateNote}<br>` +
         `${p.msg_ts ? new Date(p.msg_ts).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : ""}`
       ).bindTooltip(p.vessel_name || ("MMSI " + (p.mmsi ?? "?")), {
         direction: "top", offset: [0, -10],
       }).addTo(vesselLayer);
+      if (p.mmsi != null) POSITION_MARKERS[p.mmsi] = marker;
     }
   } catch (e) { /* no positions */ }
 }
