@@ -1196,7 +1196,7 @@ async function loadPositions() {
   } catch (e) { /* no positions */ }
 }
 
-// --- Reservations (read + inline edit / cancel / delete) -------------------
+// --- Reservations (read + inline edit / unconfirm) -------------------------
 async function loadRequests() {
   const el = document.getElementById("requests");
   const sel = document.getElementById("resFilter");
@@ -1277,7 +1277,7 @@ function resCard(r) {
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
         <button class="btn-sm" data-act="edit-request">Edit request</button>
         <button class="btn-sm" data-act="edit">Edit placement</button>
-        ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
+        ${r.status === "confirmed" ? '<button class="btn-sm" data-act="unconfirm">Unconfirm</button>' : ""}
       </div>
       <form class="edit-form" data-edit-request>
         <fieldset>
@@ -1376,15 +1376,21 @@ function wireResCards(container) {
       form.elements.bow_dock.focus();
     });
 
-    const cancelBtn = card.querySelector('[data-act="cancel"]');
-    if (cancelBtn) cancelBtn.addEventListener("click", async () => {
-      if (!confirm("Cancel this reservation?")) return;
-      const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "cancelled" });
+    // Unconfirm: back a confirmed reservation out to a pending `requested` row
+    // rather than cancelling/deleting it. The placement (station range + time)
+    // is preserved, the row stays in the active list, and the "Place + Confirm"
+    // button reappears (it renders only for `requested`), so the operator can
+    // re-place and re-confirm the very same request.
+    const unconfirmBtn = card.querySelector('[data-act="unconfirm"]');
+    if (unconfirmBtn) unconfirmBtn.addEventListener("click", async () => {
+      if (!confirm("Unconfirm this reservation? It returns to a pending request — placement is kept and you can re-confirm it.")) return;
+      const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "requested" });
       if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); } else alert("Failed: " + writeError(w));
     });
-    // No delete here: a reservation can only be cancelled (reversible) from this
-    // tab. The hard delete lives on the Berth requests tab, which removes the
-    // request and its reservation together — the one place a request is dropped.
+    // No cancel/delete here: this tab only ever unconfirms (reversible). A true
+    // "this visit isn't happening" is the status dropdown -> cancelled on the
+    // edit form, or the hard delete on the Berth requests tab (which removes the
+    // request and its reservation together — the one place a request is dropped).
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
