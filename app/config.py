@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     berth_dwell_min: float = 20.0
     berth_depart_gap_min: float = 10.0
 
+    # --- Sidebar "Vessels" stat ---
+    # The headline "Vessels" count is vessels *present* — those with an AIS fix
+    # within this many hours — not every vessel row ever ingested (which only
+    # grows, since a vessel row is never removed when a ship leaves). A departed
+    # vessel stops broadcasting in the bbox, so its latest fix ages past this
+    # window and it drops out of the count.
+    vessel_present_window_h: float = 24.0
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def sqlalchemy_url(self) -> str:

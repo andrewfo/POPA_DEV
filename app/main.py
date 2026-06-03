@@ -257,11 +257,13 @@ def list_vessels(
 
 @app.get("/stats")
 def stats(session: Session = Depends(get_session)) -> dict:
-    """Headline counts for the sidebar. Beyond raw vessel/position totals this
+    """Headline counts for the sidebar. Beyond present-vessel/request totals this
     surfaces the request + reservation picture: how many berth requests have
     landed, how many reservations exist by the statuses operators watch, and how
     many vessels are moored *right now* (latest AIS fix alongside the wharf and
-    effectively stopped — the same test the map's green dots use)."""
+    effectively stopped — the same test the map's green dots use). "Vessels" is
+    vessels *present* (an AIS fix within the present-window), not every vessel
+    row ever ingested — a vessel row is never removed when a ship leaves."""
     # Reservation breakdown by status in one grouped scan (counts every status,
     # so new ones show up without another query).
     res_rows = session.execute(
@@ -313,8 +315,24 @@ def stats(session: Session = Depends(get_session)) -> dict:
             """
         )
     ).scalar_one()
+    # "Vessels" = vessels *present*, not the all-time total. A vessel row is
+    # upserted per MMSI/IMO and never removed when a ship leaves, so counting
+    # every row only grows and overstates how many are actually around. Instead
+    # count distinct MMSI with a fix inside the present-window (a departed vessel
+    # stops broadcasting in the bbox, so its latest fix ages out).
+    vessels_present = session.execute(
+        text(
+            """
+            SELECT count(DISTINCT pr.mmsi)
+            FROM position_report pr
+            WHERE pr.mmsi IS NOT NULL
+              AND pr.msg_ts >= now() - (:window_h * interval '1 hour')
+            """
+        ),
+        {"window_h": settings.vessel_present_window_h},
+    ).scalar_one()
     return {
-        "vessels": session.execute(select(func.count(Vessel.id))).scalar_one(),
+        "vessels": vessels_present,
         "arrivals_24h": arrivals_24h,
         "berth_requests": session.execute(
             text("SELECT count(*) FROM intake_event")
