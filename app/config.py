@@ -40,23 +40,6 @@ class Settings(BaseSettings):
     aisstream_api_key: str = Field(default="", repr=False)
     aisstream_url: str = "wss://stream.aisstream.io/v0/stream"
 
-    # --- SharePoint berth-request intake (Microsoft Graph, app-only) ---
-    # The live BerthRequests list, read directly over Graph instead of waiting
-    # for a manual CSV export. Credentials come from an Azure AD app registration
-    # in the portpa.com tenant (Graph Sites.Selected or Sites.Read.All), granted
-    # by port IT. Leave blank until provisioned — the source raises a clear error
-    # rather than running half-configured.
-    sharepoint_tenant_id: str = Field(default="", repr=False)
-    sharepoint_client_id: str = Field(default="", repr=False)
-    sharepoint_client_secret: str = Field(default="", repr=False)
-    # Site + list identity. Defaults match the live form URL; the list is
-    # resolved by display name, the site by hostname:/path.
-    sharepoint_site_hostname: str = "theportofportarthur.sharepoint.com"
-    sharepoint_site_path: str = "/sites/BerthRequest"
-    sharepoint_list_name: str = "BerthRequests"
-    graph_base_url: str = "https://graph.microsoft.com/v1.0"
-    graph_login_url: str = "https://login.microsoftonline.com"
-
     # Bounding box around the POPA public wharf (Sabine-Neches waterway).
     # Snug to the quay on the city side (centerline spans lat 29.8541..29.8638,
     # lon -93.9445..-93.9351; NE corner kept off the city to the N/E) and pushed

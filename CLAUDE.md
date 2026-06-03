@@ -134,7 +134,7 @@ deliverable is a conflict-safe data layer populated from live AIS.
 
 Note: items the original plan deferred have been pulled forward at the user's
 request and now exist — a **read-only UI**, berth-request intake **capture**
-(online-form CSV + manual phone/email/operator entry; see Build order step 7),
+(manual phone/email/operator entry; see Build order step 7),
 and a **manual edit surface** (`app/edit.py`): create/edit/cancel/delete vessels
 and reservations, including **manually assigning a berth (from the named `berth`
 catalog, which fills `station_range`) and promoting a row to `confirmed`** —
@@ -180,9 +180,10 @@ surfaces as a 409.
    highlights the contested stretch. The **draft-vs-controlling-depth** half is
    deferred (no depth data layer yet; confirm stays warned-not-enforced).
 7. 🟡 Request intake — **capture built** ahead of order (`app/intake/*`):
-   online-form CSV export and **manual phone/email/operator entry**
-   (`POST /intake/berth-request` + a form on the map page) both land raw in
-   `intake_event` (deduped); manual entry also creates a `requested` reservation
+   **manual phone/email/operator entry** is now the sole intake channel
+   (`POST /intake/berth-request` + a form on the map page); the automated
+   online-form feed (Adobe Sign → SharePoint CSV/Graph) was retired. Each entry
+   lands raw in `intake_event` (deduped) and creates a `requested` reservation
    with an **empty/unassigned `station_range`**. A **manual edit surface**
    (`app/edit.py`, sidebar forms over `PATCH /vessels/{id}`,
    `POST /reservations`, `PATCH`/`DELETE /reservations/{id}`) now lets an
@@ -195,8 +196,9 @@ surfaces as a 409.
    `DELETE /intake/berth-requests/{id}`): edit re-projects the linked reservation
    in place (the one sanctioned mutation of an `intake_event.raw` row), delete
    drops the raw row and its projected reservation. Both are manual channels only
-   (`phone|email|operator`); online-form rows stay immutable. The **automated**
-   reconciliation engine and the legacy-backfill *commit* are still TODO.
+   (`phone|email|operator`); any legacy online-form row stays immutable. The
+   **automated** reconciliation engine and the legacy-backfill *commit* are
+   still TODO.
 
 **Current state: steps 1–6 complete; the next core primitive is step 7's
 automated request→AIS reconciliation** (match a `requested` row to observed AIS
@@ -228,10 +230,10 @@ app/
     ingest.py          # source-agnostic Ingestor (upsert vessel, land positions)
     run.py             # runnable: python -m app.ais.run
   occupancy/           # step 5: detect.py, project.py, alongside.py, derive.py, run.py
-  intake/              # step 7 capture: records.py (CSV parse), ingest.py, source.py,
-                       #   run.py (online-form CSV); manual.py (phone/email/operator
-                       #   entry + in-place request edit/delete:
-                       #   record/update/delete_manual_request)
+  intake/              # step 7 capture: manual.py — the sole intake channel
+                       #   (phone/email/operator entry + dedupe_key + in-place
+                       #   request edit/delete: record/update/delete_manual_request).
+                       #   The online-form feed (records/source/ingest/run) was retired.
 data/gis/              # build_centerline.py / to_geojson.py: real centerline + apron from
                        #   berth shapefiles (stationing) + quayface.* survey (quay geometry)
                        #   -> static GeoJSON + seed JSON
@@ -275,9 +277,10 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   (a TLS-terminating reverse proxy on a sanctioned network is the sole front
   door — see `DEPLOY.md`). Don't widen that bind to `0.0.0.0` without putting
   TLS in front.
-- New intake channels = a new `IntakeSource` (CSV path) or a thin call into
-  `app/intake/`, all landing raw in `intake_event` (deduped by content-hash
-  `dedupe_key`) before any normalization — never skip the raw landing. A
+- Intake today is manual-only (`app/intake/manual.py`); the automated online-form
+  feed was retired. A new intake channel = a thin call into `app/intake/`, landing
+  raw in `intake_event` (deduped by content-hash `dedupe_key`) before any
+  normalization — never skip the raw landing. A
   `requested` reservation projected from intake carries an **empty
   `station_range`** until reconciliation assigns the berth; an empty range never
   conflicts, which is intentional, so don't "fix" it with a placeholder span.
@@ -286,8 +289,8 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   overwrites an existing `intake_event.raw` row in place (re-computing its
   `dedupe_key`) and re-projects the linked reservation — an operator correcting a
   phoned/emailed request one row at a time, rather than leaving a stale
-  duplicate. It is restricted to manual channels (`phone|email|operator`); the
-  online-form CSV row stays immutable, and the edit leaves the reservation's
+  duplicate. It is restricted to manual channels (`phone|email|operator`); any
+  legacy online-form row stays immutable, and the edit leaves the reservation's
   berth/`station_range`, direction, and `status` alone (the request governs
   vessel/time/cargo only). `delete_manual_request` / `DELETE
   /intake/berth-requests/{id}` likewise removes a manual row outright (raw event

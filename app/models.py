@@ -235,11 +235,10 @@ class IntakeEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source: Mapped[str] = mapped_column(intake_source_enum, nullable=False)
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    # Stable content hash of the raw row, so re-ingesting the same SharePoint /
-    # Adobe Sign export (Power Automate re-exports the whole list) is idempotent
-    # instead of duplicating. NULL is allowed (e.g. a phone intake with no stable
-    # payload); uniqueness is enforced by a partial index (see migration 0003),
-    # mirroring reservation.derived_key.
+    # Stable content hash of the raw row, so an identical re-submission of a
+    # manual request is deduped instead of duplicating. NULL is allowed (an
+    # intake with no stable payload); uniqueness is enforced by a partial index
+    # (see migration 0003), mirroring reservation.derived_key.
     dedupe_key: Mapped[str | None] = mapped_column(Text)
     received_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

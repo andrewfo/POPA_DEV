@@ -1,13 +1,11 @@
-"""Manual berth-request entry — the phone / email / walk-in channel.
+"""Manual berth-request entry — the sole intake channel.
 
-Most agents submit the online Adobe Sign form (landed in bulk by
-``app/intake/source.py`` -> ``intake_event``). Some don't: they **call or
-email**. This module captures that exact "Berth Request and Assignment Record"
-data by hand and lands it through the SAME ``intake_event`` table (raw,
-deduped, idempotent), then — unlike the bulk CSV backfill, which leaves
-request->reservation reconciliation to a later layer — also projects the
-request into a ``status='requested'`` reservation so it is immediately visible
-to scheduling / conflict detection.
+Berth requests are entered **by hand** by an operator from a phone call, an
+email, or a walk-in (there is no automated online-form feed: the Adobe Sign ->
+SharePoint pipeline was retired). This module captures the "Berth Request and
+Assignment Record" data and lands it in the ``intake_event`` table (raw,
+deduped, idempotent), then projects the request into a ``status='requested'``
+reservation so it is immediately visible to scheduling / conflict detection.
 
 The berth (station range) is left **UNASSIGNED**: a phoned/emailed request has
 no berth yet — the port assigns it later (the form's "Port of Port Arthur"
@@ -22,6 +20,8 @@ verbatim feet values in ``intake_event.raw``.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -29,7 +29,6 @@ from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.intake.ingest import dedupe_key
 from app.models import IntakeEvent, Vessel
 from app.tz import CENTRAL, assume_central
 
@@ -38,10 +37,19 @@ from app.tz import CENTRAL, assume_central
 # occupancy package.
 FEET_PER_M = 3.280839895
 
-# Manual entry can come from any human channel; 'form' is reserved for the
-# online Adobe Sign export path. 'email' is added in migration 0004.
-MANUAL_SOURCES = ("phone", "email", "operator", "form")
+# The human channels a manual request can arrive on. (The legacy 'form' source
+# — the retired online Adobe Sign feed — is no longer an entry channel; existing
+# 'form' rows stay valid history but new entries can't claim it.) 'email' is
+# added in migration 0004.
+MANUAL_SOURCES = ("phone", "email", "operator")
 _DEFAULT_SOURCE = "phone"
+
+
+def dedupe_key(raw: dict) -> str:
+    """Stable content hash of a raw intake row (order-independent), so an
+    identical re-submission is deduped at the ``intake_event`` level."""
+    blob = json.dumps(raw, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 class BerthRequestForm(BaseModel):
@@ -371,8 +379,8 @@ def delete_manual_request(session: Session, intake_id: int) -> dict:
 
 
 # Channels whose raw payload uses this form's lowercase keys, so an operator can
-# re-edit them through the same form. 'form' (online Adobe Sign CSV export) uses
-# SharePoint column names and is not editable here.
+# re-edit them through the same form. A legacy 'form' row (the retired online
+# feed) carries the old export's column names, so it stays read-only here.
 EDITABLE_SOURCES = ("phone", "email", "operator")
 
 

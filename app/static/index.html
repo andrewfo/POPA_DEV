@@ -533,7 +533,6 @@
       <label for="reqSource">Channel</label>
       <select id="reqSource">
         <option value="">All</option>
-        <option value="form">Online form</option>
         <option value="phone">Phone</option>
         <option value="email">Email</option>
         <option value="operator">Operator</option>
@@ -1545,8 +1544,8 @@ function wireResCards(container) {
 })();
 
 // --- Berth requests (raw intake_event audit trail) -------------------------
-// The actual inbound requests as received (online form / phone / email /
-// operator), distinct from the reservations they project into. Read-only.
+// The actual inbound requests as received (phone / email / operator),
+// distinct from the reservations they project into. Read-only.
 let _berthRequestRows = [];   // last-loaded rows, keyed for the delegated Edit handler
 
 async function loadBerthRequests() {
@@ -1590,8 +1589,8 @@ async function loadBerthRequests() {
 })();
 
 // Pull a display value from a raw intake payload across both shapes: the manual
-// form (lowercase keys: vessel/imo/etb/etd/agency) and the online-form CSV
-// export (SharePoint column names: "Vessel"/"IMO Number"/...).
+// form (lowercase keys: vessel/imo/etb/etd/agency) and any legacy online-form
+// row left in the table (capitalized keys: "Vessel"/"IMO Number"/...).
 function rawField(raw, keys) {
   if (!raw) return null;
   for (const k of keys) {
@@ -1623,7 +1622,8 @@ function reqCard(r) {
   if (agency) lines.push(esc(agency));
   if (cargo) lines.push(esc(cargo));
   // Only manual-channel rows (phone/email/operator) carry this form's lowercase
-  // keys, so only they can be re-edited here; the online-form CSV is immutable.
+  // keys, so only they can be re-edited here; a legacy online-form row is
+  // immutable.
   const editable = ["phone", "email", "operator"].includes(r.source);
   return `
     <div class="card req-card">

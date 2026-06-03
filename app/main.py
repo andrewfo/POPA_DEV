@@ -341,8 +341,8 @@ def geo_to_station_endpoint(
 def create_berth_request(
     form: BerthRequestForm, session: Session = Depends(get_session)
 ) -> dict:
-    """Manual berth-request entry for vessels that call/email instead of using
-    the online form. Lands the raw request in ``intake_event`` and creates a
+    """Manual berth-request entry (phone / email / walk-in) — the sole intake
+    channel. Lands the raw request in ``intake_event`` and creates a
     ``status='requested'`` reservation (berth left unassigned). Idempotent on an
     identical re-submission."""
     result = record_manual_request(session, form)

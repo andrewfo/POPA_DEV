@@ -36,9 +36,9 @@ is a later layer", both user-requested):
   reads `GET /reservations?from=&to=`. A data-viewing view, not the conflict
   service — see step 6.
 - **Berth-request intake capture (step 7, partial):**
-  - online-form path — SharePoint/Adobe-Sign CSV export → `intake_event`
-    (`app/intake/records.py` parser, `ingest.py`, `source.py`, `run.py`);
-  - **manual phone/email/operator entry** — `POST /intake/berth-request` +
+  - **manual phone/email/operator entry is now the sole channel** — the automated
+    online-form feed (Adobe Sign → SharePoint CSV/Graph) was retired;
+  - `POST /intake/berth-request` +
     a form on the map page (`app/intake/manual.py`). Lands raw in
     `intake_event` *and* creates a `status='requested'` reservation with an
     **empty (unassigned) `station_range`** — the port assigns the berth later.
@@ -168,10 +168,10 @@ does not.
 - **Raw landing** — all channels land verbatim in `intake_event` *before*
   normalization, deduped by a content-hash `dedupe_key` (migration `0003`) so
   re-imports/re-submits are idempotent.
-- **Online-form path** — SharePoint/Adobe-Sign CSV export → `intake_event`
-  (`app/intake/records.py` conservative parser + `ingest.py` + `source.py` +
-  `python -m app.intake.run`). Messy values become `None` + a warning, never a
-  guess; the raw row is always preserved.
+- **Online-form path (retired)** — the Adobe Sign → SharePoint CSV/Graph feed and
+  its parser (`records.py`/`source.py`/`ingest.py`/`run.py`) were removed; intake
+  is now manual-only. Any `intake_event` rows it left (`source='form'`) stay valid
+  history and remain immutable.
 - **Manual phone/email/operator entry** — `POST /intake/berth-request` and a
   form on the map page (`app/intake/manual.py`). Normalizes units (feet→metres),
   upserts `vessel` by IMO, lands `intake_event`, **and** creates a candidate
@@ -190,8 +190,8 @@ does not.
   its reservation (leaving berth/status/direction alone) — the one sanctioned
   mutation of a raw intake row; `DELETE /intake/berth-requests/{id}`
   (`delete_manual_request`) drops the raw row and its projected reservation. Both
-  are manual channels only (online-form rows stay immutable). The form's Draft
-  (ft) field is now mandatory.
+  are manual channels only (any legacy online-form row stays immutable). The
+  form's Draft (ft) field is now mandatory.
 
 **Still TODO:**
 - **Reconcile against observed AIS** — match a request to the `observed`
