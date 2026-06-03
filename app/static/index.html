@@ -48,6 +48,7 @@
     --st-confirmed: #c06fc9;  /* ECDIS magenta — distinct from interactive blue */
     --st-completed: #5b6b78;
     --st-cancelled: #344452;
+    --dredge:       #c8763c;  /* sediment burnt-orange — dredge ops, distinct from amber 'requested' */
 
     /* spacing (tight) + one small radius */
     --s1: 2px; --s2: 4px; --s3: 8px; --s4: 12px; --s5: 16px; --s6: 22px;
@@ -668,7 +669,7 @@ const PAL = {
   bg: cssVar("--bg"), panel: cssVar("--panel"), panel2: cssVar("--panel-2"),
   line: cssVar("--line"), ink: cssVar("--ink"), inkDim: cssVar("--ink-dim"), muted: cssVar("--muted"),
   blue: cssVar("--blue"), green: cssVar("--green"), amber: cssVar("--amber"),
-  red: cssVar("--red"), cyan: cssVar("--cyan"),
+  red: cssVar("--red"), cyan: cssVar("--cyan"), dredge: cssVar("--dredge"),
 };
 const STATUS_COLORS = {
   observed: cssVar("--st-observed"), requested: cssVar("--st-requested"),
@@ -1682,7 +1683,7 @@ map.on("click", async (e) => {
 // reservations are drawn.
 (function () {
   const STATUS = { observed: STATUS_COLORS.observed, confirmed: STATUS_COLORS.confirmed };
-  const DREDGE = PAL.amber;
+  const DREDGE = PAL.dredge;
   // FT_PER_M is module-scope (defined near the palette tokens).
 
   const shipLayer = L.layerGroup().addTo(map);
@@ -1822,7 +1823,7 @@ const loadTimeline = (function () {
 
   // status -> colour; dredge overrides by type. Mirrors the reservation enums.
   const STATUS = STATUS_COLORS;
-  const DREDGE = PAL.amber;
+  const DREDGE = PAL.dredge;
   const LEGEND = [
     ["observed", "Observed (AIS)"], ["requested", "Requested"],
     ["tentative", "Tentative"], ["confirmed", "Confirmed"],
