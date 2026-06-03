@@ -250,7 +250,7 @@ scripts/
 Dockerfile             # production app image (one image runs all four roles); CMD = gunicorn API
 docker-compose.prod.yml# prod stack: db + one-shot migrate/seed + api + ais + occupancy (NOT the dev compose)
 .env.prod.example      # prod secrets/config template (DB password, operator creds, AIS key) -> .env.prod
-DEPLOY.md              # host + network playbook (Tailscale: private net, free HTTPS, no domain)
+DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a sanctioned net; Azure/Entra option)
 ```
 
 ## Working agreements for future changes
@@ -272,8 +272,9 @@ DEPLOY.md              # host + network playbook (Tailscale: private net, free H
   new endpoint by default. Basic only base64-encodes credentials, so it MUST run
   behind TLS terminated upstream (the prod compose does not terminate TLS); the
   api port therefore binds to **`127.0.0.1` only** in `docker-compose.prod.yml`
-  (Tailscale `serve` / a reverse proxy is the sole front door — see `DEPLOY.md`).
-  Don't widen that bind to `0.0.0.0` without putting TLS in front.
+  (a TLS-terminating reverse proxy on a sanctioned network is the sole front
+  door — see `DEPLOY.md`). Don't widen that bind to `0.0.0.0` without putting
+  TLS in front.
 - New intake channels = a new `IntakeSource` (CSV path) or a thin call into
   `app/intake/`, all landing raw in `intake_event` (deduped by content-hash
   `dedupe_key`) before any normalization — never skip the raw landing. A

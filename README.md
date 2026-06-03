@@ -81,8 +81,8 @@ python -m app.intake.run path/to/BerthRequests.csv [--dry-run]
 
 `scripts/dev.*` and `docker-compose.yml` are for **local dev only** (DB
 container + bare `uvicorn --reload`). For a real deployment use the production
-image + stack — see [`DEPLOY.md`](./DEPLOY.md) for the full host + Tailscale
-playbook (no domain needed). In brief:
+image + stack — see [`DEPLOY.md`](./DEPLOY.md) for the full host + deployment
+playbook (reverse proxy + TLS over a sanctioned network). In brief:
 
 ```bash
 # 1. Secrets: copy and fill in (gitignored). Set a strong DB password, the

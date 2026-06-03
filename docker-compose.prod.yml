@@ -66,10 +66,11 @@ services:
     restart: unless-stopped
     ports:
       # Published to LOCALHOST ONLY — port 8000 is never on a public interface.
-      # Tailscale (`tailscale serve`, see DEPLOY.md) or a reverse proxy is the
-      # sole front door, so the only way in is encrypted. To serve a LAN/public
-      # directly instead, change to "0.0.0.0:8000:8000" AND terminate TLS in
-      # front yourself (HTTP Basic only base64-encodes credentials).
+      # A reverse proxy that terminates TLS, reachable over a network IT
+      # sanctions (corporate VPN/LAN, or Azure), should be the sole front door —
+      # see DEPLOY.md. To serve a LAN/public directly instead, change to
+      # "0.0.0.0:8000:8000" AND terminate TLS in front yourself (HTTP Basic only
+      # base64-encodes credentials).
       - "127.0.0.1:8000:8000"
     healthcheck:
       # /health is auth-exempt, so no credentials needed. urlopen raises (non-zero

@@ -1,24 +1,23 @@
-# Deploying the POPA Wharf Data Layer (Tailscale)
+# Deploying the POPA Wharf Data Layer
 
 This runs the full production stack on a Linux host and serves it to your
-operators over a private **Tailscale** network — encrypted end to end, no public
-ports, free HTTPS, **no domain required**. The right fit for an internal tool
-used by a handful of people.
+operators over a network IT sanctions, behind a reverse proxy that terminates
+TLS. The app itself is just an HTTP service on a port with HTTP Basic auth — how
+it's reached (corporate VPN, internal host, Azure) is an infrastructure choice;
+this file covers the host + the safe-exposure options.
 
 For the artifacts themselves (image, compose, auth) see the **Deploy** section of
-[`README.md`](./README.md); this file is the host + network playbook.
+[`README.md`](./README.md).
 
 ---
 
 ## What you need
 
-- **A Linux host that runs 24/7** with Docker. A $4–6/mo VPS (Hetzner,
-  DigitalOcean, Linode, Vultr) or an Oracle Cloud *Always Free* VM both work. It
-  must stay on — the AIS ingestor is a long-lived connection; a host that sleeps
-  loses the live feed.
+- **A host that runs 24/7** with Docker. An IT-managed internal server, a VM, or
+  a small cloud instance all work. It must stay on — the AIS ingestor is a
+  long-lived connection; a host that sleeps loses the live feed.
 - **~2 GB RAM** (Postgres + PostGIS + gunicorn + the AIS/occupancy workers).
-- **A free Tailscale account** (<https://tailscale.com>). Each operator who needs
-  access installs the Tailscale client and joins the same *tailnet*.
+- **A way for operators to reach it** that IT allows — see step 5.
 
 ---
 
@@ -34,8 +33,6 @@ sudo usermod -aG docker "$USER"   # log out/in so `docker` works without sudo
 ```bash
 git clone https://github.com/andrewfo/SlackWater.git
 cd SlackWater
-# Use main once the deployment PR is merged; until then:
-#   git checkout add-deployment-packaging
 ```
 
 ## 3. Configure secrets
@@ -66,43 +63,36 @@ docker compose -f docker-compose.prod.yml ps         # all healthy/running
 curl -s http://localhost:8000/health                 # {"status":"ok",...}
 ```
 
-## 5. Put it on Tailscale
+## 5. Expose it safely (reverse proxy + TLS over a sanctioned network)
 
-Install Tailscale on the host and join your tailnet:
+The stack serves plain HTTP on `127.0.0.1:8000`. Put it behind something that
+(a) terminates **TLS** and (b) is reachable only over a network IT allows. HTTP
+Basic only base64-encodes credentials, so TLS in front is mandatory. Pick what
+IT sanctions:
 
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up        # opens a login URL; authenticate once
-```
+- **Internal host + corporate VPN/LAN** — run it on a server inside the corporate
+  network; operators reach it over the company VPN or on-site. Front it with a
+  reverse proxy (nginx / Caddy / IIS ARR) holding a TLS cert from your internal
+  CA, on a corporate DNS name. Nothing leaves the corp network.
+- **Azure behind Entra ID SSO** (you already use the `portpa.com` tenant for the
+  SharePoint intake) — deploy the image to Azure (App Service for Containers /
+  Container Apps / a VM) behind Azure's TLS and gate it with Entra ID SSO
+  (App Service "Easy Auth" or Application Gateway). Reuses identity you already
+  have; usually the most IT-friendly path.
+- **Public reverse proxy + cert** — only if it must be reachable beyond the corp
+  network; pair a domain + TLS cert with SSO in front.
 
-Enable HTTPS for your tailnet **once** in the admin console
-(<https://login.tailscale.com/admin/dns> → enable **MagicDNS** and
-**HTTPS Certificates**). Then expose the local API over the tailnet with a real
-certificate:
-
-```bash
-sudo tailscale serve --bg 8000
-sudo tailscale serve status        # prints the URL
-```
-
-`tailscale serve` proxies `https://<host>.<your-tailnet>.ts.net` → the
-localhost-only `:8000`. Nothing is exposed publicly; the WireGuard tunnel
-encrypts everything.
+Whatever the front door, keep the app bound to `127.0.0.1` (or restrict it to the
+proxy host) so the only way in is through the TLS/auth layer. If your proxy runs
+on a *different* host, change the api `ports` bind in `docker-compose.prod.yml`
+(see the comment there) to the interface the proxy can reach.
 
 ## 6. Use it
 
-On any computer (or phone) signed into the same tailnet, open
-
-```
-https://<host>.<your-tailnet>.ts.net
-```
-
-and log in with the operator credentials. No install on the client beyond the
-Tailscale app, no domain, no certificate warnings.
-
-To grant an operator access: invite them to the tailnet and have them install
-Tailscale. To revoke: remove them from the tailnet (and/or rotate the operator
-password — see below).
+Operators open the URL your reverse proxy serves and log in with the operator
+credentials. To grant/revoke access, use whatever gate fronts it (VPN
+membership, Entra ID group, etc.); rotating the operator password (below) is the
+app-level backstop.
 
 ---
 
@@ -136,4 +126,4 @@ automatically**, existing ones are skipped. That's the whole release process.
 - **No AIS staleness alarm.** If the feed drops, the `ais` container keeps running
   but data silently stops — there's no "last-message-age" healthcheck yet.
 - **Single shared login**, no per-user accounts/roles/audit. Fine for a small
-  operator team; revisit OIDC/SSO if that's needed.
+  operator team; revisit OIDC/SSO (e.g. Entra ID, per step 5) if that's needed.
