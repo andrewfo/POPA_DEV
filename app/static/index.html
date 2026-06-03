@@ -270,6 +270,7 @@
   .tl-grid { stroke: var(--line); stroke-width: 1; }
   .tl-axis-label { fill: var(--muted); font: 11px system-ui, sans-serif; }
   .tl-now { stroke: var(--bad); stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .tl-now-label { fill: var(--bad); font: 600 10px system-ui, sans-serif; }
   .tl-cursor { stroke: #46e0ff; stroke-width: 2; }
   .tl-cursor-handle { fill: #46e0ff; stroke: #04121f; stroke-width: 1; cursor: ew-resize; }
   #tlSvg { cursor: ew-resize; }
@@ -1602,6 +1603,19 @@ const loadTimeline = (function () {
 
   function colorFor(r) { return r.type === "dredge" ? DREDGE : (STATUS[r.status] || "#888"); }
 
+  // Central-Time zone offset (ms) at an instant, and the instant of the Central
+  // calendar-day start containing it. Axis ticks snap to these so a gridline
+  // lands on a Central midnight/hour — labelling a UTC-aligned tick in Central
+  // reads a day early (the "now line stuck on yesterday" bug).
+  function centralOffsetMs(ms) {
+    const p = centralParts(ms);
+    return Date.UTC(+p.y, +p.m - 1, +p.d, +p.hh, +p.mm) - ms;
+  }
+  function centralDayStart(ms) {
+    const p = centralParts(ms);
+    return Date.UTC(+p.y, +p.m - 1, +p.d, 0, 0) - centralOffsetMs(ms);
+  }
+
   function render() {
     if (drawer.classList.contains("tl-collapsed")) return;   // body hidden -> nothing to draw
     const W = scroll.clientWidth || drawer.clientWidth || 800;
@@ -1647,26 +1661,38 @@ const loadTimeline = (function () {
       svg.appendChild(lbl);
     }
 
-    // X gridlines + tick labels (nice step from the span).
+    // X gridlines + tick labels. Aim for ~one tick per 64px, snapped to a "nice"
+    // step; ticks fall on Central day/hour boundaries (not UTC) so the date a
+    // gridline carries matches the day it sits on. Sub-day steps print the time
+    // of day; each Central midnight prints the date instead, so a multi-day view
+    // shows both timestamps and the date rollovers.
     const span = t1 - t0;
-    let step = span <= 2 * DAY ? 6 * H : span <= 8 * DAY ? DAY : span <= 40 * DAY ? 7 * DAY : Math.ceil(span / 8 / DAY) * DAY;
-    for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+    const nticks = Math.max(3, Math.round(plotW / 64));
+    const NICE = [H, 2 * H, 3 * H, 6 * H, 12 * H, DAY, 2 * DAY, 7 * DAY, 14 * DAY, 30 * DAY];
+    const step = NICE.find((s) => span / s <= nticks) || Math.ceil(span / nticks / DAY) * DAY;
+    const subDay = step < DAY;
+    for (let t = centralDayStart(t0); t <= t1; t += step) {
+      if (t < t0) continue;                              // skip the pre-window midnight we step from
       const px = x(t);
       svg.appendChild(el("line", { x1: px, y1: HEADER_H, x2: px, y2: totalH, class: "tl-grid" }));
       const tk = el("text", { x: px + 3, y: 15, class: "tl-axis-label" });
-      const d = new Date(t);
-      // Sub-day ticks label the Central hour (midnight rolls over to the date).
-      const centralHour = Number(centralParts(d).hh);
-      tk.textContent = step < DAY
-        ? (centralHour === 0 ? fmtD(t) : d.toLocaleTimeString(undefined, { timeZone: CENTRAL_TZ, hour: "2-digit" }))
-        : fmtD(t);
+      const cp = centralParts(t);
+      const midnight = cp.hh === "00" && cp.mm === "00";
+      tk.textContent = (!subDay || midnight)
+        ? fmtD(t)
+        : new Date(t).toLocaleTimeString(undefined, { timeZone: CENTRAL_TZ, hour: "numeric" });
       svg.appendChild(tk);
     }
 
-    // "Now" marker.
+    // "Now" marker (dashed red), re-read from the clock on every render/poll so
+    // it tracks the real time. Labelled so it isn't mistaken for the cyan cursor.
     const now = Date.now();
     if (now >= t0 && now <= t1) {
-      svg.appendChild(el("line", { x1: x(now), y1: HEADER_H, x2: x(now), y2: totalH, class: "tl-now" }));
+      const nx = x(now);
+      svg.appendChild(el("line", { x1: nx, y1: HEADER_H, x2: nx, y2: totalH, class: "tl-now" }));
+      const nlbl = el("text", { x: nx + 3, y: HEADER_H - 13, class: "tl-now-label" });
+      nlbl.textContent = "now";
+      svg.appendChild(nlbl);
     }
 
     // Clamp the time cursor into the (possibly changed) window; it's drawn last
