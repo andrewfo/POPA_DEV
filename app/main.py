@@ -38,7 +38,7 @@ from app.intake.manual import (
     update_manual_request,
 )
 from app.models import Vessel, WharfSegment
-from app.occupancy.alongside import _alongside_sql
+from app.occupancy.alongside import alongside_sql, nearest_segment_lateral
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
 
@@ -113,6 +113,10 @@ def config_bbox() -> dict:
     return {
         "sw": {"lat": s.ais_bbox_sw_lat, "lon": s.ais_bbox_sw_lon},
         "ne": {"lat": s.ais_bbox_ne_lat, "lon": s.ais_bbox_ne_lon},
+        # The SOG below which a contact reads "stopped". Shared with the client so
+        # the map's green/red colouring uses the same threshold the server does
+        # for "moored now" — one source of truth, not a hard-coded 0.5 in the JS.
+        "moored_sog_kn": s.berth_enter_sog_kn,
     }
 
 
@@ -186,23 +190,15 @@ def positions_recent(
     a low SOG to colour a contact moored (green) vs underway (red), so a vessel
     stopped mid-channel reads underway, not moored."""
     point = "ST_SetSRID(ST_MakePoint(pr.lon, pr.lat), 4326)"
-    # LEFT JOIN LATERAL (not CROSS) so positions still return when no wharf
-    # segment is seeded — alongside just comes back NULL/false rather than the
-    # row vanishing.
     rows = session.execute(
         text(
             f"""
             SELECT pr.id, pr.mmsi, pr.lat, pr.lon, pr.sog, pr.cog, pr.heading,
                    pr.msg_ts, v.name AS vessel_name,
-                   COALESCE({_alongside_sql(point)}, false) AS alongside
+                   COALESCE({alongside_sql(point)}, false) AS alongside
             FROM position_report pr
             LEFT JOIN vessel v ON v.id = pr.vessel_id
-            LEFT JOIN LATERAL (
-                SELECT ST_Force2D(ws.geom) AS g, ws.apron AS apron
-                FROM wharf_segment ws
-                ORDER BY ws.geom <-> {point}
-                LIMIT 1
-            ) seg ON true
+            {nearest_segment_lateral(point)}
             ORDER BY pr.msg_ts DESC NULLS LAST, pr.id DESC
             LIMIT :limit
             """
@@ -265,33 +261,30 @@ def stats(session: Session = Depends(get_session)) -> dict:
         text("SELECT status::text AS status, count(*) AS n FROM reservation GROUP BY status")
     ).all()
     by_status = {r.status: r.n for r in res_rows}
-    # Moored *now* = vessels whose latest AIS fix is alongside (in the berthing
-    # zone) AND effectively stopped. Same alongside predicate + SOG threshold the
-    # map colours a contact green with, so the tile and the green dots agree by
-    # construction (rather than the observed-reservation count, which needs the
-    # occupancy deriver running and lags real time).
+    # Moored *now* = contacts whose latest AIS fix is alongside (in the berthing
+    # zone) AND effectively stopped. This must agree with the map's green dots, so
+    # it reproduces their definition exactly: dedupe per MMSI (not vessel_id, which
+    # is NULL until ShipStaticData lands — the map keys on MMSI), pick the latest
+    # fix with the same ordering /positions/recent uses (msg_ts DESC NULLS LAST,
+    # id DESC), and apply the same alongside predicate + the shared
+    # berth_enter_sog_kn threshold (also handed to the client via /config/bbox).
     settings = get_settings()
     point = "ST_SetSRID(ST_MakePoint(l.lon, l.lat), 4326)"
     moored = session.execute(
         text(
             f"""
             WITH latest AS (
-                SELECT DISTINCT ON (pr.vessel_id)
-                       pr.vessel_id, pr.lat, pr.lon, pr.sog
+                SELECT DISTINCT ON (pr.mmsi)
+                       pr.mmsi, pr.lat, pr.lon, pr.sog
                 FROM position_report pr
-                WHERE pr.vessel_id IS NOT NULL
-                ORDER BY pr.vessel_id, COALESCE(pr.msg_ts, pr.created_at) DESC
+                WHERE pr.mmsi IS NOT NULL
+                ORDER BY pr.mmsi, pr.msg_ts DESC NULLS LAST, pr.id DESC
             )
             SELECT count(*)
             FROM latest l
-            LEFT JOIN LATERAL (
-                SELECT ST_Force2D(ws.geom) AS g, ws.apron AS apron
-                FROM wharf_segment ws
-                ORDER BY ws.geom <-> {point}
-                LIMIT 1
-            ) seg ON true
+            {nearest_segment_lateral(point)}
             WHERE l.sog IS NOT NULL AND l.sog < :enter_sog
-              AND COALESCE({_alongside_sql(point)}, false)
+              AND COALESCE({alongside_sql(point)}, false)
             """
         ),
         {
