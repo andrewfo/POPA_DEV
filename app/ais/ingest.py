@@ -9,6 +9,7 @@ lands clean data.
 from __future__ import annotations
 
 import logging
+import time
 
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -22,10 +23,21 @@ logger = logging.getLogger(__name__)
 
 
 class Ingestor:
-    def __init__(self, session: Session, commit_every: int = 50) -> None:
+    def __init__(
+        self,
+        session: Session,
+        commit_every: int = 50,
+        commit_interval_s: float = 10.0,
+    ) -> None:
         self.session = session
         self.commit_every = commit_every
+        # Also flush when this many seconds have elapsed since the last commit,
+        # even if the batch isn't full. Snug bounding boxes (e.g. a single wharf)
+        # see only a trickle of messages, so a count-only threshold could leave
+        # rows uncommitted for a long time — they'd never reach the map.
+        self.commit_interval_s = commit_interval_s
         self._pending = 0
+        self._last_commit = time.monotonic()
         self.positions = 0
         self.statics = 0
 
@@ -99,13 +111,17 @@ class Ingestor:
         else:  # pragma: no cover - defensive
             return
         self._pending += 1
-        if self._pending >= self.commit_every:
+        if (
+            self._pending >= self.commit_every
+            or time.monotonic() - self._last_commit >= self.commit_interval_s
+        ):
             self.flush()
 
     def flush(self) -> None:
         if self._pending:
             self.session.commit()
             self._pending = 0
+        self._last_commit = time.monotonic()
 
     async def run(self, source: AISSource) -> None:
         """Consume a source until it ends, committing periodically."""
