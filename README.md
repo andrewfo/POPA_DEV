@@ -65,6 +65,7 @@ uvicorn app.main:app --reload
 #   GET  /stats           -> row counts
 #   GET  /geo-to-station?lat=..&lon=..  -> project a point to POPA station
 #   GET  /reservations[?status=&from=&to=]  -> reservations (status + time-window filter)
+#   GET  /conflicts[?status=&from=&to=]  -> pairs overlapping in time AND station (+ overlap rect)
 #   GET  /berths          -> named berth catalog (POPA station ranges) to assign from
 #   POST /intake/berth-request  -> manual berth request (phone/email); also a form on /
 #   PATCH /reservations/{id}    -> edit; assign a berth via {"berth_id": N} (fills station_range)

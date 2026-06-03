@@ -435,6 +435,7 @@
       <div class="stat"><div class="n" id="statRequests">—</div><div class="l">Berth requests</div></div>
       <div class="stat"><div class="n" id="statConfirmed">—</div><div class="l">Confirmed</div></div>
       <div class="stat"><div class="n" id="statArrivals">—</div><div class="l">Arrivals (24h)</div></div>
+      <div class="stat"><div class="n" id="statConflicts">—</div><div class="l">Conflicts</div></div>
     </div>
 
     <!-- Sidebar tabs: Overview / Reservations / Berth requests -->
@@ -576,6 +577,16 @@
       <div class="hint" style="margin-top:6px">To-scale ship footprints for the moment under the timeline cursor — drag the cursor (or press ▶) in the occupancy timeline below.</div>
     </div>
     <!-- ===== /Vessel outlines control ===== -->
+
+    <!-- ===== Conflicts (time × station overlaps) ===== -->
+    <h2>Conflicts</h2>
+    <div class="hint" style="margin:0 0 8px">
+      Reservations that overlap in <b>both</b> time and station — the headline
+      being an AIS-observed vessel where something is planned. Click one to
+      highlight the contested stretch of wharf.
+    </div>
+    <div id="conflicts"><div class="empty">none</div></div>
+    <!-- ===== /Conflicts ===== -->
 
     <div class="probe">
       <div class="hint">Click anywhere on the map to project that point onto the wharf centerline.</div>
@@ -904,6 +915,96 @@ async function loadStats() {
     for (const id of Object.keys(STAT_FIELDS)) {
       document.getElementById(id).textContent = "0";
     }
+  }
+}
+
+// --- Conflicts (time × station overlaps) -----------------------------------
+// A dedicated alert layer for the contested stretch of wharf (red = the
+// stylesheet's reserved alert colour). CONFLICTS holds the last fetch so a card
+// click can map back to its overlap rectangle.
+const conflictLayer = L.layerGroup().addTo(map);
+let CONFLICTS = [];
+
+const CONFLICT_CAT = {
+  "observed-vs-planned": "observed vs planned",
+  "dredge-vs-vessel": "dredge vs vessel",
+  "planned-vs-planned": "planned vs planned",
+};
+
+// Central-Time datetime, short form (CENTRAL_TZ is read at call time — this only
+// runs after boot, by which point it's defined).
+function fmtCentral(s) {
+  if (!s) return "—";
+  const d = new Date(s);
+  if (isNaN(d)) return esc(s);
+  return d.toLocaleString(undefined, {
+    timeZone: CENTRAL_TZ, month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function conflictName(side) {
+  return esc(side.vessel_name || (side.type === "dredge" ? "Dredging op" : "(unnamed)"));
+}
+
+function conflictCard(c, i) {
+  const dlo = Math.round(Math.min(c.overlap.station_lo_dock, c.overlap.station_hi_dock));
+  const dhi = Math.round(Math.max(c.overlap.station_lo_dock, c.overlap.station_hi_dock));
+  const win = `${fmtCentral(c.overlap.t_start)} → ${fmtCentral(c.overlap.t_end)}`;
+  return `
+    <div class="card conflict-card" data-conflict="${i}" style="cursor:pointer">
+      <div class="name">${conflictName(c.a)} ⇄ ${conflictName(c.b)}
+        <span class="status-badge" style="background:${PAL.red}">conflict</span></div>
+      <div class="meta">${esc(CONFLICT_CAT[c.category] || c.category)} · Dock ${dlo}–${dhi}</div>
+      <div class="meta">overlap <b>${win}</b></div>
+    </div>`;
+}
+
+// Draw the overlap station sub-range as a red line on the quay, sampling the
+// centerline across the span so it follows the stepped bulkhead. Auto-clears.
+function highlightConflict(c) {
+  conflictLayer.clearLayers();
+  if (!window.stationToLatLon) return;
+  const lo = Math.min(c.overlap.station_lo, c.overlap.station_hi);
+  const hi = Math.max(c.overlap.station_lo, c.overlap.station_hi);
+  if (lo == null || hi == null || !(hi >= lo)) return;
+  const pts = [];
+  const N = 12;
+  for (let i = 0; i <= N; i++) {
+    const ll = window.stationToLatLon(lo + (hi - lo) * (i / N));
+    if (ll) pts.push([ll.lat, ll.lon]);
+  }
+  if (pts.length < 2) return;
+  L.polyline(pts, { color: PAL.red, weight: 9, opacity: 0.75, lineCap: "round" }).addTo(conflictLayer);
+  map.fitBounds(L.latLngBounds(pts).pad(0.6), { maxZoom: 16, animate: true });
+  setTimeout(() => conflictLayer.clearLayers(), 6000);
+}
+
+function wireConflictCards(el) {
+  el.querySelectorAll(".conflict-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      const c = CONFLICTS[Number(card.dataset.conflict)];
+      if (c) highlightConflict(c);
+    });
+  });
+}
+
+async function loadConflicts() {
+  const el = document.getElementById("conflicts");
+  const stat = document.getElementById("statConflicts");
+  try {
+    const cs = await api("/conflicts");
+    CONFLICTS = cs;
+    if (stat) stat.textContent = cs.length;
+    if (!el) return;
+    el.innerHTML = cs.length
+      ? cs.map(conflictCard).join("")
+      : '<div class="empty">no conflicts</div>';
+    wireConflictCards(el);
+  } catch (e) {
+    CONFLICTS = [];
+    if (stat) stat.textContent = "0";
+    if (el) el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
 }
 
@@ -1249,6 +1350,7 @@ function wireResCards(container) {
         reqRes.innerHTML = "Saved." + warnHtml(w.data && w.data.warnings);
         loadTimeline();
         loadStats();   // status change may move the confirmed / reservation counts
+        loadConflicts();   // ...and may create or resolve a conflict
         setTimeout(loadRequests, 1200);   // let the confirmation show first
       } else {
         reqRes.className = "mini-result err";
@@ -1274,7 +1376,7 @@ function wireResCards(container) {
     if (cancelBtn) cancelBtn.addEventListener("click", async () => {
       if (!confirm("Cancel this reservation?")) return;
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "cancelled" });
-      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); } else alert("Failed: " + writeError(w));
+      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); } else alert("Failed: " + writeError(w));
     });
     // No delete here: a reservation can only be cancelled (reversible) from this
     // tab. The hard delete lives on the Berth requests tab, which removes the
@@ -1298,6 +1400,7 @@ function wireResCards(container) {
         res.innerHTML = "Saved." + warnHtml(w.data && w.data.warnings);
         loadTimeline();
         loadStats();   // status change may move the confirmed / reservation counts
+        loadConflicts();   // ...and may create or resolve a conflict
         setTimeout(loadRequests, 1500);   // let the confirmation (and any warning) show first
       } else {
         res.className = "mini-result err";
@@ -1469,7 +1572,7 @@ async function loadBerthRequests() {
       const id = Number(delBtn.dataset.deleteReq);
       if (!confirm("Delete this berth request and its requested reservation?")) return;
       const w = await apiWrite("DELETE", `/intake/berth-requests/${id}`);
-      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); loadStats(); }
+      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); loadStats(); loadConflicts(); }
       else alert("Failed: " + writeError(w));
     }
   });
@@ -1611,6 +1714,9 @@ map.on("click", async (e) => {
     const a = co[i], b = co[i + 1];
     return { lat: a[1] + (b[1] - a[1]) * f, lon: a[0] + (b[0] - a[0]) * f };
   }
+  // Share the station->lat/lon projection with the conflict highlighter (it reads
+  // CENTERLINE lazily on each call, so exposing the reference here is enough).
+  window.stationToLatLon = stationToLatLon;
 
   // To-scale ship ring [[lat,lon],...] spanning [staLo, staHi] along the quay,
   // pushed to the WATER side (water-side normal + a fender standoff, matching
@@ -2147,7 +2253,8 @@ loadVessels();
 loadRequests();
 loadBerthRequests();
 loadPositions();
-setInterval(() => { loadStats(); loadPositions(); loadTimeline(); }, 15000);
+loadConflicts();
+setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); }, 15000);
 </script>
 </body>
 </html>

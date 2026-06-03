@@ -166,8 +166,15 @@ surfaces as a 409.
    buffer when a segment has none (predicate isolated in
    `app/occupancy/alongside.py`). The apron seed + predicate await a live PostGIS
    to exercise.
-6. ⬜ Conflict-detection query/service (time × station overlap), surfacing
-   observed-vs-planned and dredge collisions, with tests.
+6. ✅ Conflict-detection query/service (`app/conflicts.py`, `GET /conflicts`):
+   the one primitive — time ranges overlap AND station ranges overlap — surfaced
+   as a query, covering vessel-vs-vessel, vessel-vs-dredge, and the headline
+   observed-vs-planned. Pure overlap predicates (time half-open `[)`, station
+   closed `[]`) + `classify` are unit-tested; `find_conflicts` runs the self-join
+   with Postgres `&&`/`*` (raw ranges, not the mooring buffer), returning each
+   pair's overlap rectangle (POPA + Dock). A thin map surface lists conflicts and
+   highlights the contested stretch. The **draft-vs-controlling-depth** half is
+   deferred (no depth data layer yet; confirm stays warned-not-enforced).
 7. 🟡 Request intake — **capture built** ahead of order (`app/intake/*`):
    online-form CSV export and **manual phone/email/operator entry**
    (`POST /intake/berth-request` + a form on the map page) both land raw in
@@ -187,12 +194,14 @@ surfaces as a 409.
    (`phone|email|operator`); online-form rows stay immutable. The **automated**
    reconciliation engine and the legacy-backfill *commit* are still TODO.
 
-**Current state: steps 1–5 complete; step 6 (conflict-detection query/service)
-is the next core primitive.** Step 7 intake *capture* plus a manual *edit*
-surface landed early at the user's request (automated reconciliation still
-TODO). DB-integration tests need a live PostGIS (they auto-skip without one);
-pure logic — crosswalk, detector/projection, intake parsing & normalization,
-edit range/validation helpers — is unit-tested.
+**Current state: steps 1–6 complete; the next core primitive is step 7's
+automated request→AIS reconciliation** (match a `requested` row to observed AIS
+and auto-promote it — it reuses step 6's overlap primitive). Step 7 intake
+*capture* plus a manual *edit* surface landed early at the user's request;
+step 6's draft-vs-controlling-depth gate is deferred (no depth data layer yet).
+DB-integration tests need a live PostGIS (they auto-skip without one); pure
+logic — crosswalk, detector/projection, conflict overlap predicates, intake
+parsing & normalization, edit range/validation helpers — is unit-tested.
 
 ## Repo layout
 
@@ -203,8 +212,9 @@ app/
   models.py            # ORM models (mirror the migration; migration is truth)
   crosswalk.py         # THE stationing module — all position math lives here
   tz.py                # THE time module — Central Time canon (assume_central); no inline offsets
-  main.py              # FastAPI: read-only endpoints + map page + intake + edit endpoints
+  main.py              # FastAPI: read-only endpoints + map page + intake + edit + conflicts
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
+  conflicts.py         # step 6: time×station overlap primitive + find_conflicts (GET /conflicts)
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
   seed/wharf_seed.py   # seeds wharf_segment (real centerline + apron) + berth catalog (from data/gis/)
   ais/
@@ -226,8 +236,9 @@ alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intak
                        #   0007 min mooring-gap buffer on the overlap constraint ·
                        #   0008 database default TimeZone = America/Chicago
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
-                       #   edit range/validation; db-marked (auto-skip): geo→station, occupancy
-                       #   derive, intake, reservations, edit (vessel patch / reservation CRUD / 409)
+                       #   edit range/validation, conflict overlap predicates; db-marked (auto-skip):
+                       #   geo→station, occupancy derive, intake, reservations, edit (vessel patch /
+                       #   reservation CRUD / 409), conflicts (GET /conflicts overlap matrix)
 scripts/
   dev.sh               # one-command local dev stack (macOS/Linux): DB + migrate + seed + API + AIS
   dev.ps1              # same, for Windows (PowerShell)

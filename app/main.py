@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import __version__
 from app.config import get_settings
+from app.conflicts import find_conflicts
 from app.crosswalk import geo_to_station, segment_dockno_params
 from app.db import get_session
 from app.edit import (
@@ -494,6 +495,31 @@ def list_reservations(
         }
         for r in rows
     ]
+
+
+@app.get("/conflicts")
+def list_conflicts(
+    status: str | None = None,
+    limit: int = 200,
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = None,
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Conflict pairs — reservations that overlap in BOTH time and station — each
+    with the overlapping sub-rectangle (POPA + Dock No.) so the UI can highlight
+    the exact collision. This *surfaces* overlaps (the headline being an
+    AIS-``observed`` vessel sitting where something is planned); it does not block
+    them — that is the ``confirmed``-only DB exclusion constraint's job.
+
+    ``status`` keeps only pairs where at least one side has that status (e.g.
+    ``observed`` -> observed-vs-planned). ``from``/``to`` (ISO datetimes, FastAPI
+    rejects malformed with 422) narrow to pairs whose windows both overlap that
+    span. Cancelled/completed rows never appear; an unassigned ``requested`` row
+    (empty station range) never conflicts."""
+    # Inverted bounds are a no-op window, not a 500 (mirrors /reservations).
+    if from_ is not None and to is not None and from_ > to:
+        from_, to = to, from_
+    return find_conflicts(session, t_from=from_, t_to=to, status=status, limit=limit)
 
 
 @app.get("/berths")

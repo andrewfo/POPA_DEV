@@ -9,10 +9,11 @@ contract) and [`README.md`](./README.md) (setup/run). When the two disagree,
 
 ## 1. Where we are today
 
-**Steps 1–5 are complete** (all committed). The repo is a conflict-safe data
-layer seeded from live AIS, with a read-only Leaflet UI and — pulled forward
-ahead of the build order, at the user's request — **berth-request intake
-_capture_**.
+**Steps 1–6 are complete.** The repo is a conflict-safe data layer seeded from
+live AIS, now with a **conflict-detection service** (the time × station overlap
+primitive surfaced as a query/API + a thin map surface), a read-only Leaflet UI,
+and — pulled forward ahead of the build order, at the user's request —
+**berth-request intake _capture_**.
 
 | # | Step | Status | Lands in |
 |---|------|--------|----------|
@@ -21,7 +22,7 @@ _capture_**.
 | 3 | Measured wharf centerline (real, derived from ArcGIS berths) | ✅ | `data/gis/build_centerline.py` → `app/seed/wharf_seed.py` |
 | 4 | AIS ingestion (aisstream.io → DB) | ✅ | `app/ais/*` |
 | 5 | Occupancy derivation | ✅ | `app/occupancy/*`, migration `0002`, `tests/test_occupancy_*` |
-| 6 | Conflict-detection service | ⬜ (next) | — |
+| 6 | Conflict-detection service | ✅ | `app/conflicts.py`, `GET /conflicts` in `app/main.py`, `tests/test_conflicts*.py`, conflicts panel in `app/static/index.html` |
 | 7 | Request intake + reconciliation; legacy backfill | 🟡 capture built; reconciliation TODO | `app/intake/*`, migrations `0003`/`0004`, `tests/test_intake_*` |
 
 **Also built ahead of the plan** (deviations from "no UI in phase 1" / "intake
@@ -95,45 +96,59 @@ centerline; apron DB-path unexercised until PostGIS is up).
 
 ---
 
-## 3. Step 6 — Conflict-detection service (next up)
+## 3. Step 6 — Conflict-detection service ✅ (done)
 
-**Goal:** surface conflicts as a query/service. One primitive: *time ranges
-overlap AND station ranges overlap*. Covers vessel-vs-vessel, vessel-vs-dredge,
-and observed-vs-planned alike.
+**Goal met:** the one primitive — *time ranges overlap AND station ranges
+overlap* — is surfaced as a query/service, covering vessel-vs-vessel,
+vessel-vs-dredge, and observed-vs-planned alike. Built in `app/conflicts.py`
+(pure overlap helpers + `find_conflicts`), exposed as `GET /conflicts`, tested in
+`tests/test_conflicts.py` (pure) + `tests/test_conflicts_db.py` (endpoint/DB), and
+given a thin map surface in `app/static/index.html`.
 
-### 3.1 Core query
+### 3.1 Core query ✅
 - A conflict between reservations `a` and `b` is
-  `a.time_range && b.time_range AND a.station_range && b.station_range`.
-- Implement once as a SQL function or SQLAlchemy query in `app/conflicts.py`.
-  Parameterize by status filter so callers choose what counts:
-  - **observed-vs-planned** (the headline signal: a vessel sitting where
-    something is planned) — `observed` × (`tentative|confirmed`);
-  - **planned-vs-planned** — sanity check even though the DB blocks confirmed
-    overlaps;
-  - **dredge-vs-vessel** — same primitive, no special-casing.
+  `a.time_range && b.time_range AND a.station_range && b.station_range`, run as a
+  self-join in `find_conflicts` using Postgres' own range operators (`&&` to
+  detect, `*` to compute the overlap rectangle) — the source of truth. Uses the
+  **raw** ranges, not the ±37.5 ft mooring buffer (that's a write-time margin).
+- Pure predicates (`time_overlaps` half-open `[)`, `station_overlaps` closed
+  `[]`, `reservations_conflict`, `overlap_interval`, `classify`) mirror the stored
+  inclusivity exactly and are unit-tested without a DB.
+- `status` filter (at least one side matches) gives the three lenses;
+  `classify` labels each pair `observed-vs-planned` / `dredge-vs-vessel` /
+  `planned-vs-planned`. Empty (unassigned) station ranges never match `&&`, so
+  `requested` rows drop out for free — the intended "no false conflict".
 
-### 3.2 Service / API surface
-- `GET /conflicts?from=..&to=..&status=..` → list of conflict pairs with the
-  overlapping time and station sub-intervals (compute the intersection so the UI
-  can highlight the exact rectangle).
-- Optionally `GET /reservations` with time/station window filters (foundation
-  for the later Leaflet view).
+### 3.2 Service / API surface ✅
+- `GET /conflicts?from=..&to=..&status=..&limit=..` → list of conflict pairs,
+  each with the overlapping time + station sub-rectangle (POPA **and** Dock No.)
+  so the UI highlights the exact stretch. Mirrors `/reservations` for param
+  parsing, vessel-name fallback, and Dock conversion.
+- **UI:** a "Conflicts" stat tile + an Overview-tab panel listing each pair
+  (names, category, overlap window + Dock range); clicking a card draws the
+  contested station sub-range in red on the chart (reusing the vessel-outline
+  `stationToLatLon` projection). Refreshed on the 15 s poll and after
+  schedule/status writes.
 
-### 3.3 Draft vs controlling depth
+### 3.3 Draft vs controlling depth — DEFERRED (carried to §5.6 / a later step)
 - `CLAUDE.md` requires: **draft must be validated against controlling depth for
-  the station/time window before a reservation can be confirmed.**
-- Needs a **controlling-depth source**: a `controlling_depth` table keyed by
-  station range + effective time window (depths change with dredging and
-  shoaling). Seed from the latest hydrographic survey / Corps condition survey.
-- Add a check in the confirm path (and a `GET /conflicts` "depth" category):
-  `vessel.draft > controlling_depth(station_range, time_range)` → block/flag.
+  the station/time window before a reservation can be confirmed.** Not built this
+  step — it needs a **controlling-depth source** (a `controlling_depth` table
+  keyed by station range + effective time window; depths change with dredging and
+  shoaling) seeded from a hydrographic / Corps condition survey, which we don't
+  have. Confirm path keeps today's warned-not-enforced behavior
+  (`app/edit.confirm_warnings`). When the data lands: add the check in the confirm
+  path and a `GET /conflicts` "depth" category
+  (`vessel.draft > controlling_depth(station_range, time_range)` → block/flag).
 
-### 3.4 Tests (required)
-- Overlap matrix: pairs that touch only in time, only in station, in both,
-  or in neither → correct classification.
-- Half-open range edge cases (`[a,b)` adjacency must NOT count as overlap).
-- Dredge-vs-vessel uses the identical path.
-- Depth: under/over controlling depth at a station/time window.
+### 3.4 Tests ✅
+- Overlap matrix (time-only / station-only / both / neither → correct
+  classification), the half-open `[a,b)` time-adjacency edge case (touching ⇒ no
+  overlap), the closed-station shared-endpoint case, open-ended time, empty
+  station never conflicts, the intersection rectangle, and `classify` — pure in
+  `test_conflicts.py`; the same matrix through `GET /conflicts` against real
+  PostGIS in `test_conflicts_db.py` (incl. dredge-vs-vessel using the identical
+  path). Depth tests wait on §3.3's data source.
 
 ---
 
@@ -257,9 +272,13 @@ Leaflet **UI** and berth-request intake **capture**. See §1.)
    `tests/test_geo_station_real.py`). What's left here: bring PostGIS up and
    `alembic upgrade head` → `app.seed.wharf_seed` → run the db-marked tests to
    exercise the apron seed + `ST_Contains` predicate.
-2. **Step 6**: conflict query/service + API, with the overlap test matrix.
+2. ~~**Step 6**: conflict query/service + API, with the overlap test matrix.~~
+   **Done** — `app/conflicts.py`, `GET /conflicts`, `tests/test_conflicts*.py`,
+   and a conflicts panel on the map.
 3. **Reconciliation (step 7 sequel)**: match `requested` intake rows to
-   `observed` AIS; assign their `station_range`; promote toward `confirmed`.
-4. **Controlling-depth** table + draft validation in the confirm path.
+   `observed` AIS; assign their `station_range`; promote toward `confirmed`. The
+   natural sequel — it reuses step 6's overlap primitive.
+4. **Controlling-depth** table + draft validation in the confirm path (the
+   deferred half of step 6, §3.3).
 5. **CI** with a PostGIS service container; AIS reconnect/metrics hardening.
 6. *(Optional)* wire the legacy-spreadsheet backfill review→commit pipeline.
