@@ -77,8 +77,18 @@ def _insert_position(session, vessel_id, minute, *, lat, sog, heading):
 
 def _seed_berthing_track(session, vessel_id):
     # 0..70 min alongside (lat 0.5, on the line), still, heading north (along line).
+    # Still berthed at the last sample -> an OPEN-ENDED event.
     for i in range(8):
         _insert_position(session, vessel_id, i * 10, lat=0.5, sog=0.1, heading=0.0)
+
+
+def _seed_berth_then_depart_track(session, vessel_id):
+    # Alongside + still through 70 min, then underway (SOG above the depart
+    # threshold) sustained past the depart-gap -> a CLOSED event ending at 70 min.
+    for i in range(8):
+        _insert_position(session, vessel_id, i * 10, lat=0.5, sog=0.1, heading=0.0)
+    for minute in (80, 90, 100, 110):
+        _insert_position(session, vessel_id, minute, lat=0.5, sog=5.0, heading=0.0)
 
 
 def test_derive_writes_one_reservation_and_is_idempotent(db_session):
@@ -128,3 +138,47 @@ def test_observed_reservation_has_expected_status_and_source(db_session):
         {"v": vid},
     ).one()
     assert (row.status, row.source, row.type) == ("observed", "ais", "vessel")
+
+
+def test_open_ended_berthing_has_unbounded_upper_and_contains_now(db_session):
+    # A still-alongside (open-ended) berthing must stay open above so it contains
+    # `now()` while the vessel sits there — not capped at the last AIS fix.
+    seg_id = _insert_segment(db_session)
+    vid = _insert_vessel(db_session)
+    _seed_berthing_track(db_session, vid)
+
+    res = derive_observed(db_session, segment_id=seg_id, since=T0 - dt.timedelta(days=1))
+    assert [r for r in res if r.vessel_id == vid][0].open_ended is True
+
+    row = db_session.execute(
+        text(
+            "SELECT upper(time_range) AS hi, (time_range @> now()) AS contains_now "
+            "FROM reservation WHERE vessel_id = :v"
+        ),
+        {"v": vid},
+    ).one()
+    assert row.hi is None            # unbounded above
+    assert row.contains_now is True
+
+
+def test_departed_berthing_has_bounded_upper(db_session):
+    # Once the vessel leaves, the event is closed: the stored range gets a real
+    # upper bound (the last still fix), and no longer contains `now()`.
+    seg_id = _insert_segment(db_session)
+    vid = _insert_vessel(db_session)
+    _seed_berth_then_depart_track(db_session, vid)
+
+    res = derive_observed(db_session, segment_id=seg_id, since=T0 - dt.timedelta(days=1))
+    mine = [r for r in res if r.vessel_id == vid]
+    assert len(mine) == 1
+    assert mine[0].open_ended is False
+
+    row = db_session.execute(
+        text(
+            "SELECT upper(time_range) AS hi, (time_range @> now()) AS contains_now "
+            "FROM reservation WHERE vessel_id = :v"
+        ),
+        {"v": vid},
+    ).one()
+    assert row.hi == T0 + dt.timedelta(minutes=70)
+    assert row.contains_now is False

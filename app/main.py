@@ -37,7 +37,8 @@ from app.intake.manual import (
     record_manual_request,
     update_manual_request,
 )
-from app.models import PositionReport, Vessel, WharfSegment
+from app.models import Vessel, WharfSegment
+from app.occupancy.alongside import _alongside_sql
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
 
@@ -177,22 +178,36 @@ def segments_geojson(session: Session = Depends(get_session)) -> dict:
 def positions_recent(
     limit: int = 500, session: Session = Depends(get_session)
 ) -> list[dict]:
-    """Most recent landed AIS positions, joined to vessel name when known."""
+    """Most recent landed AIS positions, joined to vessel name when known.
+
+    Each fix carries an ``alongside`` flag — whether it sits in the berthing
+    zone (the digitized apron polygon, else a centerline buffer; the one
+    predicate in ``app/occupancy/alongside.py``). The map uses ``alongside`` plus
+    a low SOG to colour a contact moored (green) vs underway (red), so a vessel
+    stopped mid-channel reads underway, not moored."""
+    point = "ST_SetSRID(ST_MakePoint(pr.lon, pr.lat), 4326)"
+    # LEFT JOIN LATERAL (not CROSS) so positions still return when no wharf
+    # segment is seeded — alongside just comes back NULL/false rather than the
+    # row vanishing.
     rows = session.execute(
-        select(
-            PositionReport.id,
-            PositionReport.mmsi,
-            PositionReport.lat,
-            PositionReport.lon,
-            PositionReport.sog,
-            PositionReport.cog,
-            PositionReport.heading,
-            PositionReport.msg_ts,
-            Vessel.name.label("vessel_name"),
-        )
-        .join(Vessel, Vessel.id == PositionReport.vessel_id, isouter=True)
-        .order_by(PositionReport.msg_ts.desc().nullslast(), PositionReport.id.desc())
-        .limit(limit)
+        text(
+            f"""
+            SELECT pr.id, pr.mmsi, pr.lat, pr.lon, pr.sog, pr.cog, pr.heading,
+                   pr.msg_ts, v.name AS vessel_name,
+                   COALESCE({_alongside_sql(point)}, false) AS alongside
+            FROM position_report pr
+            LEFT JOIN vessel v ON v.id = pr.vessel_id
+            LEFT JOIN LATERAL (
+                SELECT ST_Force2D(ws.geom) AS g, ws.apron AS apron
+                FROM wharf_segment ws
+                ORDER BY ws.geom <-> {point}
+                LIMIT 1
+            ) seg ON true
+            ORDER BY pr.msg_ts DESC NULLS LAST, pr.id DESC
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit, "buffer_m": get_settings().berth_buffer_m},
     ).all()
     return [
         {
@@ -200,11 +215,12 @@ def positions_recent(
             "mmsi": r.mmsi,
             "lat": r.lat,
             "lon": r.lon,
-            "sog": r.sog,
-            "cog": r.cog,
-            "heading": r.heading,
+            "sog": float(r.sog) if r.sog is not None else None,
+            "cog": float(r.cog) if r.cog is not None else None,
+            "heading": float(r.heading) if r.heading is not None else None,
             "msg_ts": r.msg_ts.isoformat() if r.msg_ts else None,
             "vessel_name": r.vessel_name,
+            "alongside": bool(r.alongside),
         }
         for r in rows
     ]
@@ -238,11 +254,76 @@ def list_vessels(
 
 @app.get("/stats")
 def stats(session: Session = Depends(get_session)) -> dict:
+    """Headline counts for the sidebar. Beyond raw vessel/position totals this
+    surfaces the request + reservation picture: how many berth requests have
+    landed, how many reservations exist by the statuses operators watch, and how
+    many vessels are moored *right now* (latest AIS fix alongside the wharf and
+    effectively stopped — the same test the map's green dots use)."""
+    # Reservation breakdown by status in one grouped scan (counts every status,
+    # so new ones show up without another query).
+    res_rows = session.execute(
+        text("SELECT status::text AS status, count(*) AS n FROM reservation GROUP BY status")
+    ).all()
+    by_status = {r.status: r.n for r in res_rows}
+    # Moored *now* = vessels whose latest AIS fix is alongside (in the berthing
+    # zone) AND effectively stopped. Same alongside predicate + SOG threshold the
+    # map colours a contact green with, so the tile and the green dots agree by
+    # construction (rather than the observed-reservation count, which needs the
+    # occupancy deriver running and lags real time).
+    settings = get_settings()
+    point = "ST_SetSRID(ST_MakePoint(l.lon, l.lat), 4326)"
+    moored = session.execute(
+        text(
+            f"""
+            WITH latest AS (
+                SELECT DISTINCT ON (pr.vessel_id)
+                       pr.vessel_id, pr.lat, pr.lon, pr.sog
+                FROM position_report pr
+                WHERE pr.vessel_id IS NOT NULL
+                ORDER BY pr.vessel_id, COALESCE(pr.msg_ts, pr.created_at) DESC
+            )
+            SELECT count(*)
+            FROM latest l
+            LEFT JOIN LATERAL (
+                SELECT ST_Force2D(ws.geom) AS g, ws.apron AS apron
+                FROM wharf_segment ws
+                ORDER BY ws.geom <-> {point}
+                LIMIT 1
+            ) seg ON true
+            WHERE l.sog IS NOT NULL AND l.sog < :enter_sog
+              AND COALESCE({_alongside_sql(point)}, false)
+            """
+        ),
+        {
+            "enter_sog": settings.berth_enter_sog_kn,
+            "buffer_m": settings.berth_buffer_m,
+        },
+    ).scalar_one()
+    # Arrivals in the next 24h = non-cancelled reservations whose ETB (the lower
+    # bound of time_range) falls within [now, now+24h]. The forward-looking view
+    # an operator preps berths against — counterpart to "Moored now" (right now).
+    arrivals_24h = session.execute(
+        text(
+            """
+            SELECT count(*)
+            FROM reservation
+            WHERE status <> 'cancelled'
+              AND lower(time_range) >= now()
+              AND lower(time_range) < now() + interval '24 hours'
+            """
+        )
+    ).scalar_one()
     return {
         "vessels": session.execute(select(func.count(Vessel.id))).scalar_one(),
-        "position_reports": session.execute(
-            select(func.count(PositionReport.id))
+        "arrivals_24h": arrivals_24h,
+        "berth_requests": session.execute(
+            text("SELECT count(*) FROM intake_event")
         ).scalar_one(),
+        # Reservations excluding cancelled — the "live" book of work.
+        "reservations": sum(n for s, n in by_status.items() if s != "cancelled"),
+        "moored": moored,
+        "confirmed": by_status.get("confirmed", 0),
+        "requested": by_status.get("requested", 0),
     }
 
 
