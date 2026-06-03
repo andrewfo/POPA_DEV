@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app import __version__
+from app.auth import BasicAuthMiddleware
 from app.config import get_settings
 from app.conflicts import find_conflicts
 from app.crosswalk import geo_to_station, segment_dockno_params
@@ -42,6 +43,11 @@ from app.models import Vessel, WharfSegment
 from app.occupancy.alongside import alongside_sql, nearest_segment_lateral
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
+
+# Gate the whole app (map + reads + writes) behind HTTP Basic. No-op unless
+# OPERATOR_USER/OPERATOR_PASSWORD are set, so dev and tests run open; /health
+# stays exempt for container probes. See app/auth.py.
+app.add_middleware(BasicAuthMiddleware)
 
 
 @app.exception_handler(OperationalError)

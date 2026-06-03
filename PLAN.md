@@ -13,7 +13,9 @@ contract) and [`README.md`](./README.md) (setup/run). When the two disagree,
 live AIS, now with a **conflict-detection service** (the time × station overlap
 primitive surfaced as a query/API + a thin map surface), a read-only Leaflet UI,
 and — pulled forward ahead of the build order, at the user's request —
-**berth-request intake _capture_**.
+**berth-request intake _capture_**. It is also now **deployable**: a production
+Docker image + `docker-compose.prod.yml` (db + one-shot migrate/seed + api + ais
++ occupancy) behind whole-app HTTP Basic auth (see §5.4).
 
 | # | Step | Status | Lands in |
 |---|------|--------|----------|
@@ -79,6 +81,11 @@ is a later layer", both user-requested):
 - **DB tests are opt-in** and auto-skip without a database; CI needs a real
   PostGIS service to exercise them. (Note: on Windows, `engine.connect()` to a
   dead host can hang — set `?connect_timeout=N` to fail fast.)
+- **Auth is all-or-nothing HTTP Basic** — one shared operator credential gates
+  the whole app, with no per-user accounts, roles, or audit of *who* edited. Fine
+  for a small operator team; revisit (OIDC/SSO against the portpa.com tenant) if
+  that's needed. TLS is **not** terminated by the stack — a reverse proxy / LB
+  must do it in front of `api` (Basic only base64-encodes credentials).
 
 ---
 
@@ -231,6 +238,16 @@ Not tied to a single step — pick up as the system matures.
 - ~~A `docker-compose` profile that runs API + ingestion + occupancy worker
   together for a realistic local stack.~~ **Done** — `scripts/dev.sh` (macOS/Linux)
   and `scripts/dev.ps1` (Windows) bring up the full stack in one command.
+- ~~**Production deployment packaging.**~~ **Done** — a production `Dockerfile`
+  (one slim, non-root image runs all four roles; gunicorn + uvicorn workers for
+  the API) and `docker-compose.prod.yml`: `db` → a one-shot `migrate` (`alembic
+  upgrade head` + seed, run separately so it happens once regardless of API
+  worker count) → `api` / `ais` / `occupancy`, wired with health + completion
+  gates and `restart: unless-stopped`. **Whole-app HTTP Basic** auth (`app/auth.py`,
+  active iff `OPERATOR_USER`+`OPERATOR_PASSWORD` set; `/health` exempt). Secrets
+  via gitignored `.env.prod` (`.env.prod.example` template). Smoke-tested end to
+  end: migrate ran 0001→0008 + seeded, api healthy, auth 401/200 correct, AIS
+  ingested. Remaining: TLS upstream, and Docker `secrets:` over the env file.
 - Healthcheck that reports last-AIS-message age (stale feed = silent failure).
 
 ### 5.5 Data quality
@@ -281,4 +298,6 @@ Leaflet **UI** and berth-request intake **capture**. See §1.)
 4. **Controlling-depth** table + draft validation in the confirm path (the
    deferred half of step 6, §3.3).
 5. **CI** with a PostGIS service container; AIS reconnect/metrics hardening.
+   (Production deployment packaging is **done** — see §5.4; the prod image makes a
+   CI build/integration job straightforward.)
 6. *(Optional)* wire the legacy-spreadsheet backfill review→commit pipeline.

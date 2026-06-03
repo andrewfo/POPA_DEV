@@ -1,0 +1,92 @@
+# Production stack for the POPA wharf data layer.
+#
+# One app image (built from ./Dockerfile) runs four roles — the API server, a
+# one-shot migrate/seed, the live AIS ingestor, and the occupancy worker — over
+# a Postgres/PostGIS database. Bring up:
+#
+#   cp .env.prod.example .env.prod     # then edit: real DB password, operator
+#                                      #   credentials, AIS key
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Secrets come from .env.prod (gitignored) injected via `env_file` into each
+# container's environment. For stronger isolation, switch to file-backed Docker
+# `secrets:` (the hardening upgrade over an env file).
+#
+# HTTP Basic auth (OPERATOR_USER / OPERATOR_PASSWORD) gates the WHOLE app and is
+# only base64-encoded on the wire — terminate TLS in a reverse proxy / load
+# balancer in front of `api`. Do not expose port 8000 to the public internet
+# over plain HTTP.
+
+# Shared environment for the app services. POSTGRES_HOST points at the `db`
+# service (the config default is localhost, for bare-metal dev). The secrets
+# (DB password, operator creds, AIS key) come from env_file, below.
+x-app-env: &app-env
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+
+x-app: &app
+  build: .
+  image: popa-wharf:latest          # built once; reused by every app role
+  env_file: .env.prod
+  environment: *app-env
+  depends_on:
+    db:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: popa_wharf_db_prod
+    restart: unless-stopped
+    env_file: .env.prod             # POSTGRES_USER/PASSWORD/DB straight into the image
+    volumes:
+      - popa_wharf_pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      # $$ defers expansion to the container shell, where env_file vars live.
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: apply migrations and seed the wharf segment + berth catalog, then
+  # exit. Run as a separate step (not the API entrypoint) so it happens exactly
+  # once regardless of how many API workers/replicas start.
+  migrate:
+    <<: *app
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed.wharf_seed"]
+
+  api:
+    <<: *app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    healthcheck:
+      # /health is auth-exempt, so no credentials needed. urlopen raises (non-zero
+      # exit) on any non-200.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # CMD in the Dockerfile already runs gunicorn; override WEB_CONCURRENCY via
+    # .env.prod to change the worker count.
+
+  ais:
+    <<: *app
+    restart: unless-stopped
+    command: ["python", "-m", "app.ais.run"]
+
+  occupancy:
+    <<: *app
+    restart: unless-stopped
+    # $${...} defers to the container shell so OCC_EVERY comes from env_file.
+    command: ["sh", "-c", "while true; do python -m app.occupancy.run; sleep $${OCC_EVERY:-60}; done"]
+
+volumes:
+  popa_wharf_pgdata_prod:

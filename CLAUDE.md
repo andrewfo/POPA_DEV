@@ -63,6 +63,10 @@ from day one with no manual intake.
   `app/edit.py`). All were added ahead of the build order at the user's request.
   Keep new UI thin and over the API; the data layer stays the
   product.
+- **Deployment** is a production Docker image (`Dockerfile`, one image for all
+  four roles) + `docker-compose.prod.yml` (db + one-shot migrate/seed + api +
+  ais + occupancy), distinct from the dev-only `docker-compose.yml` + `scripts/dev.*`.
+  The whole app sits behind **HTTP Basic** (`app/auth.py`).
 
 ## Schema (target)
 
@@ -215,6 +219,7 @@ app/
   main.py              # FastAPI: read-only endpoints + map page + intake + edit + conflicts
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
   conflicts.py         # step 6: time×station overlap primitive + find_conflicts (GET /conflicts)
+  auth.py              # HTTP Basic gate (whole-app middleware); active only when OPERATOR_USER+PASSWORD set
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
   seed/wharf_seed.py   # seeds wharf_segment (real centerline + apron) + berth catalog (from data/gis/)
   ais/
@@ -242,6 +247,9 @@ tests/                 # pure: crosswalk, geo→station(real), ais/intake parser
 scripts/
   dev.sh               # one-command local dev stack (macOS/Linux): DB + migrate + seed + API + AIS
   dev.ps1              # same, for Windows (PowerShell)
+Dockerfile             # production app image (one image runs all four roles); CMD = gunicorn API
+docker-compose.prod.yml# prod stack: db + one-shot migrate/seed + api + ais + occupancy (NOT the dev compose)
+.env.prod.example      # prod secrets/config template (DB password, operator creds, AIS key) -> .env.prod
 ```
 
 ## Working agreements for future changes
@@ -254,6 +262,14 @@ scripts/
   `app/models.py`. Keep enum value tuples in `models.py` and the migration in sync.
 - The exclusion constraint stays `confirmed`-only. If you think you need to block
   `observed` overlaps, re-read the Core model section first.
+- **Auth is whole-app HTTP Basic via a middleware** (`app/auth.py`), not per-route
+  dependencies — the middleware is the only thing that also covers the mounted
+  static map (`/`, `/static/*`). It is **active only when both `OPERATOR_USER`
+  and `OPERATOR_PASSWORD` are set**; blank ⇒ open, on purpose, so dev and the
+  TestClient suite run without credentials and a deployment turns it on by env
+  alone. Keep `/health` the lone auth-exempt path (the container probe); gate any
+  new endpoint by default. Basic only base64-encodes credentials, so it MUST run
+  behind TLS terminated upstream (the prod compose does not terminate TLS).
 - New intake channels = a new `IntakeSource` (CSV path) or a thin call into
   `app/intake/`, all landing raw in `intake_event` (deduped by content-hash
   `dedupe_key`) before any normalization — never skip the raw landing. A

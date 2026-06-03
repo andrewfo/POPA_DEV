@@ -77,6 +77,41 @@ python -m app.ais.run
 python -m app.intake.run path/to/BerthRequests.csv [--dry-run]
 ```
 
+## Deploy (production)
+
+`scripts/dev.*` and `docker-compose.yml` are for **local dev only** (DB
+container + bare `uvicorn --reload`). For a real deployment use the production
+image + stack:
+
+```bash
+# 1. Secrets: copy and fill in (gitignored). Set a strong DB password, the
+#    operator login, and your AIS key.
+cp .env.prod.example .env.prod
+
+# 2. Build the image and bring up the full stack:
+#    db + a one-shot migrate/seed + api (gunicorn) + ais ingestor + occupancy.
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+The `migrate` service runs `alembic upgrade head` + the wharf/berth seed **once**
+to completion, and `api`/`ais`/`occupancy` wait for it (and a healthy DB) before
+starting. One image (`Dockerfile`) runs all four roles. Tail logs / tear down:
+`docker compose -f docker-compose.prod.yml logs -f`,
+`... down` (add `-v` to also drop the data volume).
+
+**Auth.** HTTP Basic gates the **whole app** (map + reads + writes). It is active
+**only when `OPERATOR_USER` *and* `OPERATOR_PASSWORD` are set** — leave either
+blank and the app runs open (fine for a private dev box, never for a reachable
+deployment). `/health` stays open so the container healthcheck can probe. The
+browser caches the login and replays it on the map's API calls, so no UI changes
+are needed.
+
+**TLS is required.** Basic auth only base64-encodes credentials, so terminate
+TLS in a reverse proxy / load balancer (nginx, Caddy, cloud LB) in front of
+`api`; do not expose port 8000 to the internet over plain HTTP. For stronger
+secret isolation than an env file, switch the compose `env_file` to file-backed
+Docker `secrets:`.
+
 ## Tests
 
 ```bash

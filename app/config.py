@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     # Postgres is down/unreachable. Tunable for slow/remote PostGIS or CI bring-up.
     db_connect_timeout: int = 3
 
+    # --- Operator auth (HTTP Basic, whole app) ---
+    # One operator credential gating the whole app (map + reads + writes). Auth
+    # is active ONLY when BOTH are set; either blank => disabled (open), so local
+    # dev and the TestClient suite run with no credentials. A deployment turns it
+    # on purely by setting these two env vars. Basic auth must run behind TLS.
+    operator_user: str = Field(default="", repr=False)
+    operator_password: str = Field(default="", repr=False)
+
     # --- AIS ingestion ---
     aisstream_api_key: str = Field(default="", repr=False)
     aisstream_url: str = "wss://stream.aisstream.io/v0/stream"
