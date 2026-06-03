@@ -1388,16 +1388,19 @@ function wireResCards(container) {
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "requested" });
       if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); } else alert("Failed: " + writeError(w));
     });
-    // Cancel: mark the visit as not happening. Sends ONLY status=cancelled (no
-    // bow/heading), so the server clears the placement — frees the berth, empties
-    // the station range — without re-running bow placement (which could fail on a
-    // vessel with no LOA). The row then drops out of the "active" list and, being
-    // cancelled, is hidden from the timeline by default. Reversible by editing the
-    // status back; a hard delete (row + reservation) lives on the Berth requests tab.
+    // Cancel: clear the placement and return the row to a blank, pending
+    // request. Sends status=requested + unassigned=true (no bow/heading), so the
+    // server frees the berth, empties the station range (gone from the timeline
+    // bar), and drops the row back to 'requested' — WITHOUT re-running bow
+    // placement (which could fail on a vessel with no LOA). The request stays in
+    // the reservations tab (the "Place + Confirm" button reappears, since it
+    // renders only for 'requested'), so it can be re-placed and re-confirmed; the
+    // arrival/departure window is kept. A hard delete (row + reservation) lives
+    // on the Berth requests tab.
     const cancelBtn = card.querySelector('[data-act="cancel"]');
     if (cancelBtn) cancelBtn.addEventListener("click", async () => {
-      if (!confirm("Cancel this reservation? It is removed from the schedule (freed from its berth) and hidden from the timeline. The record is kept.")) return;
-      const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "cancelled" });
+      if (!confirm("Cancel this placement? It clears the berth, station range, and timeline bar and returns the row to a pending request (blank, unconfirmed) so you can re-place it. The arrival/departure stay.")) return;
+      const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "requested", unassigned: true });
       if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); } else alert("Failed: " + writeError(w));
     });
 

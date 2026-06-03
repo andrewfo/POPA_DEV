@@ -362,6 +362,29 @@ def test_cancel_with_concurrent_berth_assignment_still_unplaces(client, db_sessi
     assert got["station_unassigned"] is True and got["berth_id"] is None
 
 
+def test_reset_to_requested_clears_placement_but_keeps_row(client, db_session):
+    # The "Cancel" button reverts a placed row to a blank pending request: it
+    # sends status=requested + unassigned=true, which frees the berth and empties
+    # the station range while keeping the row (status 'requested', so it stays in
+    # the active list and can be re-placed) and its arrival/departure window.
+    bid = _add_berth(db_session, name="Test Berth Reset", lo=351.0, hi=1107.3)
+    rid = client.post("/reservations", json={
+        "etb": "2026-09-10T00:00:00Z", "etd": "2026-09-12T00:00:00Z",
+        "status": "tentative", "berth_id": bid,
+    }).json()["id"]
+    placed = _get_reservation(client, rid)
+    assert placed["station_unassigned"] is False and placed["berth_id"] == bid
+
+    r = client.patch(f"/reservations/{rid}", json={
+        "status": "requested", "unassigned": True,
+    })
+    assert r.status_code == 200
+    got = _get_reservation(client, rid)
+    assert got["status"] == "requested"
+    assert got["station_unassigned"] is True and got["berth_id"] is None
+    assert got["t_start"] is not None and got["t_end"] is not None
+
+
 def test_cancel_ignores_resent_bow_placement_without_loa(client, db_session):
     # Regression: the "Edit placement" form re-sends the row's bow_dock + heading.
     # On a vessel with no LOA, bow placement can't resolve a stern — it must NOT
