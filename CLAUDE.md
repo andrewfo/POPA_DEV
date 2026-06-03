@@ -210,6 +210,9 @@ alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intak
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation; db-marked (auto-skip): geo→station, occupancy
                        #   derive, intake, reservations, edit (vessel patch / reservation CRUD / 409)
+scripts/
+  dev.sh               # one-command local dev stack (macOS/Linux): DB + migrate + seed + API + AIS
+  dev.ps1              # same, for Windows (PowerShell)
 ```
 
 ## Working agreements for future changes

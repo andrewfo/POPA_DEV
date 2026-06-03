@@ -205,8 +205,9 @@ Not tied to a single step — pick up as the system matures.
 
 ### 5.4 Observability & ops
 - Structured logging config, request IDs, basic Prometheus-style counters.
-- A `docker-compose` profile that runs API + ingestion + occupancy worker
-  together for a realistic local stack.
+- ~~A `docker-compose` profile that runs API + ingestion + occupancy worker
+  together for a realistic local stack.~~ **Done** — `scripts/dev.sh` (macOS/Linux)
+  and `scripts/dev.ps1` (Windows) bring up the full stack in one command.
 - Healthcheck that reports last-AIS-message age (stale feed = silent failure).
 
 ### 5.5 Data quality

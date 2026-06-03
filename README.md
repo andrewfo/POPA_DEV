@@ -47,6 +47,14 @@ python -m app.seed.wharf_seed
 ## Run
 
 ```bash
+# One-command dev stack (DB + migrate + seed + API + AIS ingestor):
+./scripts/dev.sh                  # macOS / Linux
+.\scripts\dev.ps1                 # Windows (PowerShell)
+# Add --occupancy / -Occupancy for the occupancy derivation loop.
+# Use --down / -Down to stop the DB container.
+
+# Or run each piece individually:
+
 # API + read-only Leaflet map (served at /)
 uvicorn app.main:app --reload
 #   GET  /                -> map UI + berth occupancy timeline (Gantt drawer)
