@@ -222,8 +222,12 @@
     white-space: nowrap;
   }
   /* Yellow quay-face ticks (second exhibit series, referenced from Berth 1).
-     Same vertical-on-screen orientation as the POPA labels. */
+     Same vertical-on-screen orientation as the POPA labels — note the
+     display:inline-block is required for the rotate to apply (a plain inline
+     span ignores transforms), which is why these read along the tick rather
+     than sprawling horizontally across the dock. */
   .yk-label .lbl {
+    display: inline-block;
     transform: rotate(-90deg); transform-origin: center center;
     white-space: nowrap;
   }
@@ -232,7 +236,7 @@
   .wh-label { color: var(--ink-dim); font-size: 12px; }
   .sta-label { color: var(--red); font-size: 12px; font-weight: 600; font-family: var(--font-mono); }
   .ft-label { color: var(--ink); font-size: 11px; font-weight: 600; font-family: var(--font-mono); text-shadow: 0 0 3px #000, 0 1px 2px #000; }
-  .yk-label { color: var(--amber); font-size: 11px; font-weight: 700; font-family: var(--font-mono); text-shadow: 0 0 3px #000, 0 1px 2px #000; }
+  .yk-label { color: var(--amber); font-size: 13px; font-weight: 700; font-family: var(--font-mono); text-shadow: 0 0 3px #000, 0 1px 2px #000; }
   .berth-label::before, .wh-label::before, .sta-label::before, .ft-label::before, .yk-label::before { display: none; }
   a { color: var(--blue); }
   .legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
@@ -368,7 +372,6 @@
   .tl-grid { stroke: var(--line); stroke-width: 1; }
   .tl-axis-label { fill: var(--muted); font-family: var(--font-mono); font-size: 10px; }
   .tl-now { stroke: var(--bad); stroke-width: 1.5; stroke-dasharray: 4 3; }
-  .tl-now-label { fill: var(--bad); font-family: var(--font-mono); font-weight: 600; font-size: 10px; }
   .tl-cursor { stroke: var(--cyan); stroke-width: 2; }
   .tl-cursor-handle { fill: var(--cyan); stroke: #04121f; stroke-width: 1; cursor: ew-resize; }
   #tlSvg { cursor: ew-resize; }
@@ -405,6 +408,10 @@
   <aside>
     <div class="stats">
       <div class="stat"><div class="n" id="statVessels">—</div><div class="l">Vessels</div></div>
+      <div class="stat"><div class="n" id="statMoored">—</div><div class="l">Moored now</div></div>
+      <div class="stat"><div class="n" id="statReservations">—</div><div class="l">Reservations</div></div>
+      <div class="stat"><div class="n" id="statRequests">—</div><div class="l">Berth requests</div></div>
+      <div class="stat"><div class="n" id="statConfirmed">—</div><div class="l">Confirmed</div></div>
       <div class="stat"><div class="n" id="statPositions">—</div><div class="l">Position reports</div></div>
     </div>
 
@@ -737,18 +744,6 @@ const warehouseLayer = L.geoJSON(null, {
     layer.bindTooltip(`<span class="lbl">${p.label || p.name}</span>`, { permanent: true, direction: "center", className: "wh-label" });
   },
 }).addTo(map);
-// Apron / berthing-zone polygon (apron.geojson): the water-side strip of the
-// quay face where a berthed vessel's AIS position falls. This is the "alongside"
-// footprint the occupancy detector uses (a digitized polygon, superseding the
-// symmetric centerline buffer). Drawn as a faint teal fill so it reads as a zone,
-// not a feature.
-const apronLayer = L.geoJSON(null, {
-  style: { color: PAL.green, weight: 1, opacity: 0.6, fillColor: PAL.green, fillOpacity: 0.10, dashArray: "4 4" },
-  onEachFeature: (f, layer) => {
-    const p = f.properties || {};
-    layer.bindPopup(`<b>Berthing zone (apron)</b><br>${p.inland_ft ?? "?"} ft inland · ${p.water_ft ?? "?"} ft water`);
-  },
-}).addTo(map);
 // The quay-face centerline is kept faint — the exhibit shows no drawn line, the
 // ticks read off the photo's quay edge. (Still loaded: it drives the bearing.)
 const centerlineLayer = L.geoJSON(null, {
@@ -778,7 +773,7 @@ const feetLayer = L.geoJSON(null, {
       interactive: false,
     }).addTo(feetLayer);
   },
-}).addTo(map);
+});  // off by default — toggle on via the "Dredge markers" overlay
 // Yellow quay-face ticks, from yellow_markers.geojson — the exhibit's second
 // tick series: the port's Dock No. stationing painted on the wharf deck,
 // anchored at Dock No. 0 (the NE start) and increasing SW, one tick every 50 ft
@@ -791,8 +786,9 @@ const yellowLayer = L.geoJSON(null, {
   onEachFeature: (f, layer) => {
     if (!f.properties.label) return;
     const co = f.geometry.coordinates;
-    const quay = co[co.length - 1];                // quay-edge end (next to the water)
-    L.marker([quay[1], quay[0]], {
+    const a = co[0], b = co[co.length - 1];        // tick endpoints
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];   // label rides the middle of the tick
+    L.marker([mid[1], mid[0]], {
       icon: L.divIcon({
         className: "yk-label",
         html: `<span class="lbl">${f.properties.label}</span>`,
@@ -819,7 +815,6 @@ const aisIcon = (moored) => L.divIcon({
 L.control.layers(null, {
   "AIS contacts": vesselLayer,
   "Berths": berthLayer,
-  "Berthing zone (apron)": apronLayer,
   "Dock markers (yellow)": yellowLayer,
   "Dredge markers": feetLayer,
 }, { collapsed: false, position: "topright" }).addTo(map);
@@ -834,16 +829,28 @@ function setStatus(ok, text) {
   document.getElementById("statusText").textContent = text;
 }
 
+// Stat tile id -> /stats key. Driven from one map so the markup, the fetch fill,
+// and the offline reset never drift apart.
+const STAT_FIELDS = {
+  statVessels: "vessels",
+  statMoored: "moored",
+  statReservations: "reservations",
+  statRequests: "berth_requests",
+  statConfirmed: "confirmed",
+  statPositions: "position_reports",
+};
 async function loadStats() {
   try {
     const s = await api("/stats");
-    document.getElementById("statVessels").textContent = s.vessels;
-    document.getElementById("statPositions").textContent = s.position_reports;
+    for (const [id, key] of Object.entries(STAT_FIELDS)) {
+      document.getElementById(id).textContent = s[key] ?? 0;
+    }
     setStatus(true, "data layer online");
   } catch (e) {
     setStatus(false, "database offline");
-    document.getElementById("statVessels").textContent = "0";
-    document.getElementById("statPositions").textContent = "0";
+    for (const id of Object.keys(STAT_FIELDS)) {
+      document.getElementById(id).textContent = "0";
+    }
   }
 }
 
@@ -874,10 +881,6 @@ async function loadReferenceGeo() {
   try {
     const ym = await api("/static/gis/yellow_markers.geojson");
     yellowLayer.addData(ym);
-  } catch (e) { /* optional */ }
-  try {
-    const ap = await api("/static/gis/apron.geojson");
-    apronLayer.addData(ap);
   } catch (e) { /* optional */ }
   try {
     const cl = await api("/static/gis/centerline.geojson");
@@ -1002,10 +1005,16 @@ async function loadPositions() {
     for (const p of ps) {
       if (p.mmsi && seen.has(p.mmsi)) continue; // most-recent per vessel
       if (p.mmsi) seen.add(p.mmsi);
-      const moored = (p.sog ?? 99) < 0.5;
+      // Green = moored: stopped (SOG below the berth-enter threshold) AND
+      // alongside (in the berthing zone, per the server's apron/buffer test). A
+      // vessel stopped mid-channel stays red/underway.
+      const stopped = (p.sog ?? 99) < 0.5;
+      const moored = stopped && p.alongside;
+      const stateNote = moored ? " · <b>moored</b>"
+        : (stopped ? " · stopped (off berth)" : "");
       L.marker([p.lat, p.lon], { icon: aisIcon(moored) }).bindPopup(
         `<b>${p.vessel_name || "(unnamed)"}</b><br>MMSI ${p.mmsi ?? "—"}<br>` +
-        `SOG ${p.sog ?? "—"} kn${moored ? " · <b>moored</b>" : ""}<br>` +
+        `SOG ${p.sog ?? "—"} kn${stateNote}<br>` +
         `${p.msg_ts ? new Date(p.msg_ts).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : ""}`
       ).bindTooltip(p.vessel_name || ("MMSI " + (p.mmsi ?? "?")), {
         direction: "top", offset: [0, -10],
@@ -1171,6 +1180,7 @@ function wireResCards(container) {
         reqRes.className = "mini-result ok";
         reqRes.innerHTML = "Saved." + warnHtml(w.data && w.data.warnings);
         loadTimeline();
+        loadStats();   // status change may move the confirmed / reservation counts
         setTimeout(loadRequests, 1200);   // let the confirmation show first
       } else {
         reqRes.className = "mini-result err";
@@ -1196,7 +1206,7 @@ function wireResCards(container) {
     if (cancelBtn) cancelBtn.addEventListener("click", async () => {
       if (!confirm("Cancel this reservation?")) return;
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "cancelled" });
-      if (w.ok) { loadRequests(); loadTimeline(); } else alert("Failed: " + writeError(w));
+      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); } else alert("Failed: " + writeError(w));
     });
     // No delete here: a reservation can only be cancelled (reversible) from this
     // tab. The hard delete lives on the Berth requests tab, which removes the
@@ -1219,6 +1229,7 @@ function wireResCards(container) {
         res.className = "mini-result ok";
         res.innerHTML = "Saved." + warnHtml(w.data && w.data.warnings);
         loadTimeline();
+        loadStats();   // status change may move the confirmed / reservation counts
         setTimeout(loadRequests, 1500);   // let the confirmation (and any warning) show first
       } else {
         res.className = "mini-result err";
@@ -1390,7 +1401,7 @@ async function loadBerthRequests() {
       const id = Number(delBtn.dataset.deleteReq);
       if (!confirm("Delete this berth request and its requested reservation?")) return;
       const w = await apiWrite("DELETE", `/intake/berth-requests/${id}`);
-      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); }
+      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); loadStats(); }
       else alert("Failed: " + writeError(w));
     }
   });
@@ -1808,14 +1819,12 @@ const loadTimeline = (function () {
     }
 
     // "Now" marker (dashed red), re-read from the clock on every render/poll so
-    // it tracks the real time. Labelled so it isn't mistaken for the cyan cursor.
+    // it tracks the real time. The dashed red colour distinguishes it from the
+    // cyan cursor, so no text label is needed.
     const now = Date.now();
     if (now >= t0 && now <= t1) {
       const nx = x(now);
       svg.appendChild(el("line", { x1: nx, y1: HEADER_H, x2: nx, y2: totalH, class: "tl-now" }));
-      const nlbl = el("text", { x: nx + 3, y: HEADER_H - 13, class: "tl-now-label" });
-      nlbl.textContent = "now";
-      svg.appendChild(nlbl);
     }
 
     // Clamp the time cursor into the (possibly changed) window; it's drawn last

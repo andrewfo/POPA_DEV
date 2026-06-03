@@ -143,6 +143,16 @@ def _upsert(
         note_bits.append("still alongside (open-ended)")
     notes = "; ".join(note_bits)
 
+    # A still-alongside berthing is *ongoing*, so its time_range stays open above
+    # (unbounded upper) — it must contain `now()` for as long as the vessel sits
+    # there, which a "moored now" query and the timeline both rely on. Capping the
+    # upper at the last AIS fix (always slightly in the past) would make every
+    # open-ended berthing read as already ended. When the vessel departs, a later
+    # run re-detects the event as closed and the upsert rewrites a bounded range.
+    # observed rows are exempt from the confirmed-only exclusion constraint, so an
+    # unbounded range is safe.
+    upper = None if open_ended else t_end
+
     row = session.execute(
         text(
             """
@@ -168,7 +178,7 @@ def _upsert(
             "lo": lo,
             "hi": hi,
             "t_start": t_start,
-            "t_end": t_end,
+            "t_end": upper,
             "direction": direction,
             "derived_key": derived_key,
             "notes": notes,
