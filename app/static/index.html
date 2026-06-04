@@ -40,6 +40,7 @@
     --amber:   #e0a83a;   /* caution     — requested · live contact · warnings */
     --red:     #d94f43;   /* port red    — ALERT only: now-line · conflict */
     --cyan:    #57c7dd;   /* playhead cursor (a tool, not a status) */
+    --ais-tug: #ffe000;   /* yellow — AIS contact tint for tugs/towing (ship type 31/32/52) */
 
     /* reservation status palette (kept in sync with the JS STATUS maps) */
     --st-observed:  #3fae6e;
@@ -285,11 +286,18 @@
 
   /* Edit surface (vessels + reservations) */
   .filter-bar { margin: 0 0 var(--s3); display: flex; align-items: center; gap: 8px; }
+  .filter-bar.wrap { flex-wrap: wrap; }
   .filter-bar label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
   .filter-bar select {
     padding: 5px 8px; border-radius: var(--r); border: 1px solid var(--line);
     background: var(--panel-2); color: var(--ink); font-family: var(--font-ui); font-size: 12px;
   }
+  .filter-bar input[type=text], .filter-bar input[type=date] {
+    padding: 5px 8px; border-radius: var(--r); border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
+    min-width: 0;
+  }
+  .filter-bar input[type=text] { flex: 1; }
   .status-badge {
     display: inline-block; padding: 1px 7px; border-radius: var(--r);
     font-family: var(--font-ui); font-size: 9px; font-weight: 700; text-transform: uppercase;
@@ -391,6 +399,10 @@
   .ais-contact .ais-pulse { animation: ais-pulse 1.8s ease-out infinite; }
   .ais-contact.moored   .ais-dot, .ais-contact.moored   .ais-pulse { background: var(--green); }
   .ais-contact.underway .ais-dot, .ais-contact.underway .ais-pulse { background: var(--red); }
+  /* Tugs/towing vessels carry their own tint regardless of moored/underway —
+     placed after the state rules so it wins (equal specificity, later rule).
+     The dot keeps the dark stroke; only the fill changes. */
+  .ais-contact.tug .ais-dot, .ais-contact.tug .ais-pulse { background: var(--ais-tug); }
   @keyframes ais-pulse {
     0%   { transform: scale(1);   opacity: .55; }
     100% { transform: scale(2.8); opacity: 0; }
@@ -444,6 +456,7 @@
       <button type="button" class="tab active" data-tab="overview">Overview</button>
       <button type="button" class="tab" data-tab="reservations">Reservations</button>
       <button type="button" class="tab" data-tab="requests">Berth requests</button>
+      <button type="button" class="tab" data-tab="history">History</button>
     </nav>
 
     <!-- ===== Berth requests tab ===== -->
@@ -605,6 +618,36 @@
     <div id="vesselEditor"></div>
     </section>
     <!-- ===== /Overview tab ===== -->
+
+    <!-- ===== History tab ===== -->
+    <section class="tab-panel" data-panel="history">
+    <h2>Reservation history</h2>
+    <p class="hint" style="margin:0 0 10px">
+      The log of bookings — every status, AIS-observed berthings included —
+      newest arrival first. Filter by vessel name, status, or a date range.
+    </p>
+    <div class="filter-bar wrap">
+      <input type="text" id="histName" placeholder="Vessel name…" />
+      <label for="histStatus">Status</label>
+      <select id="histStatus">
+        <option value="">All</option>
+        <option value="observed">Observed</option>
+        <option value="requested">Requested</option>
+        <option value="tentative">Tentative</option>
+        <option value="confirmed">Confirmed</option>
+        <option value="completed">Completed</option>
+        <option value="cancelled">Cancelled</option>
+      </select>
+      <label for="histFrom">From</label>
+      <input type="date" id="histFrom" />
+      <label for="histTo">To</label>
+      <input type="date" id="histTo" />
+      <button type="button" class="btn-sm primary" id="histSearch">Search</button>
+      <button type="button" class="btn-sm" id="histClear">Clear</button>
+    </div>
+    <div id="historyList"><div class="empty">loading…</div></div>
+    </section>
+    <!-- ===== /History tab ===== -->
   </aside>
 
   <div id="sidebarResize" title="Drag to resize sidebar"></div>
@@ -682,6 +725,11 @@ const FT_PER_M = 3.280839895;
 // map's green/red colouring uses the exact threshold the server's "moored now"
 // count does; this default holds only until that fetch resolves.
 let MOORED_SOG = 0.5;
+// AIS numeric ship types that are tugs / towing vessels (52 = tug, 31 = towing,
+// 32 = towing >200m). Used to tint their contacts distinctly and tag them in
+// the history log. One source of truth for "is a tug".
+const TUG_TYPES = new Set([31, 32, 52]);
+const isTugType = (t) => t != null && TUG_TYPES.has(Number(t));
 const fmtSta = (ft) => {
   if (ft === null || ft === undefined) return "—";
   const neg = ft < 0 ? "-" : "";
@@ -839,12 +887,14 @@ const yellowLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 // AIS contacts: one pulsing dot per vessel (most-recent position, deduped per
-// MMSI), coloured by state — moored green, underway red. Toggleable as a whole
-// via the "AIS contacts" overlay in the layer control below.
+// MMSI), coloured by state — moored green, underway red — except tugs/towing,
+// which carry their own tint regardless of state. Toggleable as a whole via the
+// "AIS contacts" overlay in the layer control below.
 const vesselLayer = L.layerGroup().addTo(map);
-// Pulsing divIcon for a contact; `moored` picks the colour/state class.
-const aisIcon = (moored) => L.divIcon({
-  className: "ais-contact " + (moored ? "moored" : "underway"),
+// Pulsing divIcon for a contact; `moored` picks the state colour, `tug` overrides
+// it with the tug tint (the .tug CSS rule wins over .moored/.underway).
+const aisIcon = (moored, tug) => L.divIcon({
+  className: "ais-contact " + (tug ? "tug " : "") + (moored ? "moored" : "underway"),
   html: '<span class="ais-pulse"></span><span class="ais-dot"></span>',
   iconSize: [14, 14], iconAnchor: [7, 7],
 });
@@ -1178,16 +1228,18 @@ async function loadPositions() {
       // vessel stopped mid-channel stays red/underway.
       const stopped = (p.sog ?? 99) < MOORED_SOG;
       const moored = stopped && p.alongside;
+      const tug = isTugType(p.ship_type);
       const stateNote = moored ? " · <b>moored</b>"
         : (stopped ? " · stopped (off berth)" : "");
       // One info block, shared by the click popup and the hover tooltip, so
       // hovering a dot shows exactly what clicking it (or a "Recent vessels"
       // row, which opens this popup) does.
       const info =
-        `<b>${p.vessel_name || "(unnamed)"}</b><br>MMSI ${p.mmsi ?? "—"}<br>` +
+        `<b>${p.vessel_name || "(unnamed)"}</b>${tug ? ' <span style="color:var(--ais-tug)">⬢ tug</span>' : ""}<br>` +
+        `MMSI ${p.mmsi ?? "—"}<br>` +
         `SOG ${p.sog ?? "—"} kn${stateNote}<br>` +
         `${p.msg_ts ? new Date(p.msg_ts).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : ""}`;
-      const marker = L.marker([p.lat, p.lon], { icon: aisIcon(moored) })
+      const marker = L.marker([p.lat, p.lon], { icon: aisIcon(moored, tug) })
         .bindPopup(info)
         .bindTooltip(info, { direction: "top", offset: [0, -10] })
         .addTo(vesselLayer);
@@ -1559,6 +1611,10 @@ function wireResCards(container) {
     nav.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     panels.forEach((p) => p.classList.toggle("active", p.dataset.panel === name));
     localStorage.setItem("sidebarTab", name);
+    // History is a heavier (sessionizing) query, so load it lazily on first
+    // activation rather than on boot / in the 15s poll. loadHistory is a hoisted
+    // function declaration, so it's callable from this earlier-running IIFE.
+    if (name === "history") loadHistory();
   }
   nav.querySelectorAll(".tab").forEach((b) =>
     b.addEventListener("click", () => show(b.dataset.tab)));
@@ -1667,6 +1723,72 @@ function reqCard(r) {
 (function () {
   const sel = document.getElementById("reqSource");
   if (sel) sel.addEventListener("change", loadBerthRequests);
+})();
+
+// --- Reservation history ---------------------------------------------------
+// /history returns the booking log (every status, observed berthings included),
+// newest arrival first, with a vessel-name substring + status + date filter.
+// Same row shape as /reservations, so it shares fmtCentral / the status palette.
+function histCard(h) {
+  const color = RES_STATUS_COLOR[h.status] || "#888";
+  const tug = isTugType(h.ship_type)
+    ? ' <span class="status-badge" style="background:var(--ais-tug)">tug</span>' : "";
+  const imo = h.vessel_imo ? ` <span style="color:var(--muted);font-weight:400">IMO ${esc(h.vessel_imo)}</span>` : "";
+  const sta = h.station_unassigned
+    ? "berth unassigned"
+    : `Dock ${Math.round(Math.min(h.station_lo_dock, h.station_hi_dock))}–${Math.round(Math.max(h.station_lo_dock, h.station_hi_dock))}`;
+  const berth = h.berth_name ? ` · ${esc(h.berth_name)}` : "";
+  return `
+    <div class="card">
+      <div class="name">${esc(h.vessel_name || "(unnamed)")}${imo}${tug}
+        <span class="status-badge" style="background:${color}">${esc(h.status)}</span></div>
+      <div class="meta">${esc(h.type)} · ETB <b>${fmtCentral(h.t_start)}</b>${h.t_end ? ` → ETD <b>${fmtCentral(h.t_end)}</b>` : ""} · via ${esc(h.source)}</div>
+      <div class="meta">${esc(sta)}${berth}${h.cargo ? " · " + esc(h.cargo) : ""}</div>
+    </div>`;
+}
+
+async function loadHistory() {
+  const el = document.getElementById("historyList");
+  if (!el) return;
+  const name = document.getElementById("histName").value.trim();
+  const status = document.getElementById("histStatus").value;
+  const from = document.getElementById("histFrom").value;   // YYYY-MM-DD (Central)
+  const to = document.getElementById("histTo").value;
+  const qs = new URLSearchParams();
+  if (name) qs.set("name", name);
+  if (status) qs.set("status", status);
+  // Date inputs are zone-less; send the day's Central bounds and let the server's
+  // pinned zone interpret them (mirrors how the edit forms send wall-clock time).
+  if (from) qs.set("from", from + "T00:00:00");
+  if (to) qs.set("to", to + "T23:59:59");
+  qs.set("limit", "200");
+  el.innerHTML = '<div class="empty">loading…</div>';
+  try {
+    const rows = await api("/history?" + qs.toString());
+    el.innerHTML = rows.length
+      ? rows.map(histCard).join("")
+      : '<div class="empty">no reservations match</div>';
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+  }
+}
+
+(function () {
+  const name = document.getElementById("histName");
+  const status = document.getElementById("histStatus");
+  const from = document.getElementById("histFrom");
+  const to = document.getElementById("histTo");
+  const search = document.getElementById("histSearch");
+  const clear = document.getElementById("histClear");
+  if (search) search.addEventListener("click", loadHistory);
+  if (name) name.addEventListener("keydown", (e) => { if (e.key === "Enter") loadHistory(); });
+  if (status) status.addEventListener("change", loadHistory);
+  if (from) from.addEventListener("change", loadHistory);
+  if (to) to.addEventListener("change", loadHistory);
+  if (clear) clear.addEventListener("click", () => {
+    name.value = ""; status.value = ""; from.value = ""; to.value = "";
+    loadHistory();
+  });
 })();
 
 // --- Click-to-station probe ------------------------------------------------

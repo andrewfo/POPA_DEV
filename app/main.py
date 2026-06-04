@@ -201,7 +201,7 @@ def positions_recent(
         text(
             f"""
             SELECT pr.id, pr.mmsi, pr.lat, pr.lon, pr.sog, pr.cog, pr.heading,
-                   pr.msg_ts, v.name AS vessel_name,
+                   pr.msg_ts, v.name AS vessel_name, v.ship_type,
                    COALESCE({alongside_sql(point)}, false) AS alongside
             FROM position_report pr
             LEFT JOIN vessel v ON v.id = pr.vessel_id
@@ -223,7 +223,104 @@ def positions_recent(
             "heading": float(r.heading) if r.heading is not None else None,
             "msg_ts": r.msg_ts.isoformat() if r.msg_ts else None,
             "vessel_name": r.vessel_name,
+            # AIS numeric ship type (e.g. 52 = tug, 31/32 = towing); lets the map
+            # tint tugs distinctly from cargo/tanker traffic. NULL until the
+            # vessel's ShipStaticData lands.
+            "ship_type": r.ship_type,
             "alongside": bool(r.alongside),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/history")
+def reservation_history(
+    name: str | None = None,
+    status: str | None = None,
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = None,
+    limit: int = 200,
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Reservation history for the History tab — the log of bookings (every
+    status, AIS-``observed`` berthings included), newest arrival first.
+
+    This is the same row shape as ``/reservations`` but ordered chronologically
+    by arrival (``lower(time_range)``) and with a vessel-``name`` substring
+    filter, so an operator can answer "what has this ship / this week done at the
+    wharf". The vessel name falls back to the linked ``intake_event`` payload for
+    an IMO-less request (a barge/tug with no vessel row), the same way the
+    reservations view does, so name search still finds them.
+
+    Filters (all optional, AND-combined): ``name`` (case-insensitive substring),
+    ``status`` (exact), and a ``from``/``to`` date window (ISO datetimes — FastAPI
+    rejects malformed with 422 — an overlap test on ``time_range``)."""
+    # Inverted bounds are a no-op window, not a 500 (mirrors /reservations).
+    if from_ is not None and to is not None and from_ > to:
+        from_, to = to, from_
+    rows = session.execute(
+        text(
+            """
+            WITH res AS (
+                SELECT r.id, r.type, r.status, r.source, r.direction, r.cargo,
+                       r.notes, r.priority,
+                       lower(r.time_range)      AS t_start,
+                       upper(r.time_range)      AS t_end,
+                       isempty(r.station_range) AS sta_unassigned,
+                       lower(r.station_range)   AS sta_lo,
+                       upper(r.station_range)   AS sta_hi,
+                       r.created_at, r.berth_id, b.name AS berth_name,
+                       v.imo AS vessel_imo, v.ship_type,
+                       -- Same name fallback as /reservations: an IMO-less request
+                       -- has no vessel row, so read the name off its intake_event.
+                       COALESCE(v.name, (
+                           SELECT COALESCE(e.raw->>'vessel', e.raw->>'Vessel')
+                           FROM intake_event e
+                           WHERE e.reservation_id = r.id
+                           ORDER BY e.id
+                           LIMIT 1
+                       )) AS vessel_name
+                FROM reservation r
+                LEFT JOIN vessel v ON v.id = r.vessel_id
+                LEFT JOIN berth b ON b.id = r.berth_id
+                WHERE (CAST(:status AS text) IS NULL OR r.status::text = CAST(:status AS text))
+                  AND ((CAST(:t_from AS timestamptz) IS NULL AND CAST(:t_to AS timestamptz) IS NULL)
+                       OR r.time_range && tstzrange(:t_from, :t_to, '[]'))
+            )
+            SELECT * FROM res
+            WHERE (CAST(:name AS text) IS NULL
+                   OR vessel_name ILIKE '%' || CAST(:name AS text) || '%')
+            ORDER BY t_start DESC NULLS LAST, created_at DESC
+            LIMIT :limit
+            """
+        ),
+        {"status": status, "name": name, "t_from": from_, "t_to": to, "limit": limit},
+    ).all()
+    # Dock No. bounds alongside POPA (same conversion the reservations view uses).
+    dock = segment_dockno_params(session)
+    return [
+        {
+            "id": r.id,
+            "type": r.type,
+            "status": r.status,
+            "source": r.source,
+            "direction": r.direction,
+            "priority": r.priority,
+            "cargo": r.cargo,
+            "notes": r.notes,
+            "t_start": r.t_start.isoformat() if r.t_start else None,
+            "t_end": r.t_end.isoformat() if r.t_end else None,
+            "station_unassigned": r.sta_unassigned,
+            "station_lo": float(r.sta_lo) if r.sta_lo is not None else None,
+            "station_hi": float(r.sta_hi) if r.sta_hi is not None else None,
+            "station_lo_dock": float(dock.from_popa(float(r.sta_lo))) if r.sta_lo is not None else None,
+            "station_hi_dock": float(dock.from_popa(float(r.sta_hi))) if r.sta_hi is not None else None,
+            "vessel_name": r.vessel_name,
+            "vessel_imo": r.vessel_imo,
+            "ship_type": r.ship_type,
+            "berth_id": r.berth_id,
+            "berth_name": r.berth_name,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
         }
         for r in rows
     ]
