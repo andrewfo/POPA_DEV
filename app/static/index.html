@@ -601,6 +601,17 @@
     <div id="conflicts"><div class="empty">none</div></div>
     <!-- ===== /Conflicts ===== -->
 
+    <!-- ===== AIS verification (plan vs observed reality) ===== -->
+    <h2>AIS verification</h2>
+    <div class="hint" style="margin:0 0 8px">
+      Operator placements checked against observed AIS once a vessel shows up —
+      <b>arrived</b> / <b>no-show</b> / <b>awaiting</b>, whether it berthed where
+      planned, and any <b>unplanned</b> arrival no request covered. AIS verifies;
+      it never places (it can't know where a not-yet-arrived ship will go).
+    </div>
+    <div id="verification"><div class="empty">none</div></div>
+    <!-- ===== /AIS verification ===== -->
+
     <div class="probe">
       <div class="hint">Click anywhere on the map to project that point onto the wharf centerline.</div>
       <div id="probeResult" style="display:none">
@@ -1058,6 +1069,78 @@ async function loadConflicts() {
   }
 }
 
+// --- AIS verification (plan vs observed reality) ---------------------------
+// Read-only: surfaces how operator placements line up with observed AIS. Never
+// mutates status (and AIS can't place — see /verification). Reuses the conflict
+// highlight layer to draw a "berthed elsewhere" observed range on click.
+const VERIFY_STATE = {
+  arrived:  { label: "arrived",  color: PAL.green },
+  no_show:  { label: "no-show",  color: PAL.red },
+  awaiting: { label: "awaiting", color: PAL.muted },
+};
+
+function verifyPlannedCard(p, i) {
+  const st = VERIFY_STATE[p.state] || { label: p.state, color: PAL.muted };
+  const name = esc(p.vessel_name || "(unnamed)");
+  const win = `${fmtCentral(p.t_start)} → ${fmtCentral(p.t_end)}`;
+  // "berthed elsewhere" only when we have both a planned and an observed range.
+  const elsewhere = p.where_planned === false
+    ? ` <span class="status-badge" style="background:${PAL.amber}">berthed elsewhere</span>` : "";
+  const clickable = p.observed && p.where_planned === false;
+  return `
+    <div class="card${clickable ? " verify-card" : ""}" data-verify="${i}"${clickable ? ' style="cursor:pointer"' : ""}>
+      <div class="name">${name}
+        <span class="status-badge" style="background:${st.color}">${st.label}</span>${elsewhere}</div>
+      <div class="meta">${esc(p.status)}${p.berth_name ? " · " + esc(p.berth_name) : ""} · plan <b>${win}</b></div>
+    </div>`;
+}
+
+function verifyUnplannedCard(u) {
+  const name = esc(u.vessel_name || "(unnamed)");
+  const since = fmtCentral(u.t_start);
+  return `
+    <div class="card">
+      <div class="name">${name}
+        <span class="status-badge" style="background:${PAL.amber}">unplanned</span></div>
+      <div class="meta">observed${u.berth_name ? " · " + esc(u.berth_name) : ""} · since ${since}${u.ongoing ? " · ongoing" : ""}</div>
+    </div>`;
+}
+
+let VERIFY_PLANNED = [];
+
+async function loadVerification() {
+  const el = document.getElementById("verification");
+  if (!el) return;
+  try {
+    const v = await api("/verification");
+    VERIFY_PLANNED = v.planned || [];
+    // Surface the actionable rows first: discrepancies (no-show / berthed
+    // elsewhere) and unplanned arrivals; quietly arrived/awaiting rows follow.
+    const flagged = VERIFY_PLANNED
+      .map((p, i) => ({ p, i }))
+      .filter(({ p }) => p.state === "no_show" || p.where_planned === false);
+    const ok = VERIFY_PLANNED
+      .map((p, i) => ({ p, i }))
+      .filter(({ p }) => !(p.state === "no_show" || p.where_planned === false));
+    const unplanned = v.unplanned || [];
+    const parts = [];
+    for (const { p, i } of flagged) parts.push(verifyPlannedCard(p, i));
+    for (const u of unplanned) parts.push(verifyUnplannedCard(u));
+    for (const { p, i } of ok) parts.push(verifyPlannedCard(p, i));
+    el.innerHTML = parts.length ? parts.join("") : '<div class="empty">nothing to verify</div>';
+    // A "berthed elsewhere" card maps to its observed range via the conflict layer.
+    el.querySelectorAll(".verify-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const p = VERIFY_PLANNED[Number(card.dataset.verify)];
+        if (p && p.observed) highlightConflict({ overlap: p.observed });
+      });
+    });
+  } catch (e) {
+    VERIFY_PLANNED = [];
+    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+  }
+}
+
 async function loadBbox() {
   try {
     const b = await api("/config/bbox");
@@ -1408,6 +1491,7 @@ function wireResCards(container) {
         loadTimeline();
         loadStats();   // status change may move the confirmed / reservation counts
         loadConflicts();   // ...and may create or resolve a conflict
+        loadVerification();
         setTimeout(loadRequests, 1200);   // let the confirmation show first
       } else {
         reqRes.className = "mini-result err";
@@ -1438,7 +1522,7 @@ function wireResCards(container) {
     if (unconfirmBtn) unconfirmBtn.addEventListener("click", async () => {
       if (!confirm("Unconfirm this reservation? It returns to a pending request — placement is kept and you can re-confirm it.")) return;
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "requested" });
-      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); } else alert("Failed: " + writeError(w));
+      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); } else alert("Failed: " + writeError(w));
     });
     // Cancel: clear the placement and return the row to a blank, pending
     // request. Sends status=requested + unassigned=true (no bow/heading), so the
@@ -1453,7 +1537,7 @@ function wireResCards(container) {
     if (cancelBtn) cancelBtn.addEventListener("click", async () => {
       if (!confirm("Cancel this placement? It clears the berth, station range, and timeline bar and returns the row to a pending request (blank, unconfirmed) so you can re-place it. The arrival/departure stay.")) return;
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "requested", unassigned: true });
-      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); } else alert("Failed: " + writeError(w));
+      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); } else alert("Failed: " + writeError(w));
     });
 
     form.addEventListener("submit", async (e) => {
@@ -1475,6 +1559,7 @@ function wireResCards(container) {
         loadTimeline();
         loadStats();   // status change may move the confirmed / reservation counts
         loadConflicts();   // ...and may create or resolve a conflict
+        loadVerification();
         setTimeout(loadRequests, 1500);   // let the confirmation (and any warning) show first
       } else {
         res.className = "mini-result err";
@@ -1661,7 +1746,7 @@ async function loadBerthRequests() {
       const id = Number(delBtn.dataset.deleteReq);
       if (!confirm("Delete this berth request and its requested reservation?")) return;
       const w = await apiWrite("DELETE", `/intake/berth-requests/${id}`);
-      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); loadStats(); loadConflicts(); }
+      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); }
       else alert("Failed: " + writeError(w));
     }
   });
@@ -2415,7 +2500,8 @@ loadRequests();
 loadBerthRequests();
 loadPositions();
 loadConflicts();
-setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); }, 15000);
+loadVerification();
+setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); loadVerification(); }, 15000);
 </script>
 </body>
 </html>

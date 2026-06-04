@@ -6,12 +6,16 @@ station (feet) along a measured PostGIS centerline; every reservation is a
 rectangle in (time × station) space and a conflict is "time overlaps **and**
 station overlaps". See [`CLAUDE.md`](./CLAUDE.md) for the full design.
 
-> **Build steps 1–5 complete** — schema, stationing crosswalk, wharf centerline,
-> AIS ingestion, and occupancy derivation. A **read-only Leaflet UI** and
-> berth-request intake **capture** (online-form CSV + manual phone/email entry)
-> were added ahead of the build order. Still to come: the **conflict-detection
-> service** (step 6) and request→AIS **reconciliation** (step 7). See
-> [`PLAN.md`](./PLAN.md) for status.
+> **Build steps 1–6 complete** — schema, stationing crosswalk, wharf centerline,
+> AIS ingestion, occupancy derivation, and the **conflict-detection service**. A
+> **read-only Leaflet UI**, a **manual edit surface**, and berth-request intake
+> **capture** (manual phone/email/operator entry — the online-form feed was
+> retired) were added ahead of the build order. Step 7's **AIS verification
+> layer** now exists too (`GET /verification`): after-arrival checks of operator
+> placements against observed AIS (arrived / no-show / awaiting / where-planned /
+> unplanned), read-only — *not* an auto-placer. Still to come: optional auto
+> status-mutation off those findings, and the legacy-spreadsheet backfill commit.
+> See [`PLAN.md`](./PLAN.md) for status.
 
 ## Prerequisites
 

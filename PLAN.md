@@ -9,10 +9,13 @@ contract) and [`README.md`](./README.md) (setup/run). When the two disagree,
 
 ## 1. Where we are today
 
-**Steps 1–6 are complete.** The repo is a conflict-safe data layer seeded from
-live AIS, now with a **conflict-detection service** (the time × station overlap
-primitive surfaced as a query/API + a thin map surface), a read-only Leaflet UI,
-and — pulled forward ahead of the build order, at the user's request —
+**Steps 1–6 are complete, and step 7's AIS verification layer now exists.** The
+repo is a conflict-safe data layer seeded from live AIS, with a
+**conflict-detection service** (the time × station overlap primitive surfaced as
+a query/API + a thin map surface), an **AIS verification service**
+(`GET /verification` — operator placements checked against observed AIS:
+arrived / no-show / awaiting / where-planned / unplanned; read-only), a read-only
+Leaflet UI, and — pulled forward ahead of the build order, at the user's request —
 **berth-request intake _capture_**. It is also now **deployable**: a production
 Docker image + `docker-compose.prod.yml` (db + one-shot migrate/seed + api + ais
 + occupancy) behind whole-app HTTP Basic auth (see §5.4).
@@ -25,7 +28,7 @@ Docker image + `docker-compose.prod.yml` (db + one-shot migrate/seed + api + ais
 | 4 | AIS ingestion (aisstream.io → DB) | ✅ | `app/ais/*` |
 | 5 | Occupancy derivation | ✅ | `app/occupancy/*`, migration `0002`, `tests/test_occupancy_*` |
 | 6 | Conflict-detection service | ✅ | `app/conflicts.py`, `GET /conflicts` in `app/main.py`, `tests/test_conflicts*.py`, conflicts panel in `app/static/index.html` |
-| 7 | Request intake + reconciliation; legacy backfill | 🟡 capture built; reconciliation TODO | `app/intake/*`, migrations `0003`/`0004`, `tests/test_intake_*` |
+| 7 | Request intake + AIS verification; legacy backfill | 🟡 capture + AIS verification built; auto status-mutation + legacy backfill TODO | `app/intake/*`, `app/verification.py`, `GET /verification`, `tests/test_verification*.py`, migrations `0003`/`0004` |
 
 **Also built ahead of the plan** (deviations from "no UI in phase 1" / "intake
 is a later layer", both user-requested):
@@ -68,8 +71,10 @@ is a later layer", both user-requested):
   `station_range`** (never conflicts). A named **`berth` catalog** now exists
   (migration `0006`, seeded from `data/gis` `berth_stations.json`); an operator
   assigns a berth via `PATCH /reservations/{id}` `{berth_id}` (or `POST`), which
-  copies the berth's POPA range onto `station_range`. That's the *manual* path;
-  **automated** request→AIS reconciliation is still the not-yet-built layer.
+  copies the berth's POPA range onto `station_range`. Placement is the operator's
+  job by design — AIS can't position a not-yet-arrived ship — so there is **no**
+  automated placer. The not-yet-built layer is the **AIS verification** layer
+  (§4), which checks these operator placements against reality after arrival.
   UI gap: the sidebar form still takes raw station feet — no berth `<select>`
   over `GET /berths` yet.
 - **Intake detail lives only in `intake_event.raw`.** Manual-entry fields with
@@ -159,10 +164,13 @@ given a thin map surface in `app/static/index.html`.
 
 ---
 
-## 4. Step 7 — Intake + reconciliation (🟡 capture built early)
+## 4. Step 7 — Intake + AIS verification (🟡 capture built early)
 
-Pulled forward at the user's request. **Capture** now exists; **reconciliation**
-does not.
+Pulled forward at the user's request. **Capture** and the **AIS verification
+layer** now both exist. (This was originally framed as request→AIS
+*reconciliation* that would auto-*place* requests; reframed this session to a
+*verification* layer — see the "Built — AIS verification layer" block below for
+why AIS can't place. Only auto status-mutation off the findings remains.)
 
 **Built:**
 - **Raw landing** — all channels land verbatim in `intake_event` *before*
@@ -183,7 +191,9 @@ does not.
   `berth_stations.json`) and `reservation.berth_id`. An operator assigns a berth
   through the edit surface (`berth_id` on `POST`/`PATCH /reservations`), which
   fills `station_range` from the catalog; `GET /berths` lists the catalog. This
-  is the manual half of reconciliation — the automated half (below) is still TODO.
+  operator-driven placement is the system's *only* placement path (AIS can't
+  place — see "Still TODO"); the after-arrival AIS **verification** layer (below)
+  is still TODO.
 - **In-place berth-request edit + delete** — Edit / Delete buttons on each
   manual-channel request card. `PATCH /intake/berth-requests/{id}`
   (`update_manual_request`) overwrites that `intake_event.raw` row and re-projects
@@ -193,11 +203,30 @@ does not.
   are manual channels only (any legacy online-form row stays immutable). The
   form's Draft (ft) field is now mandatory.
 
+**Built — AIS verification layer** (reframed; *not* an auto-placer). AIS only
+knows where a vessel **is now**, never where a not-yet-arrived ship **will**
+berth, and observed station ranges are approximate (not survey-grade), so it
+cannot place a reservation — **placement stays the operator's job** (and a future
+optimizer's). What it *does*, in `app/verification.py` + `GET /verification`
+(`tests/test_verification*.py`, panel in `app/static/index.html`), is verify
+operator placements against reality, matching on `vessel_id` + **time** overlap
+(a `requested` row's empty station range can't match step 6's station-`&&` join,
+so this is identity + time, not the conflict query). For each planned row
+(vessel + non-empty window):
+- **arrived** — an `observed` AIS berthing for that vessel overlaps the window;
+- **no_show** — the window fully elapsed unseen;
+- **awaiting** — current/future, nothing seen yet;
+- plus a **where_planned** flag (observed range overlaps the planned one — the
+  inline form of step 6's `observed-vs-planned`), and an **unplanned** list of
+  observed berthings no request covered.
+It is **read-only** — it surfaces findings, never mutates status (there's also no
+`arrived` status to advance into).
+
 **Still TODO:**
-- **Reconcile against observed AIS** — match a request to the `observed`
-  reservation(s) for the same vessel/window; assign the real `station_range`;
-  surface agreement vs discrepancy (a request for a berth the vessel isn't at,
-  or vice versa). This is the natural sequel to step 6's overlap primitive.
+- **Auto status-mutation from verification** — e.g. auto-`completed` on observed
+  departure, or flagging no-shows for bulk cancel. Deliberately deferred:
+  surfacing for operator action came first (AIS is approximate; don't auto-write
+  off it without review).
 - **Legacy spreadsheet backfill commit** — the parser is conservative and
   tested, but the parse → **human review** → commit pipeline isn't wired. Source
   is messy (`"Chem Orchard - 607'"`, ambiguous `"X or Y"`, inline
@@ -276,10 +305,13 @@ Not tied to a single step — pick up as the system matures.
 
 ## 6. Out of scope (still)
 
-- **Scheduling optimizer / auto-assignment** (OR-Tools) — much later.
-- **Request→AIS reconciliation engine** — intake *capture* exists (§4), but
-  matching requests to observed occupancy and promoting `requested` → `tentative`
-  → `confirmed` is not built.
+- **Scheduling optimizer / auto-assignment** (OR-Tools) — much later. This, not
+  AIS, is what would ever *place* ships automatically (from requests + berth
+  availability).
+- **Auto status-mutation from AIS verification** — the verification *layer* is
+  built (§4: arrival / no-show / awaiting / where-planned / unplanned, read-only),
+  but auto-*writing* status off those findings (e.g. auto-`completed` on departure)
+  is intentionally not. AIS is approximate; surface for operator action first.
 - Anything that requires blocking `observed` overlaps. Re-read the Core model
   section of `CLAUDE.md` before reaching for that.
 
@@ -298,9 +330,11 @@ Leaflet **UI** and berth-request intake **capture**. See §1.)
 2. ~~**Step 6**: conflict query/service + API, with the overlap test matrix.~~
    **Done** — `app/conflicts.py`, `GET /conflicts`, `tests/test_conflicts*.py`,
    and a conflicts panel on the map.
-3. **Reconciliation (step 7 sequel)**: match `requested` intake rows to
-   `observed` AIS; assign their `station_range`; promote toward `confirmed`. The
-   natural sequel — it reuses step 6's overlap primitive.
+3. ~~**AIS verification layer (step 7 sequel)**: match planned rows to `observed`
+   AIS on `vessel_id` + time overlap; report arrival / no-show / awaiting /
+   where-planned + unplanned occupancy.~~ **Done** — `app/verification.py`,
+   `GET /verification`, `tests/test_verification*.py`, verification panel on the
+   map. Read-only (no auto status-mutation yet — §4 "Still TODO").
 4. **Controlling-depth** table + draft validation in the confirm path (the
    deferred half of step 6, §3.3).
 5. **CI** with a PostGIS service container; AIS reconnect/metrics hardening.

@@ -1,0 +1,169 @@
+"""DB-marked tests for the AIS verification service (GET /verification).
+
+Exercises the endpoint through TestClient against a live PostGIS, so the real
+LATERAL join + Postgres range operators are under test. Auto-skips (via the
+``db_session`` fixture) when no migrated DB is around; seeds inside the fixture's
+rolled-back transaction so nothing leaks.
+
+States are judged against the DB clock (``now()``), so "past"/"future" windows use
+far-off years (2020 / 2030) to stay deterministic regardless of the wall clock.
+"""
+from __future__ import annotations
+
+import datetime as dt
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from app.db import get_session
+from app.main import app
+
+UTC = dt.timezone.utc
+
+
+@pytest.fixture
+def client(db_session):
+    app.dependency_overrides[get_session] = lambda: db_session
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+
+def _add_vessel(session, *, mmsi=None, imo=None, name="TESTSHIP"):
+    """A vessel row (needs at least one of mmsi/imo per the CHECK constraint)."""
+    return session.execute(
+        text("INSERT INTO vessel (mmsi, imo, name) VALUES (:m, :i, :n) RETURNING id"),
+        {"m": mmsi, "i": imo, "n": name},
+    ).scalar_one()
+
+
+def _add_res(session, *, vessel_id, lo, hi, t_start, t_end, status, source="phone"):
+    """Insert a reservation; empty station range when lo/hi are None, open-ended
+    time when t_end is None."""
+    station = "'empty'::numrange" if lo is None else "numrange(:lo, :hi, '[]')"
+    return session.execute(
+        text(
+            f"""
+            INSERT INTO reservation
+                (vessel_id, type, station_range, time_range, status, source, created_at)
+            VALUES (:vessel_id, 'vessel', {station},
+                    tstzrange(:t_start, :t_end, '[)'),
+                    CAST(:status AS reservation_status),
+                    CAST(:source AS reservation_source), now())
+            RETURNING id
+            """
+        ),
+        {"vessel_id": vessel_id, "lo": lo, "hi": hi, "t_start": t_start,
+         "t_end": t_end, "status": status, "source": source},
+    ).scalar_one()
+
+
+def _t(year, day, hour=0):
+    return dt.datetime(year, 7, day, hour, tzinfo=UTC)
+
+
+def _planned(payload, rid):
+    return next((p for p in payload["planned"] if p["id"] == rid), None)
+
+
+def _unplanned(payload, rid):
+    return next((u for u in payload["unplanned"] if u["id"] == rid), None)
+
+
+# --- the three planned states ----------------------------------------------
+def test_arrived_when_observed_overlaps_same_vessel(client, db_session):
+    v = _add_vessel(db_session, mmsi=636000010, imo=9000010)
+    # Unplaced request (empty station) over a window an observed berthing covers.
+    req = _add_res(db_session, vessel_id=v, lo=None, hi=None,
+                   t_start=_t(2026, 10), t_end=_t(2026, 14), status="requested")
+    _add_res(db_session, vessel_id=v, lo=400, hi=900,
+             t_start=_t(2026, 11), t_end=_t(2026, 13), status="observed", source="ais")
+    p = _planned(client.get("/verification").json(), req)
+    assert p is not None
+    assert p["state"] == "arrived"
+    assert p["observed"] is not None
+    assert p["where_planned"] is None          # request was unplaced -> can't tell
+
+
+def test_no_show_when_past_window_unseen(client, db_session):
+    v = _add_vessel(db_session, mmsi=636000011, imo=9000011)
+    req = _add_res(db_session, vessel_id=v, lo=None, hi=None,
+                   t_start=_t(2020, 10), t_end=_t(2020, 14), status="confirmed")
+    p = _planned(client.get("/verification").json(), req)
+    assert p is not None and p["state"] == "no_show"
+    assert p["observed"] is None
+
+
+def test_awaiting_when_future_window_unseen(client, db_session):
+    v = _add_vessel(db_session, mmsi=636000012, imo=9000012)
+    req = _add_res(db_session, vessel_id=v, lo=None, hi=None,
+                   t_start=_t(2030, 10), t_end=_t(2030, 14), status="tentative")
+    p = _planned(client.get("/verification").json(), req)
+    assert p is not None and p["state"] == "awaiting"
+
+
+# --- where_planned (the inline observed-vs-planned signal) -----------------
+def test_where_planned_true_when_berthed_where_planned(client, db_session):
+    v = _add_vessel(db_session, mmsi=636000013, imo=9000013)
+    plan = _add_res(db_session, vessel_id=v, lo=400, hi=900,
+                    t_start=_t(2026, 10), t_end=_t(2026, 14), status="confirmed")
+    _add_res(db_session, vessel_id=v, lo=800, hi=1200,
+             t_start=_t(2026, 11), t_end=_t(2026, 13), status="observed", source="ais")
+    p = _planned(client.get("/verification").json(), plan)
+    assert p["state"] == "arrived"
+    assert p["where_planned"] is True          # 400-900 overlaps observed 800-1200
+
+
+def test_where_planned_false_when_berthed_elsewhere(client, db_session):
+    v = _add_vessel(db_session, mmsi=636000014, imo=9000014)
+    plan = _add_res(db_session, vessel_id=v, lo=2000, hi=2400,
+                    t_start=_t(2026, 10), t_end=_t(2026, 14), status="confirmed")
+    _add_res(db_session, vessel_id=v, lo=400, hi=900,
+             t_start=_t(2026, 11), t_end=_t(2026, 13), status="observed", source="ais")
+    p = _planned(client.get("/verification").json(), plan)
+    assert p["state"] == "arrived"
+    assert p["where_planned"] is False         # planned 2000-2400, seen 400-900
+
+
+# --- unplanned occupancy ----------------------------------------------------
+def test_unplanned_observed_has_no_plan(client, db_session):
+    v = _add_vessel(db_session, mmsi=636000015, imo=9000015)
+    obs = _add_res(db_session, vessel_id=v, lo=400, hi=900,
+                   t_start=_t(2026, 11), t_end=None, status="observed", source="ais")
+    payload = client.get("/verification").json()
+    u = _unplanned(payload, obs)
+    assert u is not None
+    assert u["ongoing"] is True                 # open-ended berthing
+    # The observed row is not itself a "planned" entry.
+    assert _planned(payload, obs) is None
+
+
+def test_observed_with_matching_plan_is_not_unplanned(client, db_session):
+    v = _add_vessel(db_session, mmsi=636000016, imo=9000016)
+    _add_res(db_session, vessel_id=v, lo=None, hi=None,
+             t_start=_t(2026, 10), t_end=_t(2026, 14), status="requested")
+    obs = _add_res(db_session, vessel_id=v, lo=400, hi=900,
+                   t_start=_t(2026, 11), t_end=_t(2026, 13), status="observed", source="ais")
+    assert _unplanned(client.get("/verification").json(), obs) is None
+
+
+# --- exclusions / filters ---------------------------------------------------
+def test_vesselless_planned_row_excluded(client, db_session):
+    # A name-only request (no vessel_id) can't be matched -> not in planned.
+    rid = _add_res(db_session, vessel_id=None, lo=None, hi=None,
+                   t_start=_t(2026, 10), t_end=_t(2026, 14), status="requested")
+    assert _planned(client.get("/verification").json(), rid) is None
+
+
+def test_window_narrows_planned_rows(client, db_session):
+    v = _add_vessel(db_session, mmsi=636000017, imo=9000017)
+    req = _add_res(db_session, vessel_id=v, lo=None, hi=None,
+                   t_start=_t(2026, 10), t_end=_t(2026, 14), status="confirmed")
+    out = client.get("/verification", params={
+        "from": "2026-09-01T00:00:00Z", "to": "2026-09-05T00:00:00Z"}).json()
+    assert _planned(out, req) is None
+    inside = client.get("/verification", params={
+        "from": "2026-07-09T00:00:00Z", "to": "2026-07-20T00:00:00Z"}).json()
+    assert _planned(inside, req) is not None

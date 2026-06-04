@@ -138,9 +138,20 @@ request and now exist — a **read-only UI**, berth-request intake **capture**
 and a **manual edit surface** (`app/edit.py`): create/edit/cancel/delete vessels
 and reservations, including **manually assigning a berth (from the named `berth`
 catalog, which fills `station_range`) and promoting a row to `confirmed`** —
-i.e. the *manual* form of reconciliation, done by an operator one row at a time. What remains out of scope is the
-**automated request→AIS reconciliation engine** (matching a `requested` row to
-observed AIS and auto-promoting it) and the legacy-spreadsheet backfill *commit*
+i.e. the *manual* form of reconciliation, done by an operator one row at a time. What remains unbuilt is the
+**AIS verification layer** — and it is a *verification*, not a *placement*, tool.
+AIS only knows where a vessel **is now / was**, never where a not-yet-arrived
+ship **will** berth, and its derived station ranges are **approximate** (a
+`confident` flag, `observed` never blocks `confirmed`), not survey-grade — so it
+cannot position a reservation. Its job is to check operator placements against
+reality once a vessel arrives: did the planned vessel actually show up (advance
+status / flag a no-show), berth where planned, and depart (auto-complete); did an
+**unrequested** vessel appear (unplanned occupancy). The headline half of that —
+*is the vessel where you planned it* — **already ships** as step 6's
+`observed-vs-planned` conflict, so the net-new work is status-lifecycle
+automation. **Placement stays the operator's job** (and a future scheduling
+optimizer's, which works from requests + berth availability, **not** from AIS).
+Also unbuilt: the legacy-spreadsheet backfill *commit*
 (its parser exists, the review pipeline does not). Confirming still cannot run
 the **draft-vs-controlling-depth** gate (no controlling-depth data layer yet);
 the edit surface returns a warning saying the check was skipped rather than
@@ -197,12 +208,25 @@ surfaces as a 409.
    in place (the one sanctioned mutation of an `intake_event.raw` row), delete
    drops the raw row and its projected reservation. Both are manual channels only
    (`phone|email|operator`); any legacy online-form row stays immutable. The
-   **automated** reconciliation engine and the legacy-backfill *commit* are
-   still TODO.
+   **AIS verification layer** is now built (`app/verification.py`,
+   `GET /verification`): a **read-only** check of operator placements against
+   observed AIS — each planned row (vessel + window) is `arrived` / `no_show` /
+   `awaiting` with a `where_planned` flag, plus `unplanned` observed berthings no
+   request covered. It matches on `vessel_id` + **time** overlap (an empty
+   `requested` station range can't match step 6's station-`&&` join) and **never
+   places or mutates status** — AIS can't position a not-yet-arrived ship, and
+   observed ranges are approximate. Still TODO: optional **auto status-mutation**
+   from these findings (e.g. auto-`completed` on departure — deliberately deferred;
+   surfacing for operator action came first) and the legacy-backfill *commit*.
 
-**Current state: steps 1–6 complete; the next core primitive is step 7's
-automated request→AIS reconciliation** (match a `requested` row to observed AIS
-and auto-promote it — it reuses step 6's overlap primitive). Step 7 intake
+**Current state: steps 1–6 complete; step 7's AIS verification layer is now built**
+(`app/verification.py`, `GET /verification`) — a read-only check of operator
+placements against observed AIS (`arrived`/`no_show`/`awaiting` + `where_planned`
++ `unplanned`), matching on `vessel_id` + time overlap, that **never places or
+mutates status** (AIS can't position a not-yet-arrived ship; observed ranges are
+approximate — placement stays operator-driven, and a future optimizer's). What
+remains on step 7: optional auto status-mutation from those findings, and the
+legacy-spreadsheet backfill *commit*. Step 7 intake
 *capture* plus a manual *edit* surface landed early at the user's request;
 step 6's draft-vs-controlling-depth gate is deferred (no depth data layer yet).
 DB-integration tests need a live PostGIS (they auto-skip without one); pure
@@ -221,6 +245,8 @@ app/
   main.py              # FastAPI: read-only endpoints + map page + intake + edit + conflicts
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
   conflicts.py         # step 6: time×station overlap primitive + find_conflicts (GET /conflicts)
+  verification.py      # step 7: AIS verification of operator placements (GET /verification) —
+                       #   arrived/no-show/awaiting + where-planned + unplanned; read-only, never places
   auth.py              # HTTP Basic gate (whole-app middleware); active only when OPERATOR_USER+PASSWORD set
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
   seed/wharf_seed.py   # seeds wharf_segment (real centerline + apron) + berth catalog (from data/gis/)

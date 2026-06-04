@@ -2,8 +2,11 @@
 plus write paths: manual berth-request entry (the phone/email channel — see
 ``app/intake/manual.py``) and the manual edit surface for ship data and
 scheduling (create/edit/cancel/delete vessels & reservations — see
-``app/edit.py``). No automatic conflict service yet; confirmed-vs-confirmed
-overlaps are caught by the DB exclusion constraint and surfaced as a 409.
+``app/edit.py``). Read-only analysis surfaces: the conflict service
+(``GET /conflicts``, ``app/conflicts.py``) and AIS verification
+(``GET /verification``, ``app/verification.py``); both surface findings without
+mutating rows. Confirmed-vs-confirmed overlaps are blocked by the DB exclusion
+constraint and surfaced as a 409.
 """
 from __future__ import annotations
 
@@ -41,6 +44,7 @@ from app.intake.manual import (
 )
 from app.models import Vessel, WharfSegment
 from app.occupancy.alongside import alongside_sql, nearest_segment_lateral
+from app.verification import verify
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
 
@@ -640,6 +644,31 @@ def list_conflicts(
     if from_ is not None and to is not None and from_ > to:
         from_, to = to, from_
     return find_conflicts(session, t_from=from_, t_to=to, status=status, limit=limit)
+
+
+@app.get("/verification")
+def get_verification(
+    limit: int = 200,
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = None,
+    session: Session = Depends(get_session),
+) -> dict:
+    """AIS *verification* of operator placements (NOT placement — AIS can't position
+    a not-yet-arrived ship, and its ranges are approximate). For each planned
+    reservation (``requested``/``tentative``/``confirmed`` with a vessel + window),
+    report whether an ``observed`` AIS berthing for that vessel overlaps its window:
+    ``arrived`` / ``no_show`` / ``awaiting``, plus a ``where_planned`` flag (the
+    inline form of step 6's observed-vs-planned signal). Also lists ``unplanned``
+    observed berthings — a vessel alongside that no plan covers. Matches on vessel
+    identity + TIME overlap (an empty ``requested`` station range can't match the
+    conflict join). Read-only: surfaces findings, never mutates status.
+
+    ``from``/``to`` (ISO datetimes; FastAPI 422s on malformed) narrow to rows whose
+    window overlaps that span."""
+    # Inverted bounds are a no-op window, not a 500 (mirrors /reservations).
+    if from_ is not None and to is not None and from_ > to:
+        from_, to = to, from_
+    return verify(session, t_from=from_, t_to=to, limit=limit)
 
 
 @app.get("/berths")
