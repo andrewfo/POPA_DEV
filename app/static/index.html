@@ -1969,10 +1969,12 @@ const loadTimeline = (function () {
   // status -> colour; dredge overrides by type. Mirrors the reservation enums.
   const STATUS = STATUS_COLORS;
   const DREDGE = PAL.dredge;
+  // Observed (AIS) is intentionally absent: the timeline shows only reservations
+  // that came in through a berth request, never derived AIS occupancy.
   const LEGEND = [
-    ["observed", "Observed (AIS)"], ["requested", "Requested"],
-    ["tentative", "Tentative"], ["confirmed", "Confirmed"],
-    ["completed", "Completed"], ["__dredge", "Dredging"],
+    ["requested", "Requested"], ["tentative", "Tentative"],
+    ["confirmed", "Confirmed"], ["completed", "Completed"],
+    ["__dredge", "Dredging"],
   ];
 
   const drawer = document.getElementById("timelineDrawer");
@@ -2092,7 +2094,10 @@ const loadTimeline = (function () {
     const x = (ms) => LABEL_W + (Math.max(t0, Math.min(t1, ms)) - t0) / (t1 - t0) * plotW;
 
     // Bucket reservations into lanes, clamp times to the window, drop non-overlapping.
-    const visible = rows.filter((r) => !(hideCancelled && r.status === "cancelled"));
+    // Observed (AIS) rows are derived occupancy, not bookings — the timeline shows
+    // only reservations that came in through a berth request, so they're excluded.
+    const visible = rows.filter((r) =>
+      r.status !== "observed" && !(hideCancelled && r.status === "cancelled"));
     const byLane = new Map(ls.map((L) => [L.key, []]));
     for (const r of visible) {
       const s = r.t_start ? Date.parse(r.t_start) : t0;
