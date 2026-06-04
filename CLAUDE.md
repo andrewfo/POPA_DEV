@@ -292,21 +292,36 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   duplicate. It is restricted to manual channels (`phone|email|operator`); any
   legacy online-form row stays immutable, and the edit leaves the reservation's
   berth/`station_range`, direction, and `status` alone (the request governs
-  vessel/time/cargo only). Unlike the **create** path (which only NULL-fills the
-  vessel to keep AIS dims authoritative), an **edit is authoritative for the
+  vessel/time/cargo only, with one exception below). Unlike the **create** path
+  for an **AIS-tracked vessel** (one with an MMSI — there the create only
+  NULL-fills, keeping AIS dims authoritative), an **edit is authoritative for the
   vessel record**: a provided name/LOA/beam/draft overwrites
   (`_upsert_vessel(..., overwrite=True)`, `COALESCE(new, existing)`) so a
   correction reaches the reservations view — but a field left blank never wipes a
-  stored dimension. A content-empty submission (no vessel/imo/etb) is refused
+  stored dimension. **One IMO = one ship is enforced on the create path**
+  (`_resolve_imo_vessel`): a new request whose IMO is already on file under a
+  *different* ship name is **refused** (`ValueError` → 422, pre-landing so no
+  orphan audit row) rather than silently merging and renaming the existing ship
+  — the operator must use the right IMO or correct the existing record via Edit.
+  When the IMO resolves to the **same** ship (stored name matches, or either
+  side is unnamed), a **manual-only vessel** (no MMSI) is overwritten so a
+  re-submitted corrected LOA/dims takes effect, while an **AIS-tracked vessel**
+  (has MMSI) still only NULL-fills (its dimensions stay authoritative). Whenever
+  a request's LOA reaches the vessel (create or edit), `_reproject_placements`
+  re-derives any **bow-placed, planned** reservation's `station_range` from the
+  new LOA holding the bow fixed (berth-assigned, unplaced, un-oriented, and
+  `observed` rows are left alone), so the to-scale map footprint follows the
+  corrected length instead of staying at the value captured at placement; a
+  re-derived `confirmed` row that now collides surfaces as a 409. A content-empty submission (no vessel/imo/etb) is refused
   outright (`record_manual_request` returns `skipped`, lands no row) so a stray
   POST can't create a blank request card. `delete_manual_request` / `DELETE
   /intake/berth-requests/{id}` likewise removes a manual row outright (raw event
   + its projected reservation), same channel restriction. New *channels* still
   never skip the raw landing.
 - The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel
-  edit overwrites the fields it sets (unlike intake *capture/create*, which only
-  fills NULLs to keep AIS dimensions authoritative — though a manual request
-  *edit* is also authoritative for the vessel, see above). Vessel dims are edited in **metres** (the
+  edit overwrites the fields it sets (unlike intake *create*, which only fills
+  NULLs except when an IMO resolves to the same manual-only ship — see above —
+  and refuses an IMO already held by a different ship). Vessel dims are edited in **metres** (the
   canonical store), not feet. Station ranges are entered in **Dock No. feet** —
   the stationing painted on the wharf (the yellow dock markers on the map), what
   an operator actually reads off the quay — and converted to canonical POPA on

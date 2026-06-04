@@ -362,10 +362,9 @@ def create_berth_request(
     """Manual berth-request entry (phone / email / walk-in) — the sole intake
     channel. Lands the raw request in ``intake_event`` and creates a
     ``status='requested'`` reservation (berth left unassigned). Idempotent on an
-    identical re-submission."""
-    result = record_manual_request(session, form)
-    session.commit()
-    return result
+    identical re-submission. 422 if the IMO already belongs to a different ship
+    (two ships can't share an IMO); 409 on a confirmed time x station overlap."""
+    return _do_write(session, lambda: record_manual_request(session, form))
 
 
 @app.patch("/intake/berth-requests/{intake_id}")

@@ -254,6 +254,113 @@ def test_edit_blank_field_keeps_existing_vessel_dim(db_session):
     assert float(v.beam) == round(91.5 / FEET_PER_M, 2)  # preserved
 
 
+def test_create_overwrites_manual_only_vessel_loa(db_session):
+    # A vessel that only ever came from manual entry (no MMSI) is the operator's
+    # to correct: a re-submitted request with a different LOA overwrites it,
+    # instead of silently keeping the first value (the "always 1000 ft" bug).
+    record_manual_request(db_session, _form(imo=9112233, length_ft=585.0))
+    # Re-submit (a distinct payload, so it isn't deduped) with a corrected LOA.
+    record_manual_request(
+        db_session,
+        _form(imo=9112233, length_ft=400.0,
+              etb=dt.date(2026, 7, 2), etd=dt.date(2026, 7, 5)),
+    )
+
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9112233)).scalar_one()
+    assert float(v.loa) == round(400.0 / FEET_PER_M, 2)  # overwritten, not stuck
+
+
+def test_create_preserves_ais_vessel_loa(db_session):
+    # The mirror invariant: an AIS-tracked vessel (has an MMSI) keeps its
+    # AIS-sourced dimensions authoritative — a manual request for the SAME ship
+    # only NULL-fills, so it can't clobber the live measurement.
+    db_session.execute(
+        text(
+            "INSERT INTO vessel (imo, mmsi, name, loa) "
+            "VALUES (9114455, 366114455, 'AIS BOAT', 300)"
+        )
+    )
+    record_manual_request(
+        db_session, _form(imo=9114455, vessel="AIS BOAT", length_ft=100.0)
+    )
+
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9114455)).scalar_one()
+    assert float(v.loa) == 300.0  # AIS value untouched by the manual request
+
+
+def test_create_rejects_imo_belonging_to_another_ship(db_session):
+    # The operator's rule: two ships can't share an IMO. A new request whose IMO
+    # is already on file under a *different* ship name is refused (the operator
+    # likely mistyped it) rather than silently merging + renaming the other ship.
+    record_manual_request(db_session, _form(imo=9118899, vessel="FIRST SHIP"))
+
+    with pytest.raises(ValueError, match="already on file"):
+        record_manual_request(db_session, _form(imo=9118899, vessel="SECOND SHIP"))
+
+    # The first ship's record is untouched — no rename leaked through.
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9118899)).scalar_one()
+    assert v.name == "FIRST SHIP"
+
+
+def test_create_same_ship_same_imo_is_allowed(db_session):
+    # The legitimate case: the SAME ship phoned in twice (same IMO, same name,
+    # case/whitespace aside) is not a collision — it's a second visit.
+    record_manual_request(db_session, _form(imo=9119900, vessel="REPEAT CALLER"))
+    out = record_manual_request(
+        db_session,
+        _form(imo=9119900, vessel="  repeat   caller ",  # sloppy re-typing
+              etb=dt.date(2026, 8, 1), etd=dt.date(2026, 8, 3)),
+    )
+    assert out["duplicate"] is False
+    assert out["reservation_id"] is not None  # a second reservation, one vessel
+    assert (
+        db_session.execute(
+            select(func.count()).select_from(Vessel).where(Vessel.imo == 9119900)
+        ).scalar_one()
+        == 1
+    )
+
+
+def test_corrected_loa_reprojects_placed_footprint(db_session):
+    # End-to-end of the reported bug: a bow-placed reservation's footprint must
+    # follow a corrected LOA, holding the bow fixed — not stay at the length
+    # captured when it was placed.
+    out = record_manual_request(db_session, _form(imo=9116677, length_ft=585.0))
+    vid = out["vessel_id"]
+    loa_ft = 585.0  # the LOA at placement, in feet (the station-range span)
+
+    # Place it from the bow: upstream keeps the bow at the upper bound (POPA 2000).
+    db_session.execute(
+        text(
+            """
+            UPDATE reservation
+               SET status = 'confirmed', direction = 'upstream',
+                   station_range = numrange(
+                       CAST(:lo AS numeric), CAST(:hi AS numeric), '[]')
+             WHERE vessel_id = :v
+            """
+        ),
+        {"lo": 2000 - loa_ft, "hi": 2000, "v": vid},
+    )
+
+    # Operator re-submits with a corrected, shorter LOA.
+    record_manual_request(
+        db_session,
+        _form(imo=9116677, length_ft=250.0,
+              etb=dt.date(2026, 7, 2), etd=dt.date(2026, 7, 5)),
+    )
+
+    lo, hi = db_session.execute(
+        text(
+            "SELECT lower(station_range), upper(station_range) "
+            "FROM reservation WHERE vessel_id = :v AND status = 'confirmed'"
+        ),
+        {"v": vid},
+    ).one()
+    assert float(hi) == 2000.0                       # bow held fixed
+    assert round(float(hi) - float(lo), 1) == 250.0  # span re-derived from LOA
+
+
 def test_empty_submission_records_nothing(db_session):
     # Bug #1 safety net: a content-empty POST (no vessel / imo / etb) must not
     # land a blank berth-request card.
@@ -369,6 +476,31 @@ def client(db_session):
         yield c
     finally:
         app.dependency_overrides.pop(get_session, None)
+
+
+def test_create_endpoint_rejects_duplicate_imo_cleanly(client, db_session):
+    # The reported bug, through HTTP: a second ship under an existing IMO must
+    # fail with a clean 4xx (not a 500) and leave no orphan berth-request card.
+    first = client.post(
+        "/intake/berth-request",
+        json={"source": "phone", "vessel": "ALPHA", "imo": 9095959,
+              "draft_ft": 10.0, "etb": "2026-07-10T08:00"},
+    )
+    assert first.status_code == 201
+    before = len(client.get("/intake/berth-requests", params={"limit": 500}).json())
+
+    clash = client.post(
+        "/intake/berth-request",
+        json={"source": "phone", "vessel": "BRAVO", "imo": 9095959,
+              "draft_ft": 10.0, "etb": "2026-07-11T08:00"},
+    )
+    assert clash.status_code == 422
+    assert "IMO" in clash.json()["detail"]
+    # Rolled back: no second audit row, first ship's name intact.
+    after = len(client.get("/intake/berth-requests", params={"limit": 500}).json())
+    assert after == before
+    rows = client.get("/reservations", params={"limit": 500}).json()
+    assert all(r["vessel_name"] != "BRAVO" for r in rows)
 
 
 def test_edit_request_endpoint_updates_reservation_view(client, db_session):

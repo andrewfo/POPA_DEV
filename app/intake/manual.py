@@ -212,14 +212,18 @@ def _upsert_vessel(
 
     ``overwrite`` chooses how an *existing* vessel's columns are merged:
 
-    - ``False`` (default, the **create** path): never clobber existing detail —
+    - ``False`` (default, the NULL-fill path): never clobber existing detail —
       only fill columns that are currently NULL (``COALESCE(existing, new)``),
-      leaving AIS-sourced dimensions authoritative.
-    - ``True`` (the **edit** path, ``update_manual_request``): an operator
-      correcting the record is authoritative, so a *provided* value wins
+      leaving AIS-sourced (and any prior) dimensions in place.
+    - ``True`` (the authoritative path): a *provided* value wins
       (``COALESCE(new, existing)``). A field the operator left blank (``new`` is
-      NULL) still keeps the existing value — the request form isn't the place to
-      wipe a dimension; that's the dedicated edit surface (``app/edit.py``)."""
+      NULL) still keeps the existing value — a request never wipes a stored
+      dimension.
+
+    The caller decides which applies (see ``record_manual_request`` /
+    ``update_manual_request``): an explicit edit, or a create that resolves to
+    the *same* manual ship, is authoritative; an AIS-tracked vessel is left
+    NULL-fill so its live dimensions stay authoritative."""
     if req.imo is None:
         return None  # nothing to key on; reservation carries the name in notes
 
@@ -255,6 +259,56 @@ def _upsert_vessel(
     )
 
 
+def _reproject_placements(session: Session, vessel_id: int | None) -> None:
+    """Re-derive any **bow-placed planned** reservation's station range from the
+    vessel's (now possibly corrected) LOA, holding the bow fixed.
+
+    A reservation placed from the bow stores ``[stern, bow]`` where the LOA set
+    the span (``app/edit.py:_station_from_bow``): upstream keeps the bow at the
+    upper bound and the stern below, downstream keeps the bow at the lower bound
+    and the stern above. When an authoritative request overwrites the vessel's
+    LOA, the footprint must follow — otherwise the map keeps drawing the length
+    captured at placement time (the "always 1000 ft" bug).
+
+    Only planned, bow-placed rows are touched. A berth-assigned row (``berth_id``
+    set) takes its span from the berth; an unplaced row has an empty range; an
+    un-oriented row (no ``direction``) can't be re-derived; an ``observed`` AIS
+    row is real measured occupancy — none are LOA-driven. The LOA store is metres
+    (``vessel.loa``); the range is feet, so we scale by ``FEET_PER_M`` in SQL.
+
+    A longer footprint that now collides with a ``confirmed`` row surfaces as a
+    409 at commit (the no-overlap exclusion constraint), which is the intended
+    signal — never pre-empted here. Does NOT commit."""
+    if vessel_id is None:
+        return
+    session.execute(
+        text(
+            """
+            UPDATE reservation
+               SET station_range = CASE reservation.direction
+                   WHEN 'upstream' THEN numrange(
+                       upper(reservation.station_range)
+                           - CAST(v.loa * :ftpm AS numeric),
+                       upper(reservation.station_range), '[]')
+                   WHEN 'downstream' THEN numrange(
+                       lower(reservation.station_range),
+                       lower(reservation.station_range)
+                           + CAST(v.loa * :ftpm AS numeric), '[]')
+                   END
+              FROM vessel v
+             WHERE reservation.vessel_id = v.id
+               AND v.id = :vid
+               AND v.loa IS NOT NULL
+               AND reservation.status IN ('tentative', 'confirmed')
+               AND reservation.berth_id IS NULL
+               AND reservation.direction IS NOT NULL
+               AND NOT isempty(reservation.station_range)
+            """
+        ),
+        {"vid": vessel_id, "ftpm": FEET_PER_M},
+    )
+
+
 def _insert_reservation(session: Session, req: NormalizedRequest, vessel_id: int | None) -> int:
     """Create the status='requested' reservation. Station range is empty
     (unassigned); time range spans ETB..ETD (open-ended if ETD is missing)."""
@@ -284,6 +338,53 @@ def _insert_reservation(session: Session, req: NormalizedRequest, vessel_id: int
     return int(row.id)
 
 
+def _norm_name(name: str | None) -> str | None:
+    """Normalize a vessel name for *identity* comparison only (case-fold +
+    collapse whitespace). Storage keeps the operator's original casing; this is
+    just to tell "same ship" from "different ship" when an IMO is reused."""
+    if name is None:
+        return None
+    collapsed = " ".join(name.split())
+    return collapsed.casefold() or None
+
+
+def _resolve_imo_vessel(session: Session, req: NormalizedRequest) -> bool:
+    """Decide how a create should treat the vessel an IMO resolves to, enforcing
+    that an IMO identifies **exactly one ship**.
+
+    Returns ``overwrite`` for ``_upsert_vessel``:
+
+    - No IMO, or IMO not yet on file → ``False`` (a fresh insert; nothing to
+      overwrite).
+    - IMO already on file for the **same ship** (the stored name matches, or
+      either side is unnamed) → ``True`` for a manual-only vessel (no MMSI), so a
+      re-submitted request with a corrected LOA/dims takes effect (and the
+      footprint re-projects); ``False`` for an AIS-tracked vessel (has MMSI), to
+      keep its live dimensions authoritative.
+    - IMO already on file for a **different ship** (a different stored name) →
+      raise ``ValueError`` → the endpoint returns it as a 4xx. This is the guard
+      the operator asked for: two ships may not share an IMO. The fix is to use
+      the right IMO (or correct the existing record via the request's Edit)."""
+    if req.imo is None:
+        return False
+    existing = session.execute(
+        select(Vessel.name, Vessel.mmsi).where(Vessel.imo == req.imo).limit(1)
+    ).first()
+    if existing is None:
+        return False  # new IMO → plain insert
+
+    cur_name, new_name = _norm_name(existing.name), _norm_name(req.vessel_name)
+    if cur_name and new_name and cur_name != new_name:
+        raise ValueError(
+            f"IMO {req.imo} is already on file as {existing.name!r}; two ships "
+            f"can't share an IMO. Use this ship's IMO, give the new ship its own "
+            f"IMO, or correct the existing record via its Edit button."
+        )
+    # Same ship: a manual-only record is the operator's to correct; an
+    # AIS-tracked vessel keeps its dimensions authoritative (NULL-fill only).
+    return existing.mmsi is None
+
+
 def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     """Land a manual berth request: ``intake_event`` (raw, deduped) + a
     ``requested`` reservation (+ vessel upsert), all in one transaction. Does
@@ -310,6 +411,13 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
             "vessel_id": None,
             "warnings": req.warnings + ["empty request — nothing recorded"],
         }
+
+    # 0b. Enforce one ship per IMO. If this IMO is already on file under a
+    #    different ship's name, refuse before landing anything (the operator
+    #    likely mistyped the IMO); otherwise learn whether the matched ship is
+    #    ours to overwrite. Raised here, pre-landing, so a rejected request
+    #    leaves no orphan audit row.
+    overwrite_vessel = _resolve_imo_vessel(session, req)
 
     # 1. Land the raw request. ON CONFLICT DO NOTHING on the content hash makes a
     #    duplicate submission a no-op; if nothing lands, don't create a second
@@ -339,8 +447,14 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
             "warnings": req.warnings,
         }
 
-    # 2/3. Upsert the vessel and create the requested reservation.
-    vessel_id = _upsert_vessel(session, req)
+    # 2/3. Upsert the vessel and create the requested reservation. ``overwrite``
+    #    is True only when the IMO resolved to the *same* manual ship (so a
+    #    corrected LOA/dims takes), never to a different ship (that was refused
+    #    above) nor an AIS-tracked one (its dimensions stay authoritative).
+    vessel_id = _upsert_vessel(session, req, overwrite=overwrite_vessel)
+    # A corrected LOA must reach any already-placed reservation's footprint, not
+    # just the vessel row.
+    _reproject_placements(session, vessel_id)
     reservation_id: int | None = None
     if req.etb is not None:
         reservation_id = _insert_reservation(session, req, vessel_id)
@@ -459,6 +573,9 @@ def update_manual_request(
     # (e.g. a corrected name or LOA) overwrites the vessel row, so the change
     # propagates to the reservation view — unlike the NULL-fill-only create path.
     vessel_id = _upsert_vessel(session, req, overwrite=True)
+    # An authoritative LOA edit must re-derive any already-placed footprint, so
+    # the map stops drawing the length captured at placement time.
+    _reproject_placements(session, vessel_id)
     reservation_id = existing.reservation_id
 
     if reservation_id is not None:
