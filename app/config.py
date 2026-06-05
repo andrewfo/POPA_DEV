@@ -77,6 +77,16 @@ class Settings(BaseSettings):
     berth_dwell_min: float = 20.0
     berth_depart_gap_min: float = 10.0
 
+    # --- AIS verification auto-expiry (step 7 auto status-mutation) ---
+    # How long after a planned reservation's window has *fully ended* it lingers
+    # in the AIS-verification panel before being auto-archived. A row whose window
+    # just closed still shows (as arrived / no_show) so the operator can act; once
+    # it has been past its ETD by this many minutes it is swept to a terminal
+    # status — `completed` if AIS saw the vessel berth, else `cancelled` (no-show)
+    # — so it drops out of the live panel and lands in History instead. The sweep
+    # is the deferred "auto status-mutation" half of step 7. 0 disables expiry.
+    verification_grace_minutes: int = 60
+
     # --- Sidebar "Vessels" stat ---
     # The headline "Vessels" count is vessels *present* — those with an AIS fix
     # within this many hours — not every vessel row ever ingested (which only

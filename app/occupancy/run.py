@@ -14,9 +14,11 @@ import argparse
 import datetime as dt
 import logging
 
+from app.config import get_settings
 from app.crosswalk import format_station
 from app.db import SessionLocal
 from app.occupancy.derive import derive_observed
+from app.verification import expire_stale
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -48,6 +50,13 @@ def main() -> None:
         results = derive_observed(
             session, segment_id=args.segment_id, since=args.since
         )
+        # Same batch also auto-archives stale planned rows (the step-7 auto
+        # status-mutation): a planned booking past its window beyond the grace
+        # period becomes completed (AIS saw it berth) or cancelled (no-show), so
+        # it drops out of the live verification panel and lands in History.
+        expired = expire_stale(
+            session, grace_minutes=get_settings().verification_grace_minutes
+        )
         session.commit()
     finally:
         session.close()
@@ -55,9 +64,16 @@ def main() -> None:
     inserted = sum(1 for r in results if r.inserted)
     updated = len(results) - inserted
     logger.info(
-        "derived %d observed reservation(s): %d new, %d updated",
-        len(results), inserted, updated,
+        "derived %d observed reservation(s): %d new, %d updated; "
+        "auto-archived %d stale planned row(s)",
+        len(results), inserted, updated, len(expired),
     )
+    for e in expired:
+        logger.info(
+            "  archived reservation=%d -> %s (%s) vessel=%s",
+            e["id"], e["status"],
+            "arrived" if e["arrived"] else "no-show", e["vessel_name"] or "?",
+        )
     for r in results:
         logger.info(
             "  vessel=%d sta=[%s, %s] %s..%s dir=%s%s%s",

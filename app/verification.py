@@ -88,6 +88,15 @@ def where_planned(
     return station_overlaps(p_sta_lo, p_sta_hi, o_sta_lo, o_sta_hi)
 
 
+def expiry_status(arrived: bool) -> str:
+    """Terminal status a *stale* planned row is auto-archived to: ``completed`` if
+    AIS observed the vessel berth (it came and the window has since closed), else
+    ``cancelled`` — the no-show. Neither status participates in the confirmed-only
+    no-overlap exclusion constraint, so archiving can never raise an IntegrityError
+    (it only ever *removes* a row from the constraint's set)."""
+    return "completed" if arrived else "cancelled"
+
+
 # ---------------------------------------------------------------------------
 # DB query — Postgres is the source of truth
 # ---------------------------------------------------------------------------
@@ -251,3 +260,81 @@ def verify(
     ]
 
     return {"as_of": iso(as_of), "planned": planned, "unplanned": unplanned}
+
+
+# ---------------------------------------------------------------------------
+# Auto-expiry — the deferred step-7 "auto status-mutation" half
+# ---------------------------------------------------------------------------
+# A planned row whose window has been fully past for longer than the grace period
+# is swept to a terminal status so it stops lingering in the live verification
+# panel and lands in History instead. Unlike ``verify`` (read-only), this MUTATES:
+#   * arrived (an observed AIS berthing overlapped the window) -> ``completed``
+#   * otherwise (no-show)                                      -> ``cancelled``
+# The grace period (``config.verification_grace_minutes``) is why a row whose
+# window *just* closed still shows — the operator gets a window to react before it
+# auto-archives. An audit line is appended to ``notes`` (operator notes are kept,
+# not clobbered) so History records why and when the status flipped. Open-ended
+# windows (NULL upper) never expire — they have not "ended".
+_EXPIRE_SQL = text(
+    """
+    WITH stale AS (
+        SELECT p.id,
+               upper(p.time_range) AS t_end,
+               v.name AS vessel_name,
+               v.imo  AS vessel_imo,
+               EXISTS (
+                   SELECT 1 FROM reservation o
+                   WHERE o.status::text = 'observed'
+                     AND o.vessel_id = p.vessel_id
+                     AND o.time_range && p.time_range
+               ) AS arrived
+        FROM reservation p
+        LEFT JOIN vessel v ON v.id = p.vessel_id
+        WHERE p.status::text IN ('requested', 'tentative', 'confirmed')
+          AND NOT isempty(p.time_range)
+          AND upper(p.time_range) IS NOT NULL
+          AND upper(p.time_range) <= now() - make_interval(mins => :grace)
+    )
+    UPDATE reservation r
+    SET status = CASE WHEN s.arrived THEN 'completed' ELSE 'cancelled' END
+                 ::reservation_status,
+        notes = COALESCE(r.notes || E'\\n', '')
+                || '[auto ' || to_char(now(), 'YYYY-MM-DD HH24:MI') || '] '
+                || CASE WHEN s.arrived
+                        THEN 'completed — vessel berthed (AIS) and window elapsed'
+                        ELSE 'cancelled — no-show; window elapsed '
+                             || to_char(s.t_end, 'YYYY-MM-DD HH24:MI') END
+    FROM stale s
+    WHERE r.id = s.id
+    RETURNING r.id, r.status::text AS status, s.arrived,
+              s.t_end, s.vessel_name AS vessel_name, s.vessel_imo AS vessel_imo
+    """
+)
+
+
+def expire_stale(session: Session, *, grace_minutes: int) -> list[dict]:
+    """Archive planned rows whose window has been past for > ``grace_minutes``.
+
+    Mutates each to a terminal status (``completed`` if AIS observed a berthing,
+    else ``cancelled``) and appends an audit line to ``notes``. Returns the rows
+    that were archived (id, new ``status``, ``arrived``, vessel name/imo, ``t_end``)
+    so the caller can report what it swept. Does **not** commit — the endpoint /
+    worker owns the transaction boundary, like the rest of the write surface.
+
+    ``grace_minutes <= 0`` expires as soon as the window ends (no grace). The SQL
+    anchors on ``now()`` (the Central-pinned DB clock) so the comparison matches
+    the stored timestamptz exactly."""
+    rows = session.execute(
+        _EXPIRE_SQL, {"grace": max(0, int(grace_minutes))}
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "status": r.status,
+            "arrived": bool(r.arrived),
+            "vessel_name": r.vessel_name,
+            "vessel_imo": r.vessel_imo,
+            "t_end": r.t_end.isoformat() if r.t_end is not None else None,
+        }
+        for r in rows
+    ]

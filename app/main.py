@@ -48,7 +48,7 @@ from app.intake.manual import (
 )
 from app.models import Vessel, WharfSegment
 from app.occupancy.alongside import alongside_sql, nearest_segment_lateral
-from app.verification import verify
+from app.verification import expire_stale, verify
 
 app = FastAPI(title="POPA Wharf Data Layer", version=__version__)
 
@@ -280,6 +280,7 @@ def reservation_history(
                        lower(r.station_range)   AS sta_lo,
                        upper(r.station_range)   AS sta_hi,
                        r.created_at, r.berth_id, b.name AS berth_name,
+                       v.id AS vessel_id, v.mmsi AS vessel_mmsi,
                        v.imo AS vessel_imo, v.ship_type,
                        -- Same name fallback as /reservations: an IMO-less request
                        -- has no vessel row, so read the name off its intake_event.
@@ -325,7 +326,9 @@ def reservation_history(
             "station_hi": float(r.sta_hi) if r.sta_hi is not None else None,
             "station_lo_dock": float(dock.from_popa(float(r.sta_lo))) if r.sta_lo is not None else None,
             "station_hi_dock": float(dock.from_popa(float(r.sta_hi))) if r.sta_hi is not None else None,
+            "vessel_id": r.vessel_id,
             "vessel_name": r.vessel_name,
+            "vessel_mmsi": r.vessel_mmsi,
             "vessel_imo": r.vessel_imo,
             "ship_type": r.ship_type,
             "berth_id": r.berth_id,
@@ -360,6 +363,119 @@ def list_vessels(
         }
         for v in rows
     ]
+
+
+@app.get("/vessels/{vessel_id}")
+def vessel_detail(
+    vessel_id: int, session: Session = Depends(get_session)
+) -> dict:
+    """Everything on file for one vessel — the ship detail view behind a History
+    click. Aggregates three things in one round trip: the full ``vessel`` record
+    (every column, dimensions in canonical metres), its whole reservation log
+    (every status, newest arrival first, with POPA + Dock No. station bounds like
+    ``/history``), and its latest landed AIS position (lat/lon, SOG/COG/heading,
+    nav status, time). 404 if no such vessel."""
+    v = session.get(Vessel, vessel_id)
+    if v is None:
+        raise HTTPException(status_code=404, detail="vessel not found")
+
+    dock = segment_dockno_params(session)
+
+    def dk(val: object) -> float | None:
+        return float(dock.from_popa(float(val))) if val is not None else None
+
+    def fl(val: object) -> float | None:
+        return float(val) if val is not None else None
+
+    res_rows = session.execute(
+        text(
+            """
+            SELECT r.id, r.type, r.status, r.source, r.direction, r.cargo,
+                   r.notes, r.priority,
+                   lower(r.time_range)      AS t_start,
+                   upper(r.time_range)      AS t_end,
+                   isempty(r.station_range) AS sta_unassigned,
+                   lower(r.station_range)   AS sta_lo,
+                   upper(r.station_range)   AS sta_hi,
+                   r.created_at, r.berth_id, b.name AS berth_name
+            FROM reservation r
+            LEFT JOIN berth b ON b.id = r.berth_id
+            WHERE r.vessel_id = :vid
+            ORDER BY lower(r.time_range) DESC NULLS LAST, r.created_at DESC
+            """
+        ),
+        {"vid": vessel_id},
+    ).all()
+    reservations = [
+        {
+            "id": r.id,
+            "type": r.type,
+            "status": r.status,
+            "source": r.source,
+            "direction": r.direction,
+            "priority": r.priority,
+            "cargo": r.cargo,
+            "notes": r.notes,
+            "t_start": r.t_start.isoformat() if r.t_start else None,
+            "t_end": r.t_end.isoformat() if r.t_end else None,
+            "station_unassigned": r.sta_unassigned,
+            "station_lo": fl(r.sta_lo),
+            "station_hi": fl(r.sta_hi),
+            "station_lo_dock": dk(r.sta_lo),
+            "station_hi_dock": dk(r.sta_hi),
+            "berth_id": r.berth_id,
+            "berth_name": r.berth_name,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in res_rows
+    ]
+
+    # Latest landed AIS fix for this vessel (by MMSI or vessel_id link), newest
+    # first — the same ordering /positions/recent uses.
+    pos = session.execute(
+        text(
+            """
+            SELECT lat, lon, sog, cog, heading, nav_status, msg_ts
+            FROM position_report
+            WHERE vessel_id = :vid OR (:mmsi IS NOT NULL AND mmsi = :mmsi)
+            ORDER BY msg_ts DESC NULLS LAST, id DESC
+            LIMIT 1
+            """
+        ),
+        {"vid": vessel_id, "mmsi": v.mmsi},
+    ).first()
+    latest_position = (
+        {
+            "lat": pos.lat,
+            "lon": pos.lon,
+            "sog": pos.sog,
+            "cog": pos.cog,
+            "heading": pos.heading,
+            "nav_status": pos.nav_status,
+            "msg_ts": pos.msg_ts.isoformat() if pos.msg_ts else None,
+        }
+        if pos is not None
+        else None
+    )
+
+    return {
+        "id": v.id,
+        "mmsi": v.mmsi,
+        "imo": v.imo,
+        "name": v.name,
+        "callsign": v.callsign,
+        "ship_type": v.ship_type,
+        "destination": v.destination,
+        "loa": fl(v.loa),
+        "beam": fl(v.beam),
+        "draft": fl(v.draft),
+        "dim_a": fl(v.dim_a),
+        "dim_b": fl(v.dim_b),
+        "created_at": v.created_at.isoformat() if v.created_at else None,
+        "updated_at": v.updated_at.isoformat() if v.updated_at else None,
+        "reservations": reservations,
+        "latest_position": latest_position,
+    }
 
 
 @app.get("/stats")
@@ -750,6 +866,35 @@ def get_verification(
     if from_ is not None and to is not None and from_ > to:
         from_, to = to, from_
     return verify(session, t_from=from_, t_to=to, limit=limit)
+
+
+@app.post("/verification/sweep")
+def sweep_verification(
+    limit: int = 200,
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = None,
+    session: Session = Depends(get_session),
+) -> dict:
+    """Auto-archive stale planned rows, then return the fresh verification payload.
+
+    This is the *write* companion to ``GET /verification``: a planned reservation
+    whose window has been fully past for longer than the grace period
+    (``config.verification_grace_minutes``) is swept to a terminal status —
+    ``completed`` if AIS observed the vessel berth, else ``cancelled`` (no-show) —
+    so it stops lingering in the live panel and shows in History with that status.
+    The UI calls this instead of the GET so the panel self-heals on each refresh;
+    the prod occupancy worker runs the same sweep on its periodic batch.
+
+    Returns the ``GET /verification`` shape plus an ``expired`` list naming what was
+    just archived. Read clients that must not mutate keep using the GET."""
+    if from_ is not None and to is not None and from_ > to:
+        from_, to = to, from_
+    grace = get_settings().verification_grace_minutes
+    expired = expire_stale(session, grace_minutes=grace)
+    session.commit()
+    payload = verify(session, t_from=from_, t_to=to, limit=limit)
+    payload["expired"] = expired
+    return payload
 
 
 @app.get("/berths")

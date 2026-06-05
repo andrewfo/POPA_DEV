@@ -214,19 +214,30 @@ surfaces as a 409.
    `awaiting` with a `where_planned` flag, plus `unplanned` observed berthings no
    request covered. It matches on `vessel_id` + **time** overlap (an empty
    `requested` station range can't match step 6's station-`&&` join) and **never
-   places or mutates status** — AIS can't position a not-yet-arrived ship, and
-   observed ranges are approximate. Still TODO: optional **auto status-mutation**
-   from these findings (e.g. auto-`completed` on departure — deliberately deferred;
-   surfacing for operator action came first) and the legacy-backfill *commit*.
+   places** — AIS can't position a not-yet-arrived ship, and observed ranges are
+   approximate, so *placement* stays the operator's job. The **auto
+   status-mutation** half is now also built (`expire_stale`,
+   `POST /verification/sweep`): a planned row whose window has been fully past for
+   longer than the grace period (`config.verification_grace_minutes`, default 60)
+   is auto-archived to a **terminal** status — `completed` if AIS observed the
+   vessel berth, else `cancelled` (no-show) — with an audit line appended to
+   `notes`, so it stops lingering in the live panel and shows in History instead.
+   This is a *status-lifecycle* mutation only; it still never **places** a row.
+   `GET /verification` stays read-only (the sweep is the explicit write companion;
+   the UI calls the sweep, the occupancy worker runs it each batch). Archiving only
+   ever moves a row to a status *outside* the confirmed-only exclusion constraint,
+   so it can never raise a 409. Still TODO on step 7: the legacy-backfill *commit*.
 
 **Current state: steps 1–6 complete; step 7's AIS verification layer is now built**
 (`app/verification.py`, `GET /verification`) — a read-only check of operator
 placements against observed AIS (`arrived`/`no_show`/`awaiting` + `where_planned`
-+ `unplanned`), matching on `vessel_id` + time overlap, that **never places or
-mutates status** (AIS can't position a not-yet-arrived ship; observed ranges are
-approximate — placement stays operator-driven, and a future optimizer's). What
-remains on step 7: optional auto status-mutation from those findings, and the
-legacy-spreadsheet backfill *commit*. Step 7 intake
++ `unplanned`), matching on `vessel_id` + time overlap, that **never places** a
+row (AIS can't position a not-yet-arrived ship; observed ranges are approximate —
+placement stays operator-driven, and a future optimizer's). The deferred **auto
+status-mutation** half is now built too (`expire_stale` /
+`POST /verification/sweep` + the occupancy worker): stale planned rows past their
+window + grace auto-archive to `completed`/`cancelled`. What remains on step 7:
+the legacy-spreadsheet backfill *commit*. Step 7 intake
 *capture* plus a manual *edit* surface landed early at the user's request;
 step 6's draft-vs-controlling-depth gate is deferred (no depth data layer yet).
 DB-integration tests need a live PostGIS (they auto-skip without one); pure
@@ -246,7 +257,9 @@ app/
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
   conflicts.py         # step 6: time×station overlap primitive + find_conflicts (GET /conflicts)
   verification.py      # step 7: AIS verification of operator placements (GET /verification) —
-                       #   arrived/no-show/awaiting + where-planned + unplanned; read-only, never places
+                       #   arrived/no-show/awaiting + where-planned + unplanned; never PLACES.
+                       #   expire_stale (POST /verification/sweep + occupancy worker) auto-archives
+                       #   stale planned rows past window+grace -> completed/cancelled (status only)
   auth.py              # HTTP Basic gate (whole-app middleware); active only when OPERATOR_USER+PASSWORD set
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
   seed/wharf_seed.py   # seeds wharf_segment (real centerline + apron) + berth catalog (from data/gis/)

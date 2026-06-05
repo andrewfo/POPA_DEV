@@ -592,6 +592,41 @@
     0%, 100% { background: transparent; }
     25%      { background: rgba(224,168,58,.28); }
   }
+  /* ===== Ship detail modal (History click-through) ===== */
+  #shipModal {
+    position: fixed; inset: 0; z-index: 4000; display: none;
+    background: rgba(6,9,12,.72); backdrop-filter: blur(2px);
+    align-items: flex-start; justify-content: center; padding: 5vh 16px;
+  }
+  #shipModal.open { display: flex; }
+  #shipModal .sheet {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+    width: min(720px, 100%); max-height: 88vh; overflow: auto;
+    box-shadow: 0 18px 60px rgba(0,0,0,.5);
+  }
+  #shipModal .sheet-head {
+    position: sticky; top: 0; background: var(--panel); z-index: 1;
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; border-bottom: 1px solid var(--line);
+  }
+  #shipModal .sheet-head h2 { margin: 0; font-size: 16px; flex: 1; }
+  #shipModal .sheet-body { padding: 14px 16px; }
+  #shipModal .sheet-body h3 {
+    margin: 18px 0 8px; font-size: 11px; letter-spacing: .6px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  #shipModal .sheet-body h3:first-child { margin-top: 0; }
+  #shipModal .kv {
+    display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px;
+    font-size: 13px;
+  }
+  #shipModal .kv .k { color: var(--muted); }
+  #shipModal .kv .v { color: var(--ink); font-variant-numeric: tabular-nums; }
+  #shipModal .modal-close {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+    width: 28px; height: 28px; border-radius: var(--r); cursor: pointer; font-size: 16px;
+  }
+  #shipModal .modal-close:hover { background: var(--line); }
 </style>
 </head>
 <body>
@@ -888,6 +923,18 @@
   <span class="sep">//</span><span class="k">TZ</span>&nbsp;<span class="v">AMERICA/CHICAGO · CT</span>
   <span class="right"><span class="k">CURSOR</span>&nbsp;<span class="v" id="footCoord">LAT —  LON —</span></span>
 </footer>
+
+<!-- ===== Ship detail modal (opened from a History card) ===== -->
+<div id="shipModal" role="dialog" aria-modal="true" aria-labelledby="shipModalTitle">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2 id="shipModalTitle">Ship detail</h2>
+      <button type="button" class="modal-close" id="shipModalClose" title="Close (Esc)">×</button>
+    </div>
+    <div class="sheet-body" id="shipModalBody"></div>
+  </div>
+</div>
+<!-- ===== /Ship detail modal ===== -->
 
 <script
   src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -1368,7 +1415,13 @@ async function loadVerification() {
   const el = document.getElementById("verification");
   if (!el) return;
   try {
-    const v = await api("/verification");
+    // POST /verification/sweep first auto-archives stale planned rows (a no-show
+    // or arrived past its window + grace period -> cancelled/completed), so they
+    // drop out of this panel into History, then returns the fresh payload. The
+    // read-only GET /verification is still there for clients that must not mutate.
+    const w = await apiWrite("POST", "/verification/sweep");
+    if (!w.ok) throw new Error("sweep failed");
+    const v = w.data || {};
     VERIFY_PLANNED = v.planned || [];
     // Surface the actionable rows first: discrepancies (no-show / berthed
     // elsewhere) and unplanned arrivals; quietly arrived/awaiting rows follow.
@@ -2124,6 +2177,14 @@ function reqCard(r) {
 // /history returns the booking log (every status, observed berthings included),
 // newest arrival first, with a vessel-name substring + status + date filter.
 // Same row shape as /reservations, so it shares fmtCentral / the status palette.
+// AIS ship-type code -> a readable label ("Tanker (80)"), reusing the same
+// category table the map dots / legend use. null when no type is on file.
+function shipTypeLabel(t) {
+  if (t == null) return null;
+  const c = SHIP_CATEGORIES[shipTypeCategory(t)];
+  return c ? `${c.label} (${t})` : `type ${t}`;
+}
+
 function histCard(h) {
   const color = RES_STATUS_COLOR[h.status] || "#888";
   const tug = isTugType(h.ship_type)
@@ -2132,15 +2193,142 @@ function histCard(h) {
   const sta = h.station_unassigned
     ? "berth unassigned"
     : `Dock ${Math.round(Math.min(h.station_lo_dock, h.station_hi_dock))}–${Math.round(Math.max(h.station_lo_dock, h.station_hi_dock))}`;
-  const berth = h.berth_name ? ` · ${esc(h.berth_name)}` : "";
+  // Second line: position + berth + direction + priority, all that's set.
+  const bits = [esc(sta)];
+  if (h.berth_name) bits.push(esc(h.berth_name));
+  if (h.direction) bits.push(esc(h.direction));
+  if (h.priority != null) bits.push("priority " + esc(h.priority));
+  if (h.cargo) bits.push(esc(h.cargo));
+  const typeLabel = shipTypeLabel(h.ship_type);
+  // Clickable -> ship detail, but only when there's a vessel row to open (an
+  // IMO-less intake has no vessel_id; its card stays inert).
+  const clickable = h.vessel_id != null;
   return `
-    <div class="card">
+    <div class="card${clickable ? " hist-card" : ""}" data-vessel-id="${h.vessel_id ?? ""}"${clickable ? ' style="cursor:pointer" title="Click for ship details"' : ""}>
       <div class="name">${esc(h.vessel_name || "(unnamed)")}${imo}${tug}
         <span class="status-badge" style="background:${color}">${esc(h.status)}</span></div>
-      <div class="meta">${esc(h.type)} · ETB <b>${fmtCentral(h.t_start)}</b>${h.t_end ? ` → ETD <b>${fmtCentral(h.t_end)}</b>` : ""} · via ${esc(h.source)}</div>
-      <div class="meta">${esc(sta)}${berth}${h.cargo ? " · " + esc(h.cargo) : ""}</div>
+      <div class="meta">${esc(h.type)}${typeLabel ? " · " + esc(typeLabel) : ""} · ETB <b>${fmtCentral(h.t_start)}</b>${h.t_end ? ` → ETD <b>${fmtCentral(h.t_end)}</b>` : ""} · via ${esc(h.source)}</div>
+      <div class="meta">${bits.join(" · ")}</div>
+      ${h.notes ? `<div class="meta" style="color:var(--muted);white-space:pre-line">${esc(h.notes)}</div>` : ""}
     </div>`;
 }
+
+// --- Ship detail modal -----------------------------------------------------
+// Clicking a History card opens this: GET /vessels/{id} returns the full vessel
+// record + its whole reservation log + latest AIS fix, rendered as a sheet. The
+// data layer is the product, so this is a thin read-only view over that one call.
+// AIS nav-status code -> label (ITU-R M.1371); only the codes we actually see.
+const NAV_STATUS = {
+  0: "under way (engine)", 1: "at anchor", 2: "not under command",
+  3: "restricted manoeuvrability", 4: "constrained by draught", 5: "moored",
+  6: "aground", 7: "engaged in fishing", 8: "under way (sailing)", 15: "undefined",
+};
+
+// One key/value row; skips itself when the value is empty so optional fields
+// don't render blank. `v` must already be HTML-safe (caller escapes free text).
+function kvRow(k, v) {
+  if (v == null || v === "") return "";
+  return `<div class="k">${esc(k)}</div><div class="v">${v}</div>`;
+}
+// Metres (canonical store) shown with its feet equivalent, the dual readout the
+// rest of the UI uses. null in -> null out (row skipped).
+function mFt(m) {
+  if (m == null) return null;
+  return `${Number(m).toFixed(1)} m · ${Math.round(Number(m) * FT_PER_M)} ft`;
+}
+
+// One reservation row inside the detail sheet (same shape as a history card,
+// minus the click-through — we're already in the ship's detail).
+function shipResRow(r) {
+  const color = RES_STATUS_COLOR[r.status] || "#888";
+  const sta = r.station_unassigned
+    ? "berth unassigned"
+    : `Dock ${Math.round(Math.min(r.station_lo_dock, r.station_hi_dock))}–${Math.round(Math.max(r.station_lo_dock, r.station_hi_dock))}`;
+  const bits = [esc(sta)];
+  if (r.berth_name) bits.push(esc(r.berth_name));
+  if (r.direction) bits.push(esc(r.direction));
+  if (r.priority != null) bits.push("priority " + esc(r.priority));
+  if (r.cargo) bits.push(esc(r.cargo));
+  return `
+    <div class="card">
+      <div class="name">${esc(r.type)}
+        <span class="status-badge" style="background:${color}">${esc(r.status)}</span>
+        <span style="color:var(--muted);font-weight:400">via ${esc(r.source)}</span></div>
+      <div class="meta">ETB <b>${fmtCentral(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtCentral(r.t_end)}</b>` : ""}</div>
+      <div class="meta">${bits.join(" · ")}</div>
+      ${r.notes ? `<div class="meta" style="color:var(--muted);white-space:pre-line">${esc(r.notes)}</div>` : ""}
+    </div>`;
+}
+
+function closeShipModal() {
+  const m = document.getElementById("shipModal");
+  if (m) m.classList.remove("open");
+}
+
+async function openShipDetail(vesselId) {
+  if (!vesselId) return;
+  const modal = document.getElementById("shipModal");
+  const body = document.getElementById("shipModalBody");
+  const title = document.getElementById("shipModalTitle");
+  if (!modal || !body) return;
+  body.innerHTML = '<div class="empty">loading…</div>';
+  modal.classList.add("open");
+  let v;
+  try {
+    v = await api("/vessels/" + vesselId);
+  } catch (e) {
+    body.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+    return;
+  }
+  title.textContent = v.name || ("Ship #" + v.id);
+  const typeLabel = shipTypeLabel(v.ship_type);
+  const ident = [
+    kvRow("Name", v.name ? esc(v.name) : "<i>unknown</i>"),
+    kvRow("IMO", v.imo),
+    kvRow("MMSI", v.mmsi),
+    kvRow("Callsign", esc(v.callsign)),
+    kvRow("Ship type", typeLabel ? esc(typeLabel) : null),
+    kvRow("Destination", esc(v.destination)),
+    kvRow("First seen", v.created_at ? fmtCentral(v.created_at) : null),
+    kvRow("Updated", v.updated_at ? fmtCentral(v.updated_at) : null),
+  ].join("");
+  const dims = [
+    kvRow("LOA", mFt(v.loa)),
+    kvRow("Beam", mFt(v.beam)),
+    kvRow("Draft", mFt(v.draft)),
+    kvRow("Bow offset (A)", v.dim_a != null ? Number(v.dim_a).toFixed(1) + " m" : null),
+    kvRow("Stern offset (B)", v.dim_b != null ? Number(v.dim_b).toFixed(1) + " m" : null),
+  ].join("");
+  const p = v.latest_position;
+  const posSection = p ? `
+    <h3>Latest AIS fix</h3>
+    <div class="kv">
+      ${kvRow("Time", fmtCentral(p.msg_ts))}
+      ${kvRow("Position", `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`)}
+      ${kvRow("Speed", p.sog != null ? p.sog.toFixed(1) + " kn" : null)}
+      ${kvRow("Course", p.cog != null ? Math.round(p.cog) + "°" : null)}
+      ${kvRow("Heading", p.heading != null ? Math.round(p.heading) + "°" : null)}
+      ${kvRow("Nav status", p.nav_status != null ? esc(NAV_STATUS[p.nav_status] || ("code " + p.nav_status)) : null)}
+    </div>` : "";
+  const res = v.reservations || [];
+  body.innerHTML = `
+    <h3>Identity</h3><div class="kv">${ident || '<div class="k">—</div>'}</div>
+    <h3>Dimensions</h3><div class="kv">${dims || '<div class="k">none on file</div>'}</div>
+    ${posSection}
+    <h3>Reservation history (${res.length})</h3>
+    ${res.length ? res.map(shipResRow).join("") : '<div class="empty">none on record</div>'}`;
+}
+
+(function () {
+  const modal = document.getElementById("shipModal");
+  const close = document.getElementById("shipModalClose");
+  if (close) close.addEventListener("click", closeShipModal);
+  // Click the dimmed backdrop (but not the sheet) closes; Esc closes.
+  if (modal) modal.addEventListener("click", (e) => { if (e.target === modal) closeShipModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && modal.classList.contains("open")) closeShipModal();
+  });
+})();
 
 async function loadHistory() {
   const el = document.getElementById("historyList");
@@ -2163,6 +2351,10 @@ async function loadHistory() {
     el.innerHTML = rows.length
       ? rows.map(histCard).join("")
       : '<div class="empty">no reservations match</div>';
+    // Click a ship's card -> full detail modal (vessel record + its whole
+    // reservation log + latest AIS fix).
+    el.querySelectorAll(".hist-card").forEach((card) =>
+      card.addEventListener("click", () => openShipDetail(Number(card.dataset.vesselId))));
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }

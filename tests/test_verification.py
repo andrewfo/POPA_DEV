@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.verification import classify_planned, where_planned
+from app.verification import classify_planned, expiry_status, where_planned
 
 UTC = timezone.utc
 
@@ -62,3 +62,14 @@ def test_where_planned_true_on_station_overlap():
 
 def test_where_planned_false_when_disjoint():
     assert where_planned(400.0, 900.0, 1000.0, 1200.0) is False
+
+
+# --- expiry_status (auto-archive terminal status) --------------------------
+def test_expiry_status_arrived_completes():
+    # Vessel was observed berthing -> the booking ran its course.
+    assert expiry_status(True) == "completed"
+
+
+def test_expiry_status_no_show_cancels():
+    # Window elapsed with no AIS berthing -> archive the no-show.
+    assert expiry_status(False) == "cancelled"
