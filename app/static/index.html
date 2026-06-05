@@ -230,15 +230,6 @@
   /* Custom-tinted basemap: heavily desaturate + dim the aerial imagery toward a
      monochrome chart so the signal colours and chrome read clearly on top. */
   .basemap-tinted { filter: saturate(.32) brightness(.56) contrast(1.12) hue-rotate(-6deg); }
-  /* Live coordinate / scale read-out, bottom-left of the map — flat, accent tick. */
-  #coordHud {
-    position: absolute; left: 8px; bottom: 10px; z-index: 800; pointer-events: none;
-    font-family: var(--font-mono); font-size: 10px; color: var(--ink-dim); letter-spacing: .6px;
-    background: rgba(7,9,11,.85); border: 1px solid var(--line); border-left: 2px solid var(--accent);
-    border-radius: 0; padding: 4px 9px; text-transform: uppercase;
-  }
-  #coordHud .k { color: var(--muted); }
-
   /* Readout tiles: number in large mono, tiny uppercase label. No per-card chrome —
      a single hairline frame with 1px dividers (the grid gap shows the bg through). */
   .stats {
@@ -851,7 +842,7 @@
   <div id="sidebarResize" title="Drag to resize sidebar"></div>
 
   <div id="stage">
-    <div id="map"><div id="coordHud"><span class="k">LAT —  LON —</span></div></div>
+    <div id="map"></div>
 
     <!-- ===== Berth occupancy timeline (Gantt drawer under the map) ===== -->
     <section id="timelineDrawer" class="tl-collapsed">
@@ -2794,15 +2785,12 @@ const BOOT_MS = Date.now();
   });
 })();
 (function () {
-  const hud = document.getElementById("coordHud");
   const foot = document.getElementById("footCoord");
-  const blank = '<span class="k">LAT —  LON —</span>';
   map.on("mousemove", (e) => {
     const la = e.latlng.lat.toFixed(5), lo = e.latlng.lng.toFixed(5);
-    if (hud) hud.innerHTML = `<span class="k">LAT</span> ${la}&nbsp;&nbsp;<span class="k">LON</span> ${lo}`;
     if (foot) foot.textContent = `LAT ${la}  LON ${lo}`;
   });
-  map.on("mouseout", () => { if (hud) hud.innerHTML = blank; if (foot) foot.textContent = "LAT —  LON —"; });
+  map.on("mouseout", () => { if (foot) foot.textContent = "LAT —  LON —"; });
   // Live zoom / scale readout in the classification strip.
   const scaleEl = document.getElementById("classScale");
   if (scaleEl) {
