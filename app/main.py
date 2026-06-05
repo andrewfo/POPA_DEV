@@ -349,25 +349,49 @@ def reservation_history(
 def list_vessels(
     limit: int = 100, session: Session = Depends(get_session)
 ) -> list[dict]:
-    rows = (
-        session.execute(select(Vessel).order_by(Vessel.updated_at.desc()).limit(limit))
-        .scalars()
-        .all()
-    )
+    """Recent vessels with their latest AIS fix folded in. Each static vessel
+    record (identity + dimensions) joins, per row, to its most recent landed
+    ``position_report`` via a LATERAL — so the ops list carries live movement
+    state (SOG/COG/nav status), not just the registry."""
+    rows = session.execute(
+        text(
+            """
+            SELECT v.id, v.mmsi, v.imo, v.name, v.callsign, v.ship_type,
+                   v.destination, v.loa, v.beam, v.draft,
+                   p.sog, p.cog, p.nav_status, p.msg_ts
+            FROM vessel v
+            LEFT JOIN LATERAL (
+                SELECT sog, cog, nav_status, msg_ts
+                FROM position_report
+                WHERE vessel_id = v.id
+                   OR (v.mmsi IS NOT NULL AND mmsi = v.mmsi)
+                ORDER BY msg_ts DESC NULLS LAST, id DESC
+                LIMIT 1
+            ) p ON true
+            ORDER BY v.updated_at DESC
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit},
+    ).all()
     return [
         {
-            "id": v.id,
-            "mmsi": v.mmsi,
-            "imo": v.imo,
-            "name": v.name,
-            "callsign": v.callsign,
-            "ship_type": v.ship_type,
-            "destination": v.destination,
-            "loa": float(v.loa) if v.loa is not None else None,
-            "beam": float(v.beam) if v.beam is not None else None,
-            "draft": float(v.draft) if v.draft is not None else None,
+            "id": r.id,
+            "mmsi": r.mmsi,
+            "imo": r.imo,
+            "name": r.name,
+            "callsign": r.callsign,
+            "ship_type": r.ship_type,
+            "destination": r.destination,
+            "loa": float(r.loa) if r.loa is not None else None,
+            "beam": float(r.beam) if r.beam is not None else None,
+            "draft": float(r.draft) if r.draft is not None else None,
+            "sog": r.sog,
+            "cog": r.cog,
+            "nav_status": r.nav_status,
+            "position_ts": r.msg_ts.isoformat() if r.msg_ts else None,
         }
-        for v in rows
+        for r in rows
     ]
 
 

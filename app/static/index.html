@@ -584,6 +584,12 @@
     100% { transform: scale(1.4); opacity: 0; }
   }
   /* Sidebar vessel rows are click-to-locate; show the affordance. */
+  /* Dense AIS vessel table: more columns (MMSI/IMO/call/nav/SOG/COG/draught),
+     so tighten padding + drop to mono-friendly sizes to keep it in the sidebar. */
+  #vesselsTbl th, #vesselsTbl td { padding: 3px 4px; }
+  #vesselsTbl td { font-size: 11px; }
+  #vesselsTbl th { font-size: 8px; letter-spacing: .6px; }
+  #vesselsTbl td.act .btn-sm { padding: 2px 6px; }
   #vessels tbody tr.locatable { cursor: pointer; }
   #vessels tbody tr.locatable:hover { background: var(--panel-2); }
   /* Flash amber when a clicked vessel has no recent AIS contact to locate. */
@@ -789,7 +795,7 @@
     <section class="tab-panel" data-panel="reservations">
     <p class="hint" style="margin:0 0 10px">
       Reservations come from <b>berth requests</b>. Promote a requested row below:
-      enter where the <b>bow</b> sits (Dock No.) and the heading — the stern and
+      enter where the <b>bow</b> sits (Dock No.) and the heading; the stern and
       the schedule fill in from the request automatically.
     </p>
 
@@ -831,7 +837,7 @@
     <details class="section" open>
       <summary>AIS verification</summary>
     <div class="hint" style="margin:0 0 8px">
-      Operator placements checked against observed AIS — <b>arrived</b> /
+      Operator placements checked against observed AIS: <b>arrived</b> /
       <b>no-show</b> / <b>awaiting</b>, plus any <b>unplanned</b> arrival.
       Read-only; AIS never places.
     </div>
@@ -863,12 +869,12 @@
     <details class="section" open>
       <summary>Reservation history</summary>
     <p class="hint" style="margin:0 0 10px">
-      The log of bookings — every status, AIS-observed berthings included —
+      The log of bookings (every status, AIS-observed berthings included),
       newest arrival first. Filter by vessel name, IMO, status, or a date range.
     </p>
     <div class="filter-bar">
       <button type="button" class="btn-sm primary" id="histFilterBtn">⚲ Filters</button>
-      <span id="histFilterSummary" class="hint" style="margin:0;flex:1">no filters — showing all</span>
+      <span id="histFilterSummary" class="hint" style="margin:0;flex:1">no filters, showing all</span>
     </div>
     <div id="historyList"><div class="empty">loading…</div></div>
     </details>
@@ -1574,11 +1580,42 @@ async function loadVessels() {
   try {
     const vs = await api("/vessels?limit=25");
     VESSELS = vs;
-    if (!vs.length) { el.innerHTML = '<div class="empty">no vessels yet — run AIS ingestion</div>'; return; }
-    el.innerHTML = `<table><thead><tr><th>Name</th><th>MMSI</th><th>LOA (ft)</th><th></th></tr></thead><tbody>${
+    if (!vs.length) { el.innerHTML = '<div class="empty">no vessels yet, run AIS ingestion</div>'; return; }
+    el.innerHTML = `<table id="vesselsTbl"><thead><tr>` +
+      `<th>Name</th><th>MMSI</th><th>IMO</th><th>Call</th>` +
+      `<th title="AIS nav-status code (ITU-R M.1371)">Nav</th>` +
+      `<th title="Speed over ground (kn), from the latest AIS fix">SOG</th>` +
+      `<th title="Course over ground (deg)">COG</th>` +
+      `<th title="Draught (ft)">Drft</th>` +
+      `<th title="Length overall (ft)">LOA</th><th></th>` +
+      `</tr></thead><tbody>${
       vs.map((v) => {
-        const loc = v.mmsi != null ? ` class="locatable" data-locate-mmsi="${v.mmsi}" title="Click to locate on the chart"` : "";
-        return `<tr${loc}><td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td><td class="num">${v.mmsi ?? "—"}</td><td class="num">${v.loa != null ? Math.round(Number(v.loa) * FT_PER_M) : "—"}</td><td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td></tr>`;
+        const navLabel = v.nav_status != null ? (NAV_STATUS[v.nav_status] || ("code " + v.nav_status)) : null;
+        // Row tooltip carries the fuller fix the dense columns can't: nav label,
+        // destination, and when the fix landed.
+        const tip = [];
+        if (navLabel) tip.push("Nav: " + navLabel);
+        if (v.destination) tip.push("Dest: " + v.destination);
+        if (v.position_ts) tip.push("Fix: " + fmtCentral(v.position_ts) + " CT");
+        const locatable = v.mmsi != null;
+        if (locatable) tip.unshift("Click to locate on the chart");
+        const loc = locatable ? ` class="locatable" data-locate-mmsi="${v.mmsi}"` : "";
+        const title = tip.length ? ` title="${esc(tip.join(" · "))}"` : "";
+        const sog = v.sog != null ? Number(v.sog).toFixed(1) : "—";
+        const cog = v.cog != null ? Math.round(Number(v.cog)) + "°" : "—";
+        const drft = v.draft != null ? Math.round(Number(v.draft) * FT_PER_M) : "—";
+        return `<tr${loc}${title}>` +
+          `<td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td>` +
+          `<td class="num">${v.mmsi ?? "—"}</td>` +
+          `<td class="num">${v.imo ?? "—"}</td>` +
+          `<td>${v.callsign ? esc(v.callsign) : "—"}</td>` +
+          `<td class="num"${navLabel ? ` title="${esc(navLabel)}"` : ""}>${v.nav_status ?? "—"}</td>` +
+          `<td class="num">${sog}</td>` +
+          `<td class="num">${cog}</td>` +
+          `<td class="num">${drft}</td>` +
+          `<td class="num">${v.loa != null ? Math.round(Number(v.loa) * FT_PER_M) : "—"}</td>` +
+          `<td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td>` +
+          `</tr>`;
       }).join("")
     }</tbody></table>`;
     el.querySelectorAll("[data-edit-vessel]").forEach((b) =>
@@ -1791,7 +1828,7 @@ function resCard(r) {
       <form class="edit-form" data-edit-request>
         <fieldset>
           <legend>Berth request</legend>
-          <div class="hint" style="margin:0 0 6px">Update the request as received — arrival/departure times and cargo. Placement (bow + heading) stays under “Edit placement”.</div>
+          <div class="hint" style="margin:0 0 6px">Update the request as received: arrival/departure times and cargo. Placement (bow + heading) stays under “Edit placement”.</div>
           <div class="grid2">
             <div><label>Arrival (ETB)</label><input type="datetime-local" name="etb" value="${isoToLocalInput(r.t_start)}" /></div>
             <div><label>Departure (ETD)</label><input type="datetime-local" name="etd" value="${isoToLocalInput(r.t_end)}" /></div>
@@ -2397,7 +2434,7 @@ function updateHistFilterSummary() {
   if (imo) parts.push("IMO: " + imo);
   if (status) parts.push(status);
   if (from || to) parts.push((from || "…") + " → " + (to || "…"));
-  el.textContent = parts.length ? parts.join(" · ") : "no filters — showing all";
+  el.textContent = parts.length ? parts.join(" · ") : "no filters, showing all";
 }
 
 async function loadHistory() {
