@@ -437,7 +437,8 @@ def vessel_detail(
             """
             SELECT lat, lon, sog, cog, heading, nav_status, msg_ts
             FROM position_report
-            WHERE vessel_id = :vid OR (:mmsi IS NOT NULL AND mmsi = :mmsi)
+            WHERE vessel_id = :vid
+               OR (CAST(:mmsi AS bigint) IS NOT NULL AND mmsi = CAST(:mmsi AS bigint))
             ORDER BY msg_ts DESC NULLS LAST, id DESC
             LIMIT 1
             """

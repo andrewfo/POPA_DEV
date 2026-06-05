@@ -276,5 +276,14 @@ def test_vessel_detail_includes_latest_position(client, db_session):
     assert body["latest_position"]["sog"] == 0.2
 
 
+def test_vessel_detail_imo_only_vessel(client, db_session):
+    # A vessel with no MMSI (IMO-only) must not trip the latest-position query's
+    # NULL-typed bind param — regression for the AmbiguousParameter 500.
+    v = _add_vessel(db_session, mmsi=None, imo=9000032, name="NOMMSI")
+    r = client.get(f"/vessels/{v}")
+    assert r.status_code == 200
+    assert r.json()["latest_position"] is None
+
+
 def test_vessel_detail_404_when_missing(client, db_session):
     assert client.get("/vessels/99999999").status_code == 404
