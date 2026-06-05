@@ -22,6 +22,13 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
+# Pick the right Python — macOS ships python3 only
+PYTHON="${PYTHON:-$(command -v python3 || command -v python)}"
+if [[ -z "$PYTHON" ]]; then
+  echo "No python3 or python found on PATH." >&2
+  exit 1
+fi
+
 # --- defaults ---
 NO_API=false
 NO_AIS=false
@@ -52,9 +59,11 @@ PIDS=()
 cleanup() {
   echo ""
   step "Shutting down background processes"
-  for pid in "${PIDS[@]}"; do
-    kill "$pid" 2>/dev/null && ok "stopped PID $pid" || true
-  done
+  if [[ ${#PIDS[@]} -gt 0 ]]; then
+    for pid in "${PIDS[@]}"; do
+      kill "$pid" 2>/dev/null && ok "stopped PID $pid" || true
+    done
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -87,10 +96,10 @@ ok "db healthy"
 
 # --- 2. Migrate + seed (idempotent) ---
 step "alembic upgrade head"
-python -m alembic upgrade head
+$PYTHON -m alembic upgrade head
 
 step "Seeding wharf segment"
-python -m app.seed.wharf_seed
+$PYTHON -m app.seed.wharf_seed
 
 # --- 3. Read AIS key from .env ---
 AIS_KEY=""
@@ -111,19 +120,19 @@ fi
 # --- 4. Launch long-lived processes in background ---
 if ! $NO_API; then
   step "API  -> http://localhost:$PORT"
-  python -m uvicorn app.main:app --reload --port "$PORT" &
+  $PYTHON -m uvicorn app.main:app --reload --port "$PORT" &
   PIDS+=($!)
 fi
 
 if $RUN_AIS; then
   step "AIS  -> aisstream.io live feed"
-  python -m app.ais.run &
+  $PYTHON -m app.ais.run &
   PIDS+=($!)
 fi
 
 if $OCCUPANCY; then
   step "Occupancy derivation every ${OCC_EVERY}s"
-  (while true; do python -m app.occupancy.run; sleep "$OCC_EVERY"; done) &
+  (while true; do $PYTHON -m app.occupancy.run; sleep "$OCC_EVERY"; done) &
   PIDS+=($!)
 fi
 
