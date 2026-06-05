@@ -22,7 +22,11 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
-# Pick the right Python — macOS ships python3 only
+# Activate the venv if present, otherwise pick system python3
+if [[ -f "$REPO/.venv/bin/activate" ]]; then
+  # shellcheck disable=SC1091
+  source "$REPO/.venv/bin/activate"
+fi
 PYTHON="${PYTHON:-$(command -v python3 || command -v python)}"
 if [[ -z "$PYTHON" ]]; then
   echo "No python3 or python found on PATH." >&2
