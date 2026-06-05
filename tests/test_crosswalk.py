@@ -5,12 +5,16 @@ import pytest
 
 from app.crosswalk import (
     AffineParams,
+    DEFAULT_CORPS,
+    DEFAULT_DOCKNO,
     corps_to_popa,
     dockno_to_popa,
     format_station,
     parse_station,
     popa_to_corps,
     popa_to_dockno,
+    segment_corps_params,
+    segment_dockno_params,
 )
 
 
@@ -106,3 +110,39 @@ def test_dockno_is_reversed():
     # A positive POPA step decreases Dock No. (reversed direction).
     assert popa_to_dockno(1.0) < popa_to_dockno(0.0)
     assert math.isclose(popa_to_dockno(0.0), 3365.0)
+
+
+# --- Per-segment param loaders (fallback path, no DB) ----------------------
+class _StubSession:
+    """Minimal session whose execute().first() yields a preset row."""
+
+    def __init__(self, row):
+        self._row = row
+
+    def execute(self, *_args, **_kwargs):
+        class _Result:
+            def __init__(self, row):
+                self._row = row
+
+            def first(self):
+                return self._row
+
+        return _Result(self._row)
+
+
+def test_segment_params_fall_back_to_published_defaults():
+    # No seeded segment (row is None) -> the published crosswalk defaults.
+    session = _StubSession(None)
+    assert segment_corps_params(session) == DEFAULT_CORPS
+    assert segment_dockno_params(session) == DEFAULT_DOCKNO
+
+
+def test_segment_params_read_their_own_columns():
+    # Each loader reads its own *_scale/*_offset, not the other system's.
+    class _Row:
+        corps_scale, corps_offset = 1.0, 999.0
+        dockno_scale, dockno_offset = -1.0, 4242.0
+
+    session = _StubSession(_Row())
+    assert segment_corps_params(session) == AffineParams(1.0, 999.0)
+    assert segment_dockno_params(session) == AffineParams(-1.0, 4242.0)
