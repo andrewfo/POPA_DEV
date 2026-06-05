@@ -280,6 +280,23 @@
     display: flex; align-items: center; gap: 7px; font-weight: 700;
   }
   h2::before { content: ""; width: 6px; height: 6px; background: var(--accent); flex: none; }
+  /* Collapsible sidebar sections: a <details> whose <summary> stands in for what
+     used to be a static <h2>. Same look (uppercase label, accent dot, bottom
+     rule) plus a right-aligned caret that rotates open; click the heading to
+     fold the section. */
+  details.section { margin: 0; }
+  details.section > summary {
+    list-style: none; cursor: pointer; user-select: none;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px;
+    color: var(--ink-dim); margin: var(--s6) 0 var(--s3);
+    padding-bottom: 4px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 7px; font-weight: 700;
+  }
+  details.section > summary::-webkit-details-marker { display: none; }
+  details.section > summary::before { content: ""; width: 6px; height: 6px; background: var(--accent); flex: none; }
+  details.section > summary::after { content: "▸"; margin-left: auto; color: var(--muted); font-size: 9px; transition: transform .12s ease; }
+  details.section[open] > summary::after { transform: rotate(90deg); }
+  details.section > summary:hover { color: var(--ink); }
   .card {
     background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--line-2);
     border-radius: 0; padding: 7px 9px; margin-bottom: var(--s1);
@@ -700,7 +717,8 @@
     </details>
     <!-- ===== /Manual berth-request entry ===== -->
 
-    <h2>All berth requests</h2>
+    <details class="section" open>
+      <summary>All berth requests</summary>
     <div class="filter-bar">
       <label for="reqSource">Channel</label>
       <select id="reqSource">
@@ -711,6 +729,7 @@
       </select>
     </div>
     <div id="berthRequests"><div class="empty">loading…</div></div>
+    </details>
     </section>
     <!-- ===== /Berth requests tab ===== -->
 
@@ -722,7 +741,8 @@
       the schedule fill in from the request automatically.
     </p>
 
-    <h2>Reservations</h2>
+    <details class="section" open>
+      <summary>Reservations</summary>
     <div class="filter-bar">
       <label for="resFilter">Show</label>
       <select id="resFilter">
@@ -735,6 +755,7 @@
       </select>
     </div>
     <div id="requests"><div class="empty">none yet</div></div>
+    </details>
     </section>
     <!-- ===== /Reservations tab ===== -->
 
@@ -744,42 +765,51 @@
          layer-toggle box (top-right) — see the L.control.layers overlays in JS. -->
 
     <!-- ===== Conflicts (time × station overlaps) ===== -->
-    <h2>Conflicts</h2>
+    <details class="section" open>
+      <summary>Conflicts</summary>
     <div class="hint" style="margin:0 0 8px">
       Reservations overlapping in both time and station. Click one to highlight
       the contested stretch.
     </div>
     <div id="conflicts"><div class="empty">none</div></div>
+    </details>
     <!-- ===== /Conflicts ===== -->
 
     <!-- ===== AIS verification (plan vs observed reality) ===== -->
-    <h2>AIS verification</h2>
+    <details class="section" open>
+      <summary>AIS verification</summary>
     <div class="hint" style="margin:0 0 8px">
       Operator placements checked against observed AIS — <b>arrived</b> /
       <b>no-show</b> / <b>awaiting</b>, plus any <b>unplanned</b> arrival.
       Read-only; AIS never places.
     </div>
     <div id="verification"><div class="empty">none</div></div>
+    </details>
     <!-- ===== /AIS verification ===== -->
 
     <!-- ===== Alongside now (currently berthed, from live AIS) ===== -->
-    <h2>Alongside now</h2>
+    <details class="section" open>
+      <summary>Alongside now</summary>
     <div class="hint" style="margin:0 0 8px">
       Vessels physically at the wharf right now, from live AIS. Click one to
       locate it on the chart.
     </div>
     <div id="alongside"><div class="empty">loading…</div></div>
+    </details>
     <!-- ===== /Alongside now ===== -->
 
-    <h2>Recent vessels</h2>
+    <details class="section" open>
+      <summary>Recent vessels</summary>
     <div id="vessels"><div class="empty">loading…</div></div>
     <div id="vesselEditor"></div>
+    </details>
     </section>
     <!-- ===== /Overview tab ===== -->
 
     <!-- ===== History tab ===== -->
     <section class="tab-panel" data-panel="history">
-    <h2>Reservation history</h2>
+    <details class="section" open>
+      <summary>Reservation history</summary>
     <p class="hint" style="margin:0 0 10px">
       The log of bookings — every status, AIS-observed berthings included —
       newest arrival first. Filter by vessel name, status, or a date range.
@@ -804,6 +834,7 @@
       <button type="button" class="btn-sm" id="histClear">Clear</button>
     </div>
     <div id="historyList"><div class="empty">loading…</div></div>
+    </details>
     </section>
     <!-- ===== /History tab ===== -->
   </aside>
