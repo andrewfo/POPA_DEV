@@ -836,10 +836,11 @@
       <summary>Reservation history</summary>
     <p class="hint" style="margin:0 0 10px">
       The log of bookings — every status, AIS-observed berthings included —
-      newest arrival first. Filter by vessel name, status, or a date range.
+      newest arrival first. Filter by vessel name, IMO, status, or a date range.
     </p>
     <div class="filter-bar wrap">
       <input type="text" id="histName" placeholder="Vessel name…" />
+      <input type="text" id="histImo" inputmode="numeric" placeholder="IMO…" style="max-width:110px" />
       <label for="histStatus">Status</label>
       <select id="histStatus">
         <option value="">All</option>
@@ -2338,11 +2339,13 @@ async function loadHistory() {
   const el = document.getElementById("historyList");
   if (!el) return;
   const name = document.getElementById("histName").value.trim();
+  const imo = document.getElementById("histImo").value.trim();
   const status = document.getElementById("histStatus").value;
   const from = document.getElementById("histFrom").value;   // YYYY-MM-DD (Central)
   const to = document.getElementById("histTo").value;
   const qs = new URLSearchParams();
   if (name) qs.set("name", name);
+  if (imo) qs.set("imo", imo);
   if (status) qs.set("status", status);
   // Date inputs are zone-less; send the day's Central bounds and let the server's
   // pinned zone interpret them (mirrors how the edit forms send wall-clock time).
@@ -2369,6 +2372,7 @@ async function loadHistory() {
 
 (function () {
   const name = document.getElementById("histName");
+  const imo = document.getElementById("histImo");
   const status = document.getElementById("histStatus");
   const from = document.getElementById("histFrom");
   const to = document.getElementById("histTo");
@@ -2376,11 +2380,12 @@ async function loadHistory() {
   const clear = document.getElementById("histClear");
   if (search) search.addEventListener("click", loadHistory);
   if (name) name.addEventListener("keydown", (e) => { if (e.key === "Enter") loadHistory(); });
+  if (imo) imo.addEventListener("keydown", (e) => { if (e.key === "Enter") loadHistory(); });
   if (status) status.addEventListener("change", loadHistory);
   if (from) from.addEventListener("change", loadHistory);
   if (to) to.addEventListener("change", loadHistory);
   if (clear) clear.addEventListener("click", () => {
-    name.value = ""; status.value = ""; from.value = ""; to.value = "";
+    name.value = ""; imo.value = ""; status.value = ""; from.value = ""; to.value = "";
     loadHistory();
   });
 })();

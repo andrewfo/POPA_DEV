@@ -246,6 +246,7 @@ def positions_recent(
 @app.get("/history")
 def reservation_history(
     name: str | None = None,
+    imo: str | None = None,
     status: str | None = None,
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = None,
@@ -263,8 +264,10 @@ def reservation_history(
     reservations view does, so name search still finds them.
 
     Filters (all optional, AND-combined): ``name`` (case-insensitive substring),
-    ``status`` (exact), and a ``from``/``to`` date window (ISO datetimes — FastAPI
-    rejects malformed with 422 — an overlap test on ``time_range``)."""
+    ``imo`` (digit substring of the vessel's IMO — IMO-less requests carry no IMO
+    so they drop out of an IMO search), ``status`` (exact), and a ``from``/``to``
+    date window (ISO datetimes — FastAPI rejects malformed with 422 — an overlap
+    test on ``time_range``)."""
     # Inverted bounds are a no-op window, not a 500 (mirrors /reservations).
     if from_ is not None and to is not None and from_ > to:
         from_, to = to, from_
@@ -297,6 +300,8 @@ def reservation_history(
                 WHERE (CAST(:status AS text) IS NULL OR r.status::text = CAST(:status AS text))
                   AND ((CAST(:t_from AS timestamptz) IS NULL AND CAST(:t_to AS timestamptz) IS NULL)
                        OR r.time_range && tstzrange(:t_from, :t_to, '[]'))
+                  AND (CAST(:imo AS text) IS NULL
+                       OR CAST(v.imo AS text) LIKE '%' || CAST(:imo AS text) || '%')
             )
             SELECT * FROM res
             WHERE (CAST(:name AS text) IS NULL
@@ -305,7 +310,8 @@ def reservation_history(
             LIMIT :limit
             """
         ),
-        {"status": status, "name": name, "t_from": from_, "t_to": to, "limit": limit},
+        {"status": status, "name": name, "imo": imo, "t_from": from_,
+         "t_to": to, "limit": limit},
     ).all()
     # Dock No. bounds alongside POPA (same conversion the reservations view uses).
     dock = segment_dockno_params(session)
