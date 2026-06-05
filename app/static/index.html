@@ -19,27 +19,37 @@
 <meta name="color-scheme" content="dark" />
 <style>
   :root {
-    /* ===== Type — grotesque UI + true monospace for every data readout ===== */
+    /* ===== Type — condensed grotesque UI + true monospace for every data readout ===== */
     --font-ui:   "Archivo", system-ui, sans-serif;
     --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
 
-    /* ===== Palette — nautical chart / ECDIS night ===== */
-    --bg:      #0a0f14;   /* chart-night base */
-    --panel:   #0f161d;   /* docked panel */
-    --panel-2: #15202b;   /* inset control */
-    --line:    #21323f;   /* hairline divider */
-    --line-2:  #31485a;   /* stronger / hover border */
+    /* ===== Palette — military C2 console / gunmetal monochrome (near-black base,
+       3 steps of desaturated slate). ONE chrome accent; status keeps R/A/G. ===== */
+    --bg:      #07090b;   /* near-black base */
+    --panel:   #0c1014;   /* gunmetal panel */
+    --panel-2: #12181d;   /* inset control / lighter slate */
+    --line:    #20272d;   /* hairline divider */
+    --line-2:  #34424c;   /* stronger / hover border */
+    --topedge: rgba(120,150,170,.16);  /* brighter 1px top edge on framed panels */
 
-    --ink:     #e7e3d8;   /* chart-paper off-white */
-    --ink-dim: #aeb8c0;
-    --muted:   #6f7d8a;   /* labels, secondary text */
+    --ink:     #cfd6db;   /* cool console off-white (was warm chart-paper) */
+    --ink-dim: #97a3ab;
+    --muted:   #5c686f;   /* labels, secondary text */
 
-    /* signal colours — buoys & safety, used sparingly for state */
-    --blue:    #2d8fd0;   /* depth blue  — interactive · structure */
-    --green:   #3fae6e;   /* starboard   — good · observed · moored */
-    --amber:   #e0a83a;   /* caution     — requested · live contact · warnings */
-    --red:     #d94f43;   /* port red    — ALERT only: now-line · conflict */
-    --cyan:    #57c7dd;   /* playhead cursor (a tool, not a status) */
+    /* ===== THE single chrome accent — cold tactical cyan. Interactive / active
+       chrome ONLY. Reserved away from status so red/amber/green stay meaningful.
+       Literal value (no nested var()) so the JS cssVar() reader resolves it. ===== */
+    --accent:     #34c4d8;
+    --accent-dim: #1c7d8c;
+    --on-accent:  #04161a;   /* near-black ink on an accent fill */
+
+    /* structural map geometry (NOT chrome) — desaturated steel; the old consumer
+       blue is retired from all interactive chrome and lives here for lines only */
+    --blue:    #3f7a96;   /* wharf / berth lines · cargo data */
+    --green:   #36b56a;   /* starboard   — good · observed · moored */
+    --amber:   #e0a52e;   /* caution     — requested · live contact · warnings */
+    --red:     #e2403a;   /* port red    — ALERT only: now-line · conflict */
+    --cyan:    #34c4d8;   /* playhead cursor (a tool) = the accent; keep literal */
     --ais-tug: #ffe000;   /* yellow — AIS contact tint for tugs/towing (ship type 31/32/52) */
 
     /* ship-type categories — AIS dot fill, one per SHIP_CATEGORIES key (JS).
@@ -61,12 +71,15 @@
     --st-cancelled: #344452;
     --dredge:       #c8763c;  /* sediment burnt-orange — dredge ops, distinct from amber 'requested' */
 
-    /* spacing (tight) + one small radius */
-    --s1: 2px; --s2: 4px; --s3: 8px; --s4: 12px; --s5: 16px; --s6: 22px;
-    --r: 3px;
+    /* spacing — dense (~30% tighter than before) */
+    --s1: 2px; --s2: 3px; --s3: 6px; --s4: 9px; --s5: 12px; --s6: 16px;
+    /* sharp rectangles everywhere: 0 by default, 2px only on interactive controls */
+    --r: 0px; --r-int: 2px;
+    /* faint 1px scanline overlay for panel backgrounds (restrained texture) */
+    --scanline: repeating-linear-gradient(0deg, rgba(150,180,200,.020) 0 1px, transparent 1px 3px);
 
-    /* legacy aliases so existing inline var() refs keep resolving */
-    --accent: var(--blue);
+    /* legacy aliases so existing inline var() refs keep resolving (NOTE: no
+       --accent alias here — --accent above is the real chrome accent) */
     --good:   var(--green);
     --bad:    var(--red);
     --warn:   var(--amber);
@@ -74,48 +87,110 @@
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
-    font: 14px/1.45 var(--font-ui);
+    font: 13px/1.4 var(--font-ui);
     color: var(--ink);
     background: var(--bg);
     display: grid;
-    grid-template-rows: auto 1fr;
+    /* classification strip · status header · workspace · footer status strip */
+    grid-template-rows: auto auto 1fr auto;
     height: 100vh;
     -webkit-font-smoothing: antialiased;
   }
-  /* Numeric / identifier readouts use the mono face everywhere. */
-  .mono, td.num, .stat .n, .probe .row b { font-family: var(--font-mono); }
+  /* Numeric / identifier readouts use the mono face everywhere, tabular figures. */
+  .mono, td.num, .stat .n, .probe .row b {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  }
 
-  /* ===== Top status strip — VTS bar, no hero / no gradient ===== */
+  /* ===== Classification / status strips — chrome real ops software carries ===== */
+  .classbar {
+    display: flex; align-items: center; gap: var(--s4);
+    height: 20px; padding: 0 var(--s4);
+    background: var(--panel); background-image: var(--scanline);
+    border-bottom: 1px solid var(--line);
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 1.4px;
+    color: var(--muted); text-transform: uppercase; white-space: nowrap; overflow: hidden;
+  }
+  .classbar .cls { color: var(--accent); font-weight: 600; }
+  .classbar .sep { color: var(--line-2); }
+  .classbar .right { margin-left: auto; color: var(--ink-dim); letter-spacing: .8px; }
+  footer.statusbar {
+    display: flex; align-items: center; gap: var(--s4);
+    height: 22px; padding: 0 var(--s4);
+    background: var(--panel); background-image: var(--scanline);
+    border-top: 1px solid var(--line); border-top-color: var(--topedge);
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: .8px;
+    color: var(--muted); text-transform: uppercase; white-space: nowrap; overflow: hidden;
+  }
+  footer.statusbar .k { color: var(--muted); }
+  footer.statusbar .v { color: var(--ink-dim); }
+  footer.statusbar .sep { color: var(--line-2); }
+  footer.statusbar .right { margin-left: auto; }
+
+  /* HUD corner brackets — applied to key panels via .hud (top-left + bottom-right,
+     the two pseudo-elements allow). A defense-console framing cue, not a full box. */
+  .hud { position: relative; }
+  .hud::before, .hud::after {
+    content: ""; position: absolute; width: 9px; height: 9px; pointer-events: none;
+    border: 1px solid var(--accent); opacity: .65;
+  }
+  .hud::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .hud::after  { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+  /* ===== Status header — flat VTS bar, hairline border + brighter top edge ===== */
   header {
     display: flex; align-items: center; gap: var(--s5);
-    padding: 0 var(--s4); height: 44px;
-    background: var(--panel);
+    padding: 0 var(--s4); height: 38px;
+    background: var(--panel); background-image: var(--scanline);
     border-bottom: 1px solid var(--line);
+    box-shadow: inset 0 1px 0 var(--topedge);
   }
   #sidebarToggle {
     background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
-    border-radius: var(--r); width: 26px; height: 26px; padding: 0; cursor: pointer;
+    border-radius: var(--r-int); width: 24px; height: 24px; padding: 0; cursor: pointer;
     font-size: 13px; display: flex; align-items: center; justify-content: center;
   }
-  #sidebarToggle:hover { color: var(--ink); border-color: var(--line-2); }
+  #sidebarToggle:hover { color: var(--accent); border-color: var(--accent-dim); }
+  /* Leading tactical tick before the title */
   header h1 {
-    font-size: 13px; margin: 0; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 1.6px;
+    font-size: 12px; margin: 0; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px;
+    display: flex; align-items: center; gap: 9px;
   }
-  header h1 span { color: var(--muted); font-weight: 500; letter-spacing: .6px; }
+  header h1::before {
+    content: ""; width: 3px; height: 14px; background: var(--accent); flex: none;
+  }
+  header h1 span {
+    color: var(--muted); font-weight: 500; letter-spacing: 1px;
+    font-family: var(--font-mono); font-size: 11px;
+  }
+  /* System clock — mono, dual UTC + local (Central), tabular figures */
   #clock {
-    margin-left: auto; font-family: var(--font-mono); font-size: 12px;
-    color: var(--ink-dim); letter-spacing: .4px;
+    margin-left: auto; font-family: var(--font-mono); font-size: 11px;
+    color: var(--ink-dim); letter-spacing: .5px; font-variant-numeric: tabular-nums;
+    white-space: pre; text-align: right; line-height: 1.15;
   }
+  #clock .z { color: var(--muted); }
+  /* DATA-LAYER status indicator — state dot + label + uptime readout, not a pill */
   .badge {
-    display: inline-flex; align-items: center; gap: 7px;
-    padding: 4px 10px; border-radius: var(--r); font-size: 10px;
-    text-transform: uppercase; letter-spacing: .9px; color: var(--muted);
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 3px 10px; border-radius: 0; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 1px; color: var(--ink-dim);
     background: var(--panel-2); border: 1px solid var(--line);
+    border-left: 2px solid var(--muted);
+    font-family: var(--font-mono);
   }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .dot.ok { background: var(--good); box-shadow: 0 0 0 3px rgba(63,174,110,.2); }
-  .dot.down { background: var(--bad); box-shadow: 0 0 0 3px rgba(217,79,67,.2); }
+  .badge.ok   { border-left-color: var(--good); }
+  .badge.down { border-left-color: var(--bad); }
+  #statusUptime { color: var(--muted); letter-spacing: .5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--good); box-shadow: 0 0 0 1px rgba(54,181,106,.5); }
+  .dot.ok::after {
+    content: ""; position: absolute; width: 7px; height: 7px; border-radius: 50%;
+    border: 1px solid var(--good); animation: dot-ping 2s ease-out infinite;
+  }
+  .dot { position: relative; }
+  @keyframes dot-ping { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(2.6); opacity: 0; } }
+  .dot.down { background: var(--bad); box-shadow: 0 0 0 1px rgba(226,64,58,.5); }
 
   /* Left sidebar is drag-resizable (--sidebarW, persisted) and collapsible via
      the header toggle (body.sidebar-collapsed). The middle track is the grab
@@ -128,7 +203,7 @@
     background: var(--panel);
   }
   #sidebarResize { cursor: col-resize; background: var(--line); }
-  #sidebarResize:hover { background: var(--blue); }
+  #sidebarResize:hover { background: var(--accent); }
 
   /* Sidebar tabs: Overview / Reservations / Berth requests. Each .tab-panel is
      shown only when active; the panels share the one scrolling aside. */
@@ -137,13 +212,13 @@
     border-bottom: 1px solid var(--line);
   }
   nav.tabs .tab {
-    flex: 1; padding: 9px 6px; border: none; background: none; cursor: pointer;
-    color: var(--muted); font-family: var(--font-ui); font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .8px;
+    flex: 1; padding: 7px 5px; border: none; background: none; cursor: pointer;
+    color: var(--muted); font-family: var(--font-ui); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px;
     border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
   nav.tabs .tab:hover { color: var(--ink); }
-  nav.tabs .tab.active { color: var(--ink); border-bottom-color: var(--blue); }
+  nav.tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
@@ -151,55 +226,84 @@
      --drawerH is the drawer's expanded height (drag-resizable, persisted). */
   #stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr var(--drawerH, 300px); }
   #stage.drawer-collapsed { grid-template-rows: 1fr 34px; }
-  #map { min-height: 0; height: 100%; background: #060b0f; }
-  /* Custom-tinted basemap: dim + cool the aerial imagery so the chart overlays
-     and signal colours read clearly on top (the "VTS over imagery" look). */
-  .basemap-tinted { filter: saturate(.5) brightness(.62) contrast(1.06) hue-rotate(-6deg); }
-  /* Live coordinate read-out, bottom-left of the map. */
+  #map { min-height: 0; height: 100%; background: #05080a; }
+  /* Custom-tinted basemap: heavily desaturate + dim the aerial imagery toward a
+     monochrome chart so the signal colours and chrome read clearly on top. */
+  .basemap-tinted { filter: saturate(.32) brightness(.56) contrast(1.12) hue-rotate(-6deg); }
+  /* Live coordinate / scale read-out, bottom-left of the map — flat, accent tick. */
   #coordHud {
-    position: absolute; left: 10px; bottom: 12px; z-index: 800; pointer-events: none;
-    font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); letter-spacing: .4px;
-    background: rgba(10,15,20,.8); border: 1px solid var(--line); border-radius: var(--r);
-    padding: 4px 9px;
+    position: absolute; left: 8px; bottom: 10px; z-index: 800; pointer-events: none;
+    font-family: var(--font-mono); font-size: 10px; color: var(--ink-dim); letter-spacing: .6px;
+    background: rgba(7,9,11,.85); border: 1px solid var(--line); border-left: 2px solid var(--accent);
+    border-radius: 0; padding: 4px 9px; text-transform: uppercase;
   }
   #coordHud .k { color: var(--muted); }
 
-  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin-bottom: var(--s5); }
-  .stat {
-    background: var(--panel-2); border: 1px solid var(--line);
-    border-radius: var(--r); padding: 10px 12px;
+  /* Readout tiles: number in large mono, tiny uppercase label. No per-card chrome —
+     a single hairline frame with 1px dividers (the grid gap shows the bg through). */
+  .stats {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--line);
+    border: 1px solid var(--line); border-top-color: var(--topedge);
+    margin-bottom: var(--s4);
   }
-  .stat .n { font-size: 26px; font-weight: 600; line-height: 1; }
-  .stat .l { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-top: 5px; }
+  .stat { background: var(--panel); border-radius: 0; padding: 6px 9px 7px; }
+  .stat .n {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 21px; font-weight: 500; line-height: 1; color: var(--ink);
+  }
+  .stat .l { font-size: 9px; text-transform: uppercase; letter-spacing: 1.1px; color: var(--muted); margin-top: 4px; }
 
+  /* CONFLICTS — full-width alert strip; goes amber/red on >0 via JS class. */
+  .alert-strip {
+    display: flex; align-items: center; gap: var(--s3);
+    margin-bottom: var(--s5); padding: 6px 10px;
+    background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--muted);
+    font-family: var(--font-mono);
+  }
+  .alert-strip .a-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .alert-strip .a-n { font-size: 18px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .alert-strip .a-l { font-size: 9px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); }
+  .alert-strip .a-msg { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+  .alert-strip.alert { border-left-color: var(--red); background: rgba(226,64,58,.10); }
+  .alert-strip.alert .a-dot { background: var(--red); box-shadow: 0 0 0 1px rgba(226,64,58,.5); }
+  .alert-strip.alert .a-n, .alert-strip.alert .a-msg { color: var(--red); }
+  .alert-strip.warn { border-left-color: var(--amber); background: rgba(224,165,46,.09); }
+  .alert-strip.warn .a-dot { background: var(--amber); }
+  .alert-strip.warn .a-n, .alert-strip.warn .a-msg { color: var(--amber); }
+
+  /* Section header — thin uppercase bar with a leading accent tick marker. */
   h2 {
-    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
-    color: var(--muted); margin: var(--s6) 0 var(--s3);
-    padding-bottom: 5px; border-bottom: 1px solid var(--line);
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px;
+    color: var(--ink-dim); margin: var(--s6) 0 var(--s3);
+    padding-bottom: 4px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 7px; font-weight: 700;
   }
+  h2::before { content: ""; width: 6px; height: 6px; background: var(--accent); flex: none; }
   .card {
-    background: var(--panel-2); border: 1px solid var(--line);
-    border-radius: var(--r); padding: 9px 11px; margin-bottom: var(--s2);
+    background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--line-2);
+    border-radius: 0; padding: 7px 9px; margin-bottom: var(--s1);
   }
-  .card .name { font-weight: 600; }
-  .card .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
-  .card .meta b { font-family: var(--font-mono); color: var(--ink-dim); font-weight: 500; }
-  .empty { color: var(--muted); font-style: italic; padding: 8px 2px; }
+  .card .name { font-weight: 600; font-size: 12px; }
+  .card .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .card .meta b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-dim); font-weight: 500; }
+  .empty { color: var(--muted); font-style: italic; padding: 6px 2px; font-size: 12px; }
 
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; }
+  th, td { text-align: left; padding: 4px 7px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 700; font-size: 9px; text-transform: uppercase; letter-spacing: 1.1px; }
+  td { font-size: 12px; }
   td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
 
   .probe {
-    background: var(--panel-2); border: 1px solid var(--line);
-    border-radius: var(--r); padding: 11px; margin-top: 6px;
+    background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--line-2);
+    border-radius: 0; padding: 9px; margin-top: 5px;
   }
-  .probe .hint { color: var(--muted); font-size: 12px; }
-  .probe .row { display: flex; justify-content: space-between; padding: 3px 0; }
-  .probe .row span { color: var(--muted); font-size: 12px; }
-  .probe .row b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-  .crosswalk { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .probe .hint { color: var(--muted); font-size: 11px; }
+  .probe .row { display: flex; justify-content: space-between; padding: 2px 0; }
+  .probe .row span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .probe .row b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
+  .crosswalk { margin-top: 7px; border-top: 1px solid var(--line); padding-top: 7px; }
 
   .leaflet-popup-content { font: 13px var(--font-ui); }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip {
@@ -243,16 +347,16 @@
     transform: rotate(-90deg); transform-origin: center center;
     white-space: nowrap;
   }
-  .berth-label { color: var(--blue); font-weight: 700; font-size: 14px; text-align: center; line-height: 1.15; letter-spacing: .5px; }
-  .berth-label .sub { color: var(--ink-dim); font-weight: 500; font-size: 12px; }
+  .berth-label { color: var(--ink); font-family: var(--font-mono); font-weight: 600; font-size: 13px; text-align: center; line-height: 1.15; letter-spacing: 1px; text-transform: uppercase; }
+  .berth-label .sub { color: var(--ink-dim); font-weight: 500; font-size: 11px; }
   .wh-label { color: var(--ink-dim); font-size: 12px; }
   .sta-label { color: var(--red); font-size: 12px; font-weight: 600; font-family: var(--font-mono); }
   .ft-label { color: var(--ink); font-size: 11px; font-weight: 600; font-family: var(--font-mono); text-shadow: 0 0 3px #000, 0 1px 2px #000; }
   .yk-label { color: var(--amber); font-size: 13px; font-weight: 700; font-family: var(--font-mono); text-shadow: 0 0 3px #000, 0 1px 2px #000; }
   .berth-label::before, .wh-label::before, .sta-label::before, .ft-label::before, .yk-label::before { display: none; }
-  a { color: var(--blue); }
-  .legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  a { color: var(--accent); }
+  .legend { font-size: 11px; color: var(--muted); margin-top: 5px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:0; margin-right:5px; vertical-align:-1px; }
 
   /* Manual berth-request form */
   details.intake { margin-bottom: var(--s4); border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
@@ -262,7 +366,7 @@
     list-style: none; display: flex; align-items: center; gap: 8px;
   }
   details.intake > summary::-webkit-details-marker { display: none; }
-  details.intake > summary::before { content: "+"; color: var(--blue); font-weight: 700; font-family: var(--font-mono); }
+  details.intake > summary::before { content: "+"; color: var(--accent); font-weight: 700; font-family: var(--font-mono); }
   details.intake[open] > summary::before { content: "–"; }
   details.intake > summary .sub { color: var(--muted); font-weight: 400; font-size: 11px; text-transform: none; letter-spacing: .3px; }
   .intake form { padding: 4px 12px 12px; }
@@ -271,24 +375,27 @@
   .intake label { display: block; font-size: 10px; color: var(--muted); margin: 8px 0 3px; text-transform: uppercase; letter-spacing: .4px; }
   .intake label .req { color: var(--amber); }
   .intake input[type=text], .intake input[type=number], .intake input[type=date], .intake input[type=datetime-local], .intake select {
-    width: 100%; padding: 6px 8px; border-radius: var(--r); border: 1px solid var(--line);
-    background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 13px;
+    width: 100%; padding: 5px 7px; border-radius: var(--r-int); border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
   }
   .intake input:focus, .intake select:focus,
   .edit-form input:focus, .edit-form select:focus,
-  .filter-bar select:focus { outline: none; border-color: var(--blue); }
-  .intake .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
-  .intake .grid3 { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 0 10px; }
-  .intake .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--ink); }
+  .filter-bar select:focus { outline: none; border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-dim); }
+  /* Utilitarian checkboxes — square, accent tick */
+  .intake .check input, .edit-form .check input, input[type=checkbox] { accent-color: var(--accent); }
+  .intake .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 9px; }
+  .intake .grid3 { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 0 9px; }
+  .intake .check { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: var(--ink); }
   .intake .check input { width: auto; }
   .intake button {
-    margin-top: 14px; width: 100%; padding: 9px; border: 1px solid var(--blue); border-radius: var(--r);
-    background: var(--blue); color: #04243d; font-family: var(--font-ui); font-weight: 700; font-size: 12px;
-    text-transform: uppercase; letter-spacing: .8px; cursor: pointer;
+    margin-top: 12px; width: 100%; padding: 8px; border: 1px solid var(--accent); border-radius: var(--r-int);
+    background: var(--accent); color: var(--on-accent); font-family: var(--font-ui); font-weight: 700; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 1.2px; cursor: pointer;
   }
-  .intake button:disabled { opacity: .6; cursor: default; }
+  .intake button:hover { background: var(--accent-dim); border-color: var(--accent); color: var(--ink); }
+  .intake button:disabled { opacity: .5; cursor: default; }
   .intake button#brCancelEdit { background: var(--panel-2); color: var(--ink); border-color: var(--line); }
-  .intake .result { margin-top: 10px; font-size: 12px; padding: 8px 10px; border-radius: var(--r); display: none; }
+  .intake .result { margin-top: 9px; font-size: 12px; padding: 7px 9px; border-radius: 0; display: none; }
   .intake .result.ok { background: rgba(63,174,110,.12); border: 1px solid var(--good); color: var(--good); display: block; }
   .intake .result.err { background: rgba(217,79,67,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
   .intake .result .warn { color: var(--warn); display: block; margin-top: 4px; font-size: 12px; }
@@ -299,29 +406,29 @@
   .filter-bar.wrap { flex-wrap: wrap; }
   .filter-bar label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
   .filter-bar select {
-    padding: 5px 8px; border-radius: var(--r); border: 1px solid var(--line);
-    background: var(--panel-2); color: var(--ink); font-family: var(--font-ui); font-size: 12px;
+    padding: 4px 7px; border-radius: var(--r-int); border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font-family: var(--font-mono); font-size: 11px;
   }
   .filter-bar input[type=text], .filter-bar input[type=date] {
-    padding: 5px 8px; border-radius: var(--r); border: 1px solid var(--line);
-    background: var(--panel-2); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
+    padding: 4px 7px; border-radius: var(--r-int); border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font-family: var(--font-mono); font-size: 11px;
     min-width: 0;
   }
   .filter-bar input[type=text] { flex: 1; }
   .status-badge {
-    display: inline-block; padding: 1px 7px; border-radius: var(--r);
-    font-family: var(--font-ui); font-size: 9px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .6px; color: #04121f; vertical-align: 1px;
+    display: inline-block; padding: 1px 6px; border-radius: 0;
+    font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .8px; color: #04121f; vertical-align: 1px;
   }
-  .row-actions { display: flex; gap: 5px; margin-top: 9px; flex-wrap: wrap; }
+  .row-actions { display: flex; gap: 4px; margin-top: 7px; flex-wrap: wrap; }
   .btn-sm {
     background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
-    border-radius: var(--r); padding: 4px 9px; font-family: var(--font-ui); font-size: 11px;
-    text-transform: uppercase; letter-spacing: .5px; cursor: pointer;
+    border-radius: var(--r-int); padding: 3px 8px; font-family: var(--font-ui); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .8px; cursor: pointer;
   }
-  .btn-sm:hover { border-color: var(--blue); color: var(--ink); }
+  .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
   .btn-sm.danger:hover { border-color: var(--bad); color: var(--bad); }
-  .btn-sm.primary { background: var(--blue); color: #04243d; font-weight: 700; border-color: var(--blue); }
+  .btn-sm.primary { background: var(--accent); color: var(--on-accent); font-weight: 700; border-color: var(--accent); }
   .edit-form { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; display: none; }
   .edit-form.open { display: block; }
   .edit-form fieldset { border: none; border-top: 1px solid var(--line); margin: 10px 0 0; padding: 8px 0 0; }
@@ -329,13 +436,13 @@
   .edit-form .hint { color: var(--muted); font-size: 11px; }
   .edit-form label { display: block; font-size: 10px; color: var(--muted); margin: 8px 0 3px; text-transform: uppercase; letter-spacing: .4px; }
   .edit-form input, .edit-form select {
-    width: 100%; padding: 6px 8px; border-radius: var(--r); border: 1px solid var(--line);
+    width: 100%; padding: 5px 7px; border-radius: var(--r-int); border: 1px solid var(--line);
     background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
   }
   .edit-form .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
   .edit-form .check { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: var(--ink); }
   .edit-form .check input { width: auto; }
-  .mini-result { font-size: 12px; margin-top: 8px; padding: 7px 9px; border-radius: var(--r); display: none; }
+  .mini-result { font-size: 12px; margin-top: 8px; padding: 7px 9px; border-radius: 0; display: none; }
   .mini-result.ok { background: rgba(63,174,110,.12); border: 1px solid var(--good); color: var(--good); display: block; }
   .mini-result.err { background: rgba(217,79,67,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
   .mini-result .warn { color: var(--warn); display: block; margin-top: 4px; }
@@ -350,36 +457,39 @@
   #tlResize {
     position: absolute; top: -3px; left: 0; right: 0; height: 7px; cursor: row-resize; z-index: 5;
   }
-  #tlResize:hover { background: rgba(45,143,208,.3); }
+  #tlResize:hover { background: rgba(52,196,216,.35); }
   .tl-head {
-    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
-    padding: 6px 11px; border-bottom: 1px solid var(--line); background: var(--panel-2);
-    font-size: 12px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+    background-image: var(--scanline); box-shadow: inset 0 1px 0 var(--topedge);
+    font-size: 11px;
   }
-  .tl-head strong { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
-  .tl-sub { color: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+  .tl-head strong { font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; display: flex; align-items: center; gap: 6px; }
+  .tl-head strong::before { content: ""; width: 5px; height: 5px; background: var(--accent); }
+  .tl-sub { color: var(--muted); font-size: 10px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
   .tl-controls { margin-left: auto; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   .tl-btn {
     background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
-    border-radius: var(--r); padding: 3px 8px; font-family: var(--font-ui); font-size: 11px; cursor: pointer;
+    border-radius: var(--r-int); padding: 3px 8px; font-family: var(--font-mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .5px; cursor: pointer;
   }
-  .tl-btn:hover { border-color: var(--blue); color: var(--ink); }
-  .tl-btn.active { background: var(--blue); color: #04243d; font-weight: 700; border-color: var(--blue); }
+  .tl-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .tl-btn.active { background: var(--accent); color: var(--on-accent); font-weight: 700; border-color: var(--accent); }
   .tl-btn.tl-caret { padding: 2px 8px; }
-  .tl-mode { color: var(--blue); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
-  .tl-chk { color: var(--muted); font-size: 11px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
-  .tl-chk input { accent-color: var(--blue); }
+  .tl-mode { color: var(--accent); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  .tl-chk { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .tl-chk input { accent-color: var(--accent); }
   .tl-body { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; }
   #timelineDrawer.tl-collapsed .tl-body { display: none; }
   .tl-legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 5px 11px; font-size: 11px; color: var(--muted); }
-  .tl-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .tl-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 0; margin-right: 5px; vertical-align: -1px; }
   .tl-scroll { flex: 1; min-height: 0; overflow: auto; }
   #tlSvg { display: block; }
   .tl-empty { display: none; color: var(--muted); font-style: italic; padding: 14px; }
   .tl-tip {
     position: fixed; z-index: 1000; display: none; max-width: 320px; pointer-events: none;
-    background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r);
-    padding: 8px 10px; font-size: 12px; box-shadow: none;
+    background: var(--panel); border: 1px solid var(--line-2); border-left: 2px solid var(--accent); border-radius: 0;
+    padding: 7px 9px; font-size: 12px; box-shadow: none;
   }
   .tl-tip b { color: var(--ink); }
   .tl-tip .k { color: var(--muted); font-family: var(--font-mono); }
@@ -390,13 +500,17 @@
   .tl-lane-label.unassigned { fill: var(--warn); }
   .tl-grid { stroke: var(--line); stroke-width: 1; }
   .tl-axis-label { fill: var(--muted); font-family: var(--font-mono); font-size: 10px; }
-  .tl-now { stroke: var(--bad); stroke-width: 1.5; stroke-dasharray: 4 3; }
-  .tl-cursor { stroke: var(--cyan); stroke-width: 2; }
-  .tl-cursor-handle { fill: var(--cyan); stroke: #04121f; stroke-width: 1; cursor: ew-resize; }
+  /* "NOW" — bright solid hairline + a labeled tick at the top of the timeline. */
+  .tl-now { stroke: var(--red); stroke-width: 1; }
+  .tl-now-tick { fill: var(--red); }
+  .tl-now-label { fill: var(--red); font-family: var(--font-mono); font-weight: 700; font-size: 9px; letter-spacing: 1px; }
+  .tl-cursor { stroke: var(--cyan); stroke-width: 1.5; }
+  .tl-cursor-handle { fill: var(--cyan); stroke: var(--on-accent); stroke-width: 1; cursor: ew-resize; }
   #tlSvg { cursor: ew-resize; }
-  #tlSpeed { padding: 3px 4px; font-family: var(--font-mono); }
-  .tl-bar { rx: 2; cursor: pointer; stroke-width: 1; }
-  .tl-bar-label { fill: #04121f; font-family: var(--font-ui); font-weight: 600; font-size: 11px; pointer-events: none; }
+  #tlSpeed { padding: 2px 4px; font-family: var(--font-mono); }
+  /* Flat tasking bars: square ends (rx 0), 1px border, no gradient. */
+  .tl-bar { rx: 0; cursor: pointer; stroke-width: 1; }
+  .tl-bar-label { fill: var(--on-accent); font-family: var(--font-mono); font-weight: 600; font-size: 10px; pointer-events: none; }
 
   /* AIS contacts — a solid dot whose FILL is the vessel's ship-type category
      (see SHIP_CATEGORIES in JS / the map legend). State is shown by MOTION, not
@@ -404,37 +518,46 @@
      sits still. Built as a divIcon (not an SVG circleMarker) so the ring can
      animate via CSS. */
   .ais-contact .ais-dot, .ais-contact .ais-pulse {
-    position: absolute; left: 0; top: 0; width: 14px; height: 14px;
+    position: absolute; left: 0; top: 0; width: 13px; height: 13px;
     border-radius: 50%; box-sizing: border-box;
   }
-  .ais-contact .ais-dot { border: 1.5px solid #04121f; }
-  /* The pulse span is only emitted for underway contacts (see aisIcon), so it
-     can always animate when present. */
-  .ais-contact .ais-pulse { animation: ais-pulse 1.8s ease-out infinite; }
-  /* Fill per ship-type category — applied to both the dot and its pulse ring. */
-  .ais-contact.t-tanker    .ais-dot, .ais-contact.t-tanker    .ais-pulse { background: var(--ship-tanker); }
-  .ais-contact.t-cargo     .ais-dot, .ais-contact.t-cargo     .ais-pulse { background: var(--ship-cargo); }
-  .ais-contact.t-tug       .ais-dot, .ais-contact.t-tug       .ais-pulse { background: var(--ship-tug); }
-  .ais-contact.t-dredger   .ais-dot, .ais-contact.t-dredger   .ais-pulse { background: var(--ship-dredger); }
-  .ais-contact.t-pilot     .ais-dot, .ais-contact.t-pilot     .ais-pulse { background: var(--ship-pilot); }
-  .ais-contact.t-passenger .ais-dot, .ais-contact.t-passenger .ais-pulse { background: var(--ship-passenger); }
-  .ais-contact.t-other     .ais-dot, .ais-contact.t-other     .ais-pulse { background: var(--ship-other); }
+  /* Solid point symbol; fill = ship-type category (--tc, set per class below). */
+  .ais-contact .ais-dot { border: 1.5px solid var(--on-accent); background: var(--tc, var(--ship-other)); }
+  /* Underway contacts only (the pulse span is emitted only when underway): a
+     SHARP category-coloured ring expanding outward — a crisp 1.5px stroke, no
+     fill and no glow. State is shown by motion, not colour. */
+  .ais-contact .ais-pulse {
+    background: transparent; border: 1.5px solid var(--tc, var(--ship-other));
+    animation: ais-pulse 1.8s ease-out infinite;
+  }
+  /* One --tc per ship-type category — drives both the dot fill and the ring. */
+  .ais-contact.t-tanker    { --tc: var(--ship-tanker); }
+  .ais-contact.t-cargo     { --tc: var(--ship-cargo); }
+  .ais-contact.t-tug       { --tc: var(--ship-tug); }
+  .ais-contact.t-dredger   { --tc: var(--ship-dredger); }
+  .ais-contact.t-pilot     { --tc: var(--ship-pilot); }
+  .ais-contact.t-passenger { --tc: var(--ship-passenger); }
+  .ais-contact.t-other     { --tc: var(--ship-other); }
   @keyframes ais-pulse {
-    0%   { transform: scale(1);   opacity: .55; }
-    100% { transform: scale(2.8); opacity: 0; }
+    0%   { transform: scale(1);   opacity: .9; }
+    70%  { opacity: .15; }
+    100% { transform: scale(2.6); opacity: 0; }
   }
   /* Ship-type colour legend (Leaflet control, bottom-left). Swatches are built
      in JS from SHIP_CATEGORIES so they always match the dot fills. */
   .map-legend {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: var(--r); padding: 7px 9px; font-size: 11px;
-    color: var(--ink-dim); line-height: 1.55; box-shadow: 0 1px 6px rgba(0,0,0,.45);
+    background: rgba(12,16,20,.92); border: 1px solid var(--line);
+    border-top: 1px solid var(--topedge);
+    border-radius: 0; padding: 6px 9px; font-size: 10px;
+    color: var(--ink-dim); line-height: 1.5; box-shadow: none;
+    font-family: var(--font-mono);
   }
   .map-legend .lg-title {
-    color: var(--muted); text-transform: uppercase; letter-spacing: .8px;
-    font-size: 9px; margin-bottom: 4px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px;
+    font-size: 9px; margin-bottom: 4px; display: flex; align-items: center; gap: 5px;
   }
-  .map-legend .lg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .map-legend .lg-title::before { content: ""; width: 5px; height: 5px; background: var(--accent); }
+  .map-legend .lg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; text-transform: uppercase; letter-spacing: .3px; }
   .map-legend .lg-dot {
     width: 11px; height: 11px; border-radius: 50%;
     border: 1.5px solid #04121f; flex: none;
@@ -465,23 +588,36 @@
 </style>
 </head>
 <body>
+<div class="classbar">
+  <span class="cls">// UNCLASSIFIED //</span>
+  <span class="sep">//</span><span>VTS-OPS</span>
+  <span class="sep">//</span><span>PORT OF PORT ARTHUR · SABINE-NECHES WATERWAY</span>
+  <span class="right" id="classScale">ZOOM —  ·  SCALE —</span>
+</div>
 <header>
   <button id="sidebarToggle" type="button" title="Collapse / expand the panel" aria-label="Toggle side panel">⇤</button>
-  <h1>Port of Port Arthur <span>· Berth &amp; Dredging VTS</span></h1>
+  <h1>Port of Port Arthur <span>Berth &amp; Dredging · VTS Data Layer</span></h1>
   <span id="clock">—</span>
-  <div class="badge"><span id="statusDot" class="dot"></span><span id="statusText">checking…</span></div>
+  <div class="badge" id="statusBadge"><span id="statusDot" class="dot"></span><span id="statusText">checking…</span><span id="statusUptime"></span></div>
 </header>
 
 <main>
   <aside>
-    <div class="stats">
-      <div class="stat"><div class="n" id="statVessels">—</div><div class="l">Vessels (24h)</div></div>
+    <div class="stats hud">
+      <div class="stat"><div class="n" id="statVessels">—</div><div class="l">Vessels 24h</div></div>
       <div class="stat"><div class="n" id="statMoored">—</div><div class="l">Moored now</div></div>
       <div class="stat"><div class="n" id="statReservations">—</div><div class="l">Reservations</div></div>
-      <div class="stat"><div class="n" id="statRequests">—</div><div class="l">Berth requests</div></div>
+      <div class="stat"><div class="n" id="statRequests">—</div><div class="l">Requests</div></div>
       <div class="stat"><div class="n" id="statConfirmed">—</div><div class="l">Confirmed</div></div>
-      <div class="stat"><div class="n" id="statArrivals">—</div><div class="l">Arrivals (24h)</div></div>
-      <div class="stat"><div class="n" id="statConflicts">—</div><div class="l">Conflicts</div></div>
+      <div class="stat"><div class="n" id="statArrivals">—</div><div class="l">Arrivals 24h</div></div>
+    </div>
+
+    <!-- CONFLICTS — full-width alert strip; goes amber/red on >0 (set in loadConflicts) -->
+    <div class="alert-strip" id="conflictAlert">
+      <span class="a-dot"></span>
+      <span class="a-n" id="statConflicts">—</span>
+      <span class="a-l">Conflicts</span>
+      <span class="a-msg" id="conflictMsg">no time × station overlaps</span>
     </div>
 
     <!-- Sidebar tabs: Overview / Reservations / Berth requests -->
@@ -614,15 +750,8 @@
 
     <!-- ===== Overview tab ===== -->
     <section class="tab-panel active" data-panel="overview">
-    <!-- ===== Vessel outlines (to-scale, timeline-cursor driven) ===== -->
-    <div class="probe" id="shipOutlineControl" style="margin-bottom:14px">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-        <input type="checkbox" id="shipOutlineToggle" checked />
-        <span>Vessel outlines <span style="color:var(--muted)">(observed + confirmed)</span></span>
-      </label>
-      <div class="hint" style="margin-top:6px">To-scale ship footprints for the moment under the timeline cursor — drag the cursor (or press ▶) in the occupancy timeline below.</div>
-    </div>
-    <!-- ===== /Vessel outlines control ===== -->
+    <!-- Vessel-outlines and ship-dots toggles now live on the map, in the
+         layer-toggle box (top-right) — see the L.control.layers overlays in JS. -->
 
     <!-- ===== Conflicts (time × station overlaps) ===== -->
     <h2>Conflicts</h2>
@@ -736,6 +865,13 @@
     <!-- ===== /Berth occupancy timeline ===== -->
   </div>
 </main>
+
+<footer class="statusbar">
+  <span class="k">SYS</span>&nbsp;<span class="v" id="footSys">DATA LAYER NOMINAL</span>
+  <span class="sep">//</span><span class="k">REFRESH</span>&nbsp;<span class="v">15s</span>
+  <span class="sep">//</span><span class="k">TZ</span>&nbsp;<span class="v">AMERICA/CHICAGO · CT</span>
+  <span class="right"><span class="k">CURSOR</span>&nbsp;<span class="v" id="footCoord">LAT —  LON —</span></span>
+</footer>
 
 <script
   src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -957,7 +1093,7 @@ const yellowLayer = L.geoJSON(null, {
 }).addTo(map);
 // AIS contacts: one dot per vessel (most-recent position, deduped per MMSI),
 // filled by ship-type category; underway contacts pulse, moored ones sit still.
-// Toggleable as a whole via the "AIS contacts" overlay in the layer control below.
+// Toggleable as a whole via the "Ship dots (AIS)" overlay in the layer control below.
 const vesselLayer = L.layerGroup().addTo(map);
 // Fill colour = ship-type category (t-<category> class); the pulse ring is only
 // emitted for underway contacts, so a moored dot sits still (see the legend).
@@ -991,11 +1127,19 @@ function locateVesselOnMap(mmsi) {
   return true;
 }
 
-// Show/hide toggles for the reference overlays. Each layer (and its child
-// label markers) is added to the map above, so unchecking removes the ticks/
-// labels/berths together. Kept expanded so the toggles are visible at a glance.
+// The to-scale vessel-outline layer. Defined here (not inside the renderer IIFE
+// below) so it can join the layer-toggle box; the renderer populates it and
+// honours its on/off state via map.hasLayer(shipLayer).
+const shipLayer = L.layerGroup().addTo(map);
+
+// Show/hide toggles for the map layers. Each layer (and its child label markers)
+// is added to the map above, so unchecking removes the ticks/labels/berths
+// together. Kept expanded so the toggles are visible at a glance. The two ship
+// representations lead the list: the AIS "Ship dots" and the to-scale "Vessel
+// outlines", each shown/hidden independently.
 L.control.layers(null, {
-  "AIS contacts": vesselLayer,
+  "Ship dots (AIS)": vesselLayer,
+  "Vessel outlines": shipLayer,
   "Berths": berthLayer,
   "Dock markers (yellow)": yellowLayer,
   "Dredge markers": feetLayer,
@@ -1023,7 +1167,22 @@ let probeMarker = null;
 function setStatus(ok, text) {
   const dot = document.getElementById("statusDot");
   dot.className = "dot " + (ok ? "ok" : "down");
-  document.getElementById("statusText").textContent = text;
+  document.getElementById("statusText").textContent = (text || "").toUpperCase();
+  const badge = document.getElementById("statusBadge");
+  if (badge) badge.className = "badge " + (ok ? "ok" : "down");
+  const fs = document.getElementById("footSys");
+  if (fs) fs.textContent = ok ? "DATA LAYER NOMINAL" : "DATA LAYER OFFLINE";
+}
+
+// Drive the full-width CONFLICTS alert strip: green/neutral at 0, red on any.
+function setConflictAlert(n) {
+  const strip = document.getElementById("conflictAlert");
+  const msg = document.getElementById("conflictMsg");
+  if (!strip) return;
+  strip.className = "alert-strip" + (n > 0 ? " alert" : "");
+  if (msg) msg.textContent = n > 0
+    ? `${n} time × station overlap${n === 1 ? "" : "s"} — review`
+    : "no time × station overlaps";
 }
 
 // Stat tile id -> /stats key. Driven from one map so the markup, the fetch fill,
@@ -1129,6 +1288,7 @@ async function loadConflicts() {
     const cs = await api("/conflicts");
     CONFLICTS = cs;
     if (stat) stat.textContent = cs.length;
+    setConflictAlert(cs.length);
     if (!el) return;
     el.innerHTML = cs.length
       ? cs.map(conflictCard).join("")
@@ -1137,6 +1297,7 @@ async function loadConflicts() {
   } catch (e) {
     CONFLICTS = [];
     if (stat) stat.textContent = "0";
+    setConflictAlert(0);
     if (el) el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
 }
@@ -1997,9 +2158,9 @@ map.on("click", async (e) => {
   const DREDGE = PAL.dredge;
   // FT_PER_M is module-scope (defined near the palette tokens).
 
-  const shipLayer = L.layerGroup().addTo(map);
-  const toggle = document.getElementById("shipOutlineToggle");
-  let enabled = toggle ? toggle.checked : true;
+  // shipLayer is defined at module scope and registered in the layer-toggle box;
+  // its on/off there is the outlines toggle. We populate it and skip drawing when
+  // it's switched off (map.hasLayer is false).
   let VESSEL_DIMS = {};                 // "i"+imo / "m"+mmsi -> { loa, beam } (m)
   let lastTSel = null, lastRows = [];
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => (
@@ -2088,7 +2249,8 @@ map.on("click", async (e) => {
     lastTSel = tSel;
     if (rows) lastRows = rows;
     shipLayer.clearLayers();
-    if (!enabled || tSel == null || !CENTERLINE) return;
+    // Off in the layer-toggle box, or nothing to place yet -> draw nothing.
+    if (!map.hasLayer(shipLayer) || tSel == null || !CENTERLINE) return;
     for (const r of lastRows) {
       if (!(r.status in STATUS)) continue;                  // observed + confirmed only
       if (r.station_unassigned || r.station_lo == null || r.station_hi == null) continue;
@@ -2115,7 +2277,9 @@ map.on("click", async (e) => {
     }
   }
 
-  if (toggle) toggle.addEventListener("change", () => { enabled = toggle.checked; render(lastTSel, null); });
+  // Re-draw at the current cursor when the outlines layer is switched back on
+  // from the layer-toggle box (it was emptied while hidden).
+  map.on("overlayadd", (e) => { if (e.layer === shipLayer) render(lastTSel, null); });
   // Bridge: the timeline cursor calls this on drag / play / data refresh.
   window.onTimeCursor = (tSel, rows) => render(tSel, rows);
   loadDims();
@@ -2319,13 +2483,18 @@ const loadTimeline = (function () {
       svg.appendChild(tk);
     }
 
-    // "Now" marker (dashed red), re-read from the clock on every render/poll so
-    // it tracks the real time. The dashed red colour distinguishes it from the
-    // cyan cursor, so no text label is needed.
+    // "Now" marker — a bright solid red hairline with a labeled tick at the top,
+    // re-read from the clock on every render/poll so it tracks the real time. The
+    // red distinguishes it from the cyan time cursor.
     const now = Date.now();
     if (now >= t0 && now <= t1) {
       const nx = x(now);
       svg.appendChild(el("line", { x1: nx, y1: HEADER_H, x2: nx, y2: totalH, class: "tl-now" }));
+      // Top tick + "NOW" label (a small notch riding the header band).
+      svg.appendChild(el("rect", { x: nx - 2, y: HEADER_H - 4, width: 4, height: 4, class: "tl-now-tick" }));
+      const lbl = el("text", { x: nx + 4, y: HEADER_H - 4, class: "tl-now-label" });
+      lbl.textContent = "NOW";
+      svg.appendChild(lbl);
     }
 
     // Clamp the time cursor into the (possibly changed) window; it's drawn last
@@ -2338,7 +2507,7 @@ const loadTimeline = (function () {
         const bx = x(it.s), bw = Math.max(2, x(it.e) - bx);
         const by = lane.y + LANE_PAD + it.row * ROW_H + 1;
         const fill = colorFor(it.r);
-        const rect = el("rect", { x: bx, y: by, width: bw, height: ROW_H - 3, rx: 3, class: "tl-bar", fill, stroke: "rgba(0,0,0,.35)" });
+        const rect = el("rect", { x: bx, y: by, width: bw, height: ROW_H - 3, rx: 0, class: "tl-bar", fill, stroke: "rgba(0,0,0,.5)" });
         if (it.r.t_end == null) rect.setAttribute("opacity", "0.85");   // open-ended hint
         rect.addEventListener("mousemove", (ev) => showTip(ev, it.r));
         rect.addEventListener("mouseleave", hideTip);
@@ -2355,7 +2524,7 @@ const loadTimeline = (function () {
     // these two nodes (no full SVG rebuild per mouse-move).
     const cx = x(tSel);
     cursorLine = el("line", { x1: cx, y1: HEADER_H - 6, x2: cx, y2: totalH, class: "tl-cursor" });
-    cursorHandle = el("rect", { x: cx - 5, y: HEADER_H - 11, width: 10, height: 10, rx: 2, class: "tl-cursor-handle" });
+    cursorHandle = el("rect", { x: cx - 5, y: HEADER_H - 11, width: 10, height: 10, rx: 0, class: "tl-cursor-handle" });
     svg.appendChild(cursorLine);
     svg.appendChild(cursorHandle);
     updateCursorLabel();
@@ -2543,12 +2712,25 @@ const loadTimeline = (function () {
 })();
 
 // --- Header clock (Central), sidebar collapse, map coordinate read-out -------
+// Session boot, for the status-indicator uptime readout.
+const BOOT_MS = Date.now();
 (function () {
   const c = document.getElementById("clock");
   if (!c) return;
-  const tick = () => { c.textContent = new Date().toLocaleString(undefined, {
-    timeZone: CENTRAL_TZ, month: "short", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) + " CT"; };
+  const up = document.getElementById("statusUptime");
+  const hms = (tz) => new Date().toLocaleTimeString("en-GB", { timeZone: tz, hour12: false });
+  const dCT = () => new Date().toLocaleDateString("en-US", {
+    timeZone: CENTRAL_TZ, weekday: "short", day: "2-digit", month: "short" }).toUpperCase();
+  const tick = () => {
+    // Dual readout: Central wall-clock (canonical) over UTC. Mono, tabular.
+    c.innerHTML = `<span class="z">CT </span>${dCT()} ${hms(CENTRAL_TZ)}\n` +
+                  `<span class="z">UTC</span> ${hms("UTC")}Z`;
+    if (up) {
+      const s = Math.floor((Date.now() - BOOT_MS) / 1000);
+      const p = (n) => String(n).padStart(2, "0");
+      up.textContent = `UP ${p(Math.floor(s/3600))}:${p(Math.floor((s%3600)/60))}:${p(s%60)}`;
+    }
+  };
   tick(); setInterval(tick, 1000);
 })();
 (function () {
@@ -2562,13 +2744,26 @@ const loadTimeline = (function () {
 })();
 (function () {
   const hud = document.getElementById("coordHud");
-  if (!hud) return;
+  const foot = document.getElementById("footCoord");
   const blank = '<span class="k">LAT —  LON —</span>';
   map.on("mousemove", (e) => {
-    hud.innerHTML = `<span class="k">LAT</span> ${e.latlng.lat.toFixed(5)}` +
-                    `&nbsp;&nbsp;<span class="k">LON</span> ${e.latlng.lng.toFixed(5)}`;
+    const la = e.latlng.lat.toFixed(5), lo = e.latlng.lng.toFixed(5);
+    if (hud) hud.innerHTML = `<span class="k">LAT</span> ${la}&nbsp;&nbsp;<span class="k">LON</span> ${lo}`;
+    if (foot) foot.textContent = `LAT ${la}  LON ${lo}`;
   });
-  map.on("mouseout", () => { hud.innerHTML = blank; });
+  map.on("mouseout", () => { if (hud) hud.innerHTML = blank; if (foot) foot.textContent = "LAT —  LON —"; });
+  // Live zoom / scale readout in the classification strip.
+  const scaleEl = document.getElementById("classScale");
+  if (scaleEl) {
+    const upd = () => {
+      const z = map.getZoom();
+      // metres-per-pixel at the current latitude (Web Mercator).
+      const c = map.getCenter();
+      const mpp = 156543.03392 * Math.cos(c.lat * Math.PI / 180) / Math.pow(2, z);
+      scaleEl.textContent = `ZOOM ${z.toFixed(1)}  ·  ${mpp < 1 ? (mpp*100).toFixed(0)+' CM/PX' : mpp.toFixed(1)+' M/PX'}`;
+    };
+    map.on("zoomend moveend", upd); upd();
+  }
 })();
 
 // --- Boot ------------------------------------------------------------------
