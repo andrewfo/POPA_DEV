@@ -471,6 +471,72 @@ def geo_to_station_endpoint(
     }
 
 
+@app.get("/occupancy/moored")
+def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
+    """Vessels alongside **right now** — the detailed, per-vessel counterpart of
+    the ``moored`` count in ``/stats``: each vessel's latest AIS fix that sits in
+    the berthing zone (apron polygon, else centerline buffer) below the mooring
+    SOG threshold. Same predicate (``alongside_sql`` + ``nearest_segment_lateral``
+    + ``berth_enter_sog_kn``) as the stat, so the list and the count can't drift.
+
+    Each fix is projected onto the wharf centerline (POPA station, via the one
+    crosswalk path ``geo_to_station``) and labelled with the berth whose station
+    range contains it. This reads **live positions**, not derived ``observed``
+    reservations, so "who's alongside" populates without the occupancy-derivation
+    worker running. Newest fix first."""
+    settings = get_settings()
+    point = "ST_SetSRID(ST_MakePoint(l.lon, l.lat), 4326)"
+    rows = session.execute(
+        text(
+            f"""
+            WITH latest AS (
+                SELECT DISTINCT ON (pr.mmsi)
+                       pr.mmsi, pr.lat, pr.lon, pr.sog, pr.msg_ts, pr.vessel_id
+                FROM position_report pr
+                WHERE pr.mmsi IS NOT NULL
+                ORDER BY pr.mmsi, pr.msg_ts DESC NULLS LAST, pr.id DESC
+            )
+            SELECT l.mmsi, l.lat, l.lon, l.sog, l.msg_ts, v.name AS vessel_name
+            FROM latest l
+            LEFT JOIN vessel v ON v.id = l.vessel_id
+            {nearest_segment_lateral(point)}
+            WHERE l.sog IS NOT NULL AND l.sog < :enter_sog
+              AND COALESCE({alongside_sql(point)}, false)
+            ORDER BY l.msg_ts DESC NULLS LAST
+            """
+        ),
+        {"enter_sog": settings.berth_enter_sog_kn, "buffer_m": settings.berth_buffer_m},
+    ).all()
+    # Berth catalog loaded once; matching a POPA station to a named berth is a
+    # range-membership lookup, not stationing math (that stays in the crosswalk).
+    berths = session.execute(
+        text("SELECT name, popa_sta_start, popa_sta_end FROM berth ORDER BY popa_sta_start")
+    ).all()
+
+    def berth_for(sta: float | None) -> str | None:
+        if sta is None:
+            return None
+        for b in berths:
+            if float(b.popa_sta_start) <= sta <= float(b.popa_sta_end):
+                return b.name
+        return None
+
+    out = []
+    for r in rows:
+        station = geo_to_station(session, r.lat, r.lon)
+        out.append(
+            {
+                "mmsi": r.mmsi,
+                "vessel_name": r.vessel_name,
+                "sog": float(r.sog) if r.sog is not None else None,
+                "msg_ts": r.msg_ts.isoformat() if r.msg_ts else None,
+                "popa_station": station,
+                "berth_name": berth_for(station),
+            }
+        )
+    return out
+
+
 @app.post("/intake/berth-request", status_code=201)
 def create_berth_request(
     form: BerthRequestForm, session: Session = Depends(get_session)

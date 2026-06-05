@@ -97,7 +97,7 @@
     -webkit-font-smoothing: antialiased;
   }
   /* Numeric / identifier readouts use the mono face everywhere, tabular figures. */
-  .mono, td.num, .stat .n, .probe .row b {
+  .mono, td.num, .stat .n {
     font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   }
 
@@ -294,16 +294,6 @@
   th { color: var(--muted); font-weight: 700; font-size: 9px; text-transform: uppercase; letter-spacing: 1.1px; }
   td { font-size: 12px; }
   td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
-
-  .probe {
-    background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--line-2);
-    border-radius: 0; padding: 9px; margin-top: 5px;
-  }
-  .probe .hint { color: var(--muted); font-size: 11px; }
-  .probe .row { display: flex; justify-content: space-between; padding: 2px 0; }
-  .probe .row span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
-  .probe .row b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
-  .crosswalk { margin-top: 7px; border-top: 1px solid var(--line); padding-top: 7px; }
 
   .leaflet-popup-content { font: 13px var(--font-ui); }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip {
@@ -756,9 +746,8 @@
     <!-- ===== Conflicts (time × station overlaps) ===== -->
     <h2>Conflicts</h2>
     <div class="hint" style="margin:0 0 8px">
-      Reservations that overlap in <b>both</b> time and station — the headline
-      being an AIS-observed vessel where something is planned. Click one to
-      highlight the contested stretch of wharf.
+      Reservations overlapping in both time and station. Click one to highlight
+      the contested stretch.
     </div>
     <div id="conflicts"><div class="empty">none</div></div>
     <!-- ===== /Conflicts ===== -->
@@ -766,25 +755,21 @@
     <!-- ===== AIS verification (plan vs observed reality) ===== -->
     <h2>AIS verification</h2>
     <div class="hint" style="margin:0 0 8px">
-      Operator placements checked against observed AIS once a vessel shows up —
-      <b>arrived</b> / <b>no-show</b> / <b>awaiting</b>, whether it berthed where
-      planned, and any <b>unplanned</b> arrival no request covered. AIS verifies;
-      it never places (it can't know where a not-yet-arrived ship will go).
+      Operator placements checked against observed AIS — <b>arrived</b> /
+      <b>no-show</b> / <b>awaiting</b>, plus any <b>unplanned</b> arrival.
+      Read-only; AIS never places.
     </div>
     <div id="verification"><div class="empty">none</div></div>
     <!-- ===== /AIS verification ===== -->
 
-    <div class="probe">
-      <div class="hint">Click anywhere on the map to project that point onto the wharf centerline.</div>
-      <div id="probeResult" style="display:none">
-        <div class="row"><span>lat, lon</span><b id="probeLatLon">—</b></div>
-        <div class="row"><span>POPA station</span><b id="probePopa">—</b></div>
-        <div class="crosswalk" id="probeCrosswalk"></div>
-      </div>
+    <!-- ===== Alongside now (currently berthed, from live AIS) ===== -->
+    <h2>Alongside now</h2>
+    <div class="hint" style="margin:0 0 8px">
+      Vessels physically at the wharf right now, from live AIS. Click one to
+      locate it on the chart.
     </div>
-
-    <h2>Wharf segments</h2>
-    <div id="segments"><div class="empty">loading…</div></div>
+    <div id="alongside"><div class="empty">loading…</div></div>
+    <!-- ===== /Alongside now ===== -->
 
     <h2>Recent vessels</h2>
     <div id="vessels"><div class="empty">loading…</div></div>
@@ -1161,8 +1146,6 @@ shipLegend.onAdd = function () {
 };
 shipLegend.addTo(map);
 
-let probeMarker = null;
-
 // --- Status / stats --------------------------------------------------------
 function setStatus(ok, text) {
   const dot = document.getElementById("statusDot");
@@ -1374,6 +1357,43 @@ async function loadVerification() {
   }
 }
 
+// --- Alongside now (currently berthed) -------------------------------------
+// Who is physically at the wharf right now, from live AIS: /occupancy/moored is
+// the per-vessel form of the "Moored now" stat (latest fix alongside + slow),
+// each projected to a berth server-side. Reads live positions, so it populates
+// without the occupancy-derivation worker. Click a row to locate its AIS contact.
+function alongsideCard(r) {
+  const name = esc(r.vessel_name || "(unnamed)");
+  const where = r.berth_name ? esc(r.berth_name)
+    : (r.popa_station != null ? "POPA " + fmtSta(r.popa_station) : "berth —");
+  const clickable = r.mmsi != null;
+  return `
+    <div class="card${clickable ? " along-card" : ""}" data-along-mmsi="${r.mmsi ?? ""}"${clickable ? ' style="cursor:pointer"' : ""}>
+      <div class="name">${name}
+        <span class="status-badge" style="background:${PAL.green}">moored</span></div>
+      <div class="meta">${where} · since <b>${fmtCentral(r.msg_ts)}</b></div>
+    </div>`;
+}
+
+async function loadAlongside() {
+  const el = document.getElementById("alongside");
+  if (!el) return;
+  try {
+    const rs = await api("/occupancy/moored");
+    el.innerHTML = rs.length
+      ? rs.map(alongsideCard).join("")
+      : '<div class="empty">nothing alongside</div>';
+    el.querySelectorAll(".along-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const mmsi = Number(card.dataset.alongMmsi);
+        if (mmsi) locateVesselOnMap(mmsi);
+      });
+    });
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+  }
+}
+
 async function loadBbox() {
   try {
     const b = await api("/config/bbox");
@@ -1416,20 +1436,10 @@ async function loadReferenceGeo() {
   } catch (e) { /* optional */ }
 }
 
-async function loadSegments() {
-  const el = document.getElementById("segments");
-  try {
-    const segs = await api("/wharf-segments");
-    if (!segs.length) { el.innerHTML = '<div class="empty">no segments seeded</div>'; return; }
-    el.innerHTML = segs.map((s) => `
-      <div class="card">
-        <div class="name">${s.name}</div>
-        <div class="meta">POPA ${fmtSta(s.popa_sta_start)} → ${fmtSta(s.popa_sta_end)}</div>
-        <div class="meta">Corps ×${s.corps.scale} ${s.corps.offset >= 0 ? "+" : ""}${s.corps.offset} · Dock# ×${s.dockno.scale} ${s.dockno.offset >= 0 ? "+" : ""}${s.dockno.offset}</div>
-      </div>`).join("");
-  } catch (e) {
-    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
-  }
+// Draw the wharf segment geometry onto the map. (The Overview no longer lists
+// the segments as cards — the affine params were internal crosswalk math; this
+// keeps only the map layer.)
+async function loadWharfGeometry() {
   try {
     const gj = await api("/wharf-segments/geojson");
     wharfLayer.addData(gj);
@@ -2117,33 +2127,6 @@ async function loadHistory() {
   });
 })();
 
-// --- Click-to-station probe ------------------------------------------------
-map.on("click", async (e) => {
-  const { lat, lng } = e.latlng;
-  const res = document.getElementById("probeResult");
-  res.style.display = "block";
-  document.getElementById("probeLatLon").textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-  document.getElementById("probePopa").textContent = "…";
-  document.getElementById("probeCrosswalk").innerHTML = "";
-  if (probeMarker) probeMarker.remove();
-  probeMarker = L.marker([lat, lng]).addTo(map);
-  try {
-    const r = await api(`/geo-to-station?lat=${lat}&lon=${lng}`);
-    const popa = r.popa_station;
-    document.getElementById("probePopa").textContent = `${fmtSta(popa)} (${popa.toFixed(1)} ft)`;
-    // Stationing math is server-side only: /geo-to-station returns the Corps and
-    // Dock No. equivalents already converted through the crosswalk. The UI reads
-    // them; it never applies the affine transform itself.
-    if (r.corps != null && r.dockno != null) {
-      document.getElementById("probeCrosswalk").innerHTML =
-        `<div class="row"><span>Corps / USACE</span><b>${fmtSta(r.corps)}</b></div>` +
-        `<div class="row"><span>Dock No.</span><b>${r.dockno.toFixed(1)}</b></div>`;
-    }
-    probeMarker.bindPopup(`POPA ${fmtSta(popa)}`).openPopup();
-  } catch (err) {
-    document.getElementById("probePopa").textContent = "unavailable (DB offline)";
-  }
-});
 
 // ===== VESSEL OUTLINES (to-scale, time-cursor driven) ==========================
 // Real reservations drawn as to-scale ship polygons, positioned by projecting
@@ -2770,14 +2753,15 @@ const BOOT_MS = Date.now();
 loadBbox();
 loadReferenceGeo().then(loadTimeline);   // lanes need BERTH_STA loaded first
 loadStats();
-loadSegments();
+loadWharfGeometry();
 loadVessels();
 loadRequests();
 loadBerthRequests();
 loadPositions();
 loadConflicts();
 loadVerification();
-setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); loadVerification(); }, 15000);
+loadAlongside();
+setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); loadVerification(); loadAlongside(); }, 15000);
 </script>
 </body>
 </html>
