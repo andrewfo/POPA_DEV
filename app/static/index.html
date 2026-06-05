@@ -616,6 +616,34 @@
   /* History rows are hover-to-preview; show the affordance. */
   #historyList .hist-card { cursor: default; }
   #historyList .hist-card:hover { border-color: var(--accent); }
+  /* ===== History filters modal ===== */
+  #histFilterModal {
+    position: fixed; inset: 0; z-index: 4100; display: none;
+    background: rgba(6,9,12,.72); backdrop-filter: blur(2px);
+    align-items: flex-start; justify-content: center; padding: 12vh 16px;
+  }
+  #histFilterModal.open { display: flex; }
+  #histFilterModal .sheet {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+    width: min(380px, 100%); box-shadow: 0 18px 60px rgba(0,0,0,.5);
+  }
+  #histFilterModal .sheet-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; border-bottom: 1px solid var(--line);
+  }
+  #histFilterModal .sheet-head h2 { margin: 0; font-size: 15px; flex: 1; }
+  #histFilterModal .sheet-body { padding: 14px; display: grid; gap: 11px; }
+  #histFilterModal .fp-row { display: grid; gap: 4px; }
+  #histFilterModal .fp-row label {
+    font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--muted);
+  }
+  #histFilterModal .fp-row input, #histFilterModal .fp-row select { width: 100%; box-sizing: border-box; }
+  #histFilterModal .fp-actions { display: flex; gap: 8px; margin-top: 2px; }
+  #histFilterModal .modal-close {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+    width: 28px; height: 28px; border-radius: var(--r); cursor: pointer; font-size: 16px;
+  }
+  #histFilterModal .modal-close:hover { background: var(--line); }
 </style>
 </head>
 <body>
@@ -838,25 +866,9 @@
       The log of bookings — every status, AIS-observed berthings included —
       newest arrival first. Filter by vessel name, IMO, status, or a date range.
     </p>
-    <div class="filter-bar wrap">
-      <input type="text" id="histName" placeholder="Vessel name…" />
-      <input type="text" id="histImo" inputmode="numeric" placeholder="IMO…" style="max-width:110px" />
-      <label for="histStatus">Status</label>
-      <select id="histStatus">
-        <option value="">All</option>
-        <option value="observed">Observed</option>
-        <option value="requested">Requested</option>
-        <option value="tentative">Tentative</option>
-        <option value="confirmed">Confirmed</option>
-        <option value="completed">Completed</option>
-        <option value="cancelled">Cancelled</option>
-      </select>
-      <label for="histFrom">From</label>
-      <input type="date" id="histFrom" />
-      <label for="histTo">To</label>
-      <input type="date" id="histTo" />
-      <button type="button" class="btn-sm primary" id="histSearch">Search</button>
-      <button type="button" class="btn-sm" id="histClear">Clear</button>
+    <div class="filter-bar">
+      <button type="button" class="btn-sm primary" id="histFilterBtn">⚲ Filters</button>
+      <span id="histFilterSummary" class="hint" style="margin:0;flex:1">no filters — showing all</span>
     </div>
     <div id="historyList"><div class="empty">loading…</div></div>
     </details>
@@ -917,6 +929,41 @@
 <!-- ===== Ship detail hover panel (floats beside a hovered History entry) ===== -->
 <div id="shipHover" role="tooltip"></div>
 <!-- ===== /Ship detail hover panel ===== -->
+
+<!-- ===== History filters modal (opened by the Filters button) ===== -->
+<div id="histFilterModal" role="dialog" aria-modal="true" aria-labelledby="histFilterTitle">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2 id="histFilterTitle">History filters</h2>
+      <button type="button" class="modal-close" id="histFilterClose" title="Close (Esc)">×</button>
+    </div>
+    <div class="sheet-body">
+      <div class="fp-row"><label for="histName">Vessel name</label>
+        <input type="text" id="histName" placeholder="name contains…" /></div>
+      <div class="fp-row"><label for="histImo">IMO</label>
+        <input type="text" id="histImo" inputmode="numeric" placeholder="IMO digits…" /></div>
+      <div class="fp-row"><label for="histStatus">Status</label>
+        <select id="histStatus">
+          <option value="">All</option>
+          <option value="observed">Observed</option>
+          <option value="requested">Requested</option>
+          <option value="tentative">Tentative</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="completed">Completed</option>
+          <option value="cancelled">Cancelled</option>
+        </select></div>
+      <div class="fp-row"><label for="histFrom">From</label>
+        <input type="date" id="histFrom" /></div>
+      <div class="fp-row"><label for="histTo">To</label>
+        <input type="date" id="histTo" /></div>
+      <div class="fp-actions">
+        <button type="button" class="btn-sm primary" id="histSearch">Search</button>
+        <button type="button" class="btn-sm" id="histClear">Clear</button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ===== /History filters modal ===== -->
 
 <script
   src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -2335,6 +2382,24 @@ function hideShipHover() {
   shipHoverTimer = setTimeout(() => box.classList.remove("open"), 80);
 }
 
+// One-line digest of the active filters, shown beside the Filters button so the
+// operator sees what's applied without opening the modal.
+function updateHistFilterSummary() {
+  const el = document.getElementById("histFilterSummary");
+  if (!el) return;
+  const name = document.getElementById("histName").value.trim();
+  const imo = document.getElementById("histImo").value.trim();
+  const status = document.getElementById("histStatus").value;
+  const from = document.getElementById("histFrom").value;
+  const to = document.getElementById("histTo").value;
+  const parts = [];
+  if (name) parts.push("name: " + name);
+  if (imo) parts.push("IMO: " + imo);
+  if (status) parts.push(status);
+  if (from || to) parts.push((from || "…") + " → " + (to || "…"));
+  el.textContent = parts.length ? parts.join(" · ") : "no filters — showing all";
+}
+
 async function loadHistory() {
   const el = document.getElementById("historyList");
   if (!el) return;
@@ -2343,6 +2408,7 @@ async function loadHistory() {
   const status = document.getElementById("histStatus").value;
   const from = document.getElementById("histFrom").value;   // YYYY-MM-DD (Central)
   const to = document.getElementById("histTo").value;
+  updateHistFilterSummary();
   const qs = new URLSearchParams();
   if (name) qs.set("name", name);
   if (imo) qs.set("imo", imo);
@@ -2378,9 +2444,25 @@ async function loadHistory() {
   const to = document.getElementById("histTo");
   const search = document.getElementById("histSearch");
   const clear = document.getElementById("histClear");
-  if (search) search.addEventListener("click", loadHistory);
-  if (name) name.addEventListener("keydown", (e) => { if (e.key === "Enter") loadHistory(); });
-  if (imo) imo.addEventListener("keydown", (e) => { if (e.key === "Enter") loadHistory(); });
+  const modal = document.getElementById("histFilterModal");
+  const openBtn = document.getElementById("histFilterBtn");
+  const closeBtn = document.getElementById("histFilterClose");
+  const openModal = () => { if (modal) { modal.classList.add("open"); name.focus(); } };
+  const closeModal = () => { if (modal) modal.classList.remove("open"); };
+  const runAndClose = () => { loadHistory(); closeModal(); };
+  if (openBtn) openBtn.addEventListener("click", openModal);
+  if (closeBtn) closeBtn.addEventListener("click", closeModal);
+  // Click the dimmed backdrop (not the sheet) closes; Esc closes.
+  if (modal) modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && modal.classList.contains("open")) closeModal();
+  });
+  // Search (button or Enter in a text field) applies + closes the modal.
+  if (search) search.addEventListener("click", runAndClose);
+  const onEnter = (e) => { if (e.key === "Enter") runAndClose(); };
+  if (name) name.addEventListener("keydown", onEnter);
+  if (imo) imo.addEventListener("keydown", onEnter);
+  // Selecting a status / date applies live, but leaves the modal open to tweak.
   if (status) status.addEventListener("change", loadHistory);
   if (from) from.addEventListener("change", loadHistory);
   if (to) to.addEventListener("change", loadHistory);
