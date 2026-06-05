@@ -466,14 +466,14 @@ def test_confirmed_within_min_gap_rejected_409(client):
 # --- PATCH /intake/berth-requests/{id} (edit a berth request in place) ------
 def test_edit_berth_request_endpoint(client):
     created = client.post("/intake/berth-request", json={
-        "source": "phone", "vessel": "EDIT ME", "imo": 9600001,
+        "source": "phone", "vessel": "EDIT ME", "imo": 9600009,
         "etb": "2027-01-10T00:00:00Z", "etd": "2027-01-12T00:00:00Z",
         "inbound_cargo": "coal",
     }).json()
     intake_id, rid = created["intake_event_id"], created["reservation_id"]
 
     r = client.patch(f"/intake/berth-requests/{intake_id}", json={
-        "source": "phone", "vessel": "EDIT ME", "imo": 9600001,
+        "source": "phone", "vessel": "EDIT ME", "imo": 9600009,
         "etb": "2027-01-10T00:00:00Z", "etd": "2027-01-12T00:00:00Z",
         "inbound_cargo": "petcoke",
     })
@@ -484,5 +484,5 @@ def test_edit_berth_request_endpoint(client):
 
 def test_edit_berth_request_missing_404(client):
     assert client.patch(
-        "/intake/berth-requests/99999999", json={"vessel": "X", "imo": 9600002}
+        "/intake/berth-requests/99999999", json={"vessel": "X", "imo": 9600009}
     ).status_code == 404

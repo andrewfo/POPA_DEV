@@ -562,8 +562,17 @@
   .map-legend .lg-title {
     color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px;
     font-size: 9px; margin-bottom: 4px; display: flex; align-items: center; gap: 5px;
+    background: none; border: 0; padding: 0; cursor: pointer; width: 100%;
+    font-family: inherit; line-height: inherit;
   }
   .map-legend .lg-title::before { content: ""; width: 5px; height: 5px; background: var(--accent); }
+  /* caret flips to ▸ when collapsed (see .collapsed below) */
+  .map-legend .lg-title::after {
+    content: "▾"; margin-left: auto; color: var(--muted); font-size: 8px;
+  }
+  .map-legend.collapsed .lg-title { margin-bottom: 0; }
+  .map-legend.collapsed .lg-title::after { content: "▸"; }
+  .map-legend.collapsed .lg-body { display: none; }
   .map-legend .lg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; text-transform: uppercase; letter-spacing: .3px; }
   .map-legend .lg-dot {
     width: 11px; height: 11px; border-radius: 50%;
@@ -1150,28 +1159,37 @@ const shipLayer = L.layerGroup().addTo(map);
 
 // Show/hide toggles for the map layers. Each layer (and its child label markers)
 // is added to the map above, so unchecking removes the ticks/labels/berths
-// together. Kept expanded so the toggles are visible at a glance. The two ship
-// representations lead the list: the AIS "Ship dots" and the to-scale "Vessel
-// outlines", each shown/hidden independently.
+// together. Collapsed to a small layers icon (top-right) so it doesn't cover the
+// water — it expands on hover/click. The two ship representations lead the list:
+// the AIS "Ship dots" and the to-scale "Vessel outlines", each shown/hidden
+// independently.
 L.control.layers(null, {
   "Ship dots (AIS)": vesselLayer,
   "Vessel outlines": shipLayer,
   "Berths": berthLayer,
   "Dock markers (yellow)": yellowLayer,
   "Dredge markers": feetLayer,
-}, { collapsed: false, position: "topright" }).addTo(map);
+}, { collapsed: true, position: "topright" }).addTo(map);
 
 // Ship-type colour key (bottom-left). Swatches are generated from
-// SHIP_CATEGORIES so they can never drift from the actual dot fills.
+// SHIP_CATEGORIES so they can never drift from the actual dot fills. The title
+// is a toggle: it collapses the body to just the chip so the key doesn't cover
+// the water. Starts collapsed.
 const shipLegend = L.control({ position: "bottomleft" });
 shipLegend.onAdd = function () {
-  const div = L.DomUtil.create("div", "map-legend");
+  const div = L.DomUtil.create("div", "map-legend collapsed");
   const rows = Object.values(SHIP_CATEGORIES).map((c) =>
     `<div class="lg-row"><span class="lg-dot" style="background:${c.color}"></span>${c.label}</div>`
   ).join("");
   div.innerHTML =
-    `<div class="lg-title">Ship type</div>${rows}` +
-    `<div class="lg-note">pulsing = underway · still = moored</div>`;
+    `<button type="button" class="lg-title" aria-expanded="false">Ship type</button>` +
+    `<div class="lg-body">${rows}` +
+    `<div class="lg-note">pulsing = underway · still = moored</div></div>`;
+  const title = div.querySelector(".lg-title");
+  title.addEventListener("click", () => {
+    const open = div.classList.toggle("collapsed") === false;
+    title.setAttribute("aria-expanded", String(open));
+  });
   L.DomEvent.disableClickPropagation(div);
   return div;
 };
@@ -1599,7 +1617,7 @@ async function loadPositions() {
         `<span style="color:${catInfo.color}">●</span> ${esc(catInfo.label)}<br>` +
         `MMSI ${p.mmsi ?? "—"}<br>` +
         `SOG ${p.sog ?? "—"} kn${stateNote}<br>` +
-        `${p.msg_ts ? new Date(p.msg_ts).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : ""}`;
+        `${p.msg_ts ? fmtCentral(p.msg_ts) + " CT" : ""}`;
       const marker = L.marker([p.lat, p.lon], { icon: aisIcon(cat, underway) })
         .bindPopup(info)
         .bindTooltip(info, { direction: "top", offset: [0, -10] })
@@ -1851,6 +1869,18 @@ function wireResCards(container) {
   });
 }
 
+// An IMO number is 7 digits + a check digit (the 7th): the trailing digit
+// equals (sum of digit_i * (7-i) for the first six) mod 10. Mirrors
+// app/intake/manual.valid_imo so the form rejects a typo like "75" before it
+// reaches the server (which validates again).
+function isValidImo(imo) {
+  const s = String(imo);
+  if (!/^[0-9]{7}$/.test(s)) return false;
+  let sum = 0;
+  for (let i = 0; i < 6; i++) sum += Number(s[i]) * (7 - i);
+  return sum % 10 === Number(s[6]);
+}
+
 // --- Berth requests (write) ------------------------------------------------
 // One form, two modes: record a new request (POST) or correct an existing
 // manual-channel one in place (PATCH). editBerthRequest() flips it into edit
@@ -1924,6 +1954,14 @@ function wireResCards(container) {
       result.className = "result err";
       result.textContent = "Enter at least a vessel name before recording a request.";
       btn.disabled = false; btn.textContent = "Record berth request";
+      return;
+    }
+    // Reject a malformed IMO (wrong length or bad check digit) before sending —
+    // an IMO is a 7-digit ship key, so a "75" must not become a vessel record.
+    if (payload.imo != null && !isValidImo(payload.imo)) {
+      result.className = "result err";
+      result.textContent = `“${payload.imo}” is not a valid IMO number — it must be 7 digits with a correct check digit.`;
+      btn.disabled = false; btn.textContent = editing ? "Save changes" : "Record berth request";
       return;
     }
     const [method, url] = editing
@@ -2048,7 +2086,6 @@ function rawField(raw, keys) {
 
 function reqCard(r) {
   const raw = r.raw || {};
-  const fmtDate = (s) => { if (!s) return null; const d = new Date(s); return isNaN(d) ? esc(s) : d.toLocaleDateString(); };
   const vessel = rawField(raw, ["vessel", "Vessel"]);
   const imo = rawField(raw, ["imo", "IMO Number"]);
   const etb = rawField(raw, ["etb", "Port Arrival Date"]);
@@ -2056,14 +2093,14 @@ function reqCard(r) {
   const agency = rawField(raw, ["agency", "Agency/Owner"]);
   const berth = rawField(raw, ["Assigned Berth"]);
   const cargo = rawField(raw, ["inbound_cargo", "Inbound Cargo"]) || rawField(raw, ["outbound_cargo", "Outbound Cargo"]);
-  const received = r.received_at ? new Date(r.received_at).toLocaleString(undefined, { timeZone: CENTRAL_TZ }) + " CT" : "—";
+  const received = r.received_at ? fmtCentral(r.received_at) + " CT" : "—";
   // Link to the reservation this request produced (status shows reconciliation
   // state); an unprocessed request (no arrival date) never made one.
   const resLink = r.reservation_id
     ? `→ reservation #${r.reservation_id}${r.reservation_status ? " (" + esc(r.reservation_status) + ")" : ""}`
     : (r.processed ? "no reservation" : "<span style=\"color:var(--warn)\">unprocessed</span>");
   const lines = [];
-  if (etb || etd) lines.push(`ETB <b>${etb ? fmtDate(etb) : "—"}</b>${etd ? ` → ETD <b>${fmtDate(etd)}</b>` : ""}`);
+  if (etb || etd) lines.push(`ETB <b>${etb ? fmtCentral(etb) : "—"}</b>${etd ? ` → ETD <b>${fmtCentral(etd)}</b>` : ""}`);
   if (berth) lines.push(`berth ${esc(berth)}`);
   if (agency) lines.push(esc(agency));
   if (cargo) lines.push(esc(cargo));

@@ -24,7 +24,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -50,6 +50,21 @@ def dedupe_key(raw: dict) -> str:
     identical re-submission is deduped at the ``intake_event`` level."""
     blob = json.dumps(raw, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def valid_imo(imo: int) -> bool:
+    """True if ``imo`` is a structurally valid IMO ship-identification number.
+
+    An IMO number is exactly **7 digits**; the leading 6 identify the ship and
+    the 7th is a check digit = (sum of digit_i * (7-i) for i in 0..5) mod 10.
+    This rejects free-typed garbage like ``75`` (too short) or a transposed
+    number whose check digit no longer agrees — catching most fat-finger errors
+    at intake. (MMSI, not validated here, is a separate 9-digit identifier.)"""
+    if imo < 1_000_000 or imo > 9_999_999:  # not 7 digits
+        return False
+    digits = [int(c) for c in str(imo)]
+    checksum = sum(d * (7 - i) for i, d in enumerate(digits[:6])) % 10
+    return checksum == digits[6]
 
 
 class BerthRequestForm(BaseModel):
@@ -92,6 +107,18 @@ class BerthRequestForm(BaseModel):
     outbound_cargo_start: dt.date | None = None
 
     agency: str | None = None
+
+    @field_validator("imo")
+    @classmethod
+    def _check_imo(cls, v: int | None) -> int | None:
+        # Reject a structurally impossible IMO (wrong length or bad check digit)
+        # at the transport layer so a typo never lands as a real vessel key.
+        if v is not None and not valid_imo(v):
+            raise ValueError(
+                f"{v} is not a valid IMO number (must be 7 digits with a "
+                "correct check digit)"
+            )
+        return v
 
 
 @dataclass

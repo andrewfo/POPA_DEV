@@ -14,6 +14,8 @@ from sqlalchemy import func, select, text
 import pytest
 
 from app.db import get_session
+from pydantic import ValidationError
+
 from app.intake.manual import (
     FEET_PER_M,
     BerthRequestForm,
@@ -21,6 +23,7 @@ from app.intake.manual import (
     normalize_form,
     record_manual_request,
     update_manual_request,
+    valid_imo,
 )
 from app.main import app
 from app.models import IntakeEvent, Reservation, Vessel
@@ -98,6 +101,34 @@ def test_raw_preserves_feet_and_extra_fields():
     assert req.raw["deadweight_lbs"] == 45000
 
 
+# --- IMO validation --------------------------------------------------------
+def test_valid_imo_accepts_real_check_digits():
+    # Known-good IMO numbers (check digit agrees with the first six).
+    assert valid_imo(9317406)   # the suite's SAGA ADVENTURE
+    assert valid_imo(9074729)   # classic worked example
+    assert valid_imo(1234567)   # 1*7+2*6+3*5+4*4+5*3+6*2 = 77 -> 7
+
+
+def test_valid_imo_rejects_bad_length_and_check_digit():
+    assert not valid_imo(75)         # too short — the headline reject case
+    assert not valid_imo(931740)     # 6 digits
+    assert not valid_imo(93174060)   # 8 digits
+    assert not valid_imo(9317400)    # right length, wrong check digit
+
+
+def test_form_rejects_malformed_imo():
+    # The transport-layer field validator turns a bad IMO into a 422 rather than
+    # letting "75" become a vessel key.
+    with pytest.raises(ValidationError):
+        _form(imo=75)
+
+
+def test_form_accepts_missing_imo():
+    # IMO is required by the UI, but the model leaves it optional so an edit /
+    # partial submission validates; only a *present, invalid* value is rejected.
+    assert BerthRequestForm(vessel="NO IMO YET").imo is None
+
+
 def test_missing_imo_and_etb_warn():
     req = normalize_form(_form(imo=None, etb=None))
     assert any("IMO" in w for w in req.warnings)
@@ -126,7 +157,7 @@ def _counts(session):
 
 def test_records_intake_reservation_and_vessel(db_session):
     ev0, res0 = _counts(db_session)
-    out = record_manual_request(db_session, _form(imo=9111222))
+    out = record_manual_request(db_session, _form(imo=9111228))
 
     assert out["duplicate"] is False
     assert out["reservation_id"] is not None
@@ -148,7 +179,7 @@ def test_records_intake_reservation_and_vessel(db_session):
 
     # Vessel was created keyed on IMO, dimensions stored in metres.
     v = db_session.execute(
-        select(Vessel).where(Vessel.imo == 9111222)
+        select(Vessel).where(Vessel.imo == 9111228)
     ).scalar_one()
     assert v.name == "SAGA ADVENTURE"
     assert float(v.loa) == round(585.0 / FEET_PER_M, 2)
@@ -164,11 +195,11 @@ def test_records_intake_reservation_and_vessel(db_session):
 
 
 def test_duplicate_submission_is_idempotent(db_session):
-    f = _form(imo=9333444)
+    f = _form(imo=9333448)
     first = record_manual_request(db_session, f)
     ev1, res1 = _counts(db_session)
 
-    second = record_manual_request(db_session, _form(imo=9333444))
+    second = record_manual_request(db_session, _form(imo=9333448))
     ev2, res2 = _counts(db_session)
 
     assert second["duplicate"] is True
@@ -178,7 +209,7 @@ def test_duplicate_submission_is_idempotent(db_session):
 
 def test_missing_etb_lands_intake_without_reservation(db_session):
     ev0, res0 = _counts(db_session)
-    out = record_manual_request(db_session, _form(imo=9555666, etb=None))
+    out = record_manual_request(db_session, _form(imo=9555668, etb=None))
 
     assert out["duplicate"] is False
     assert out["reservation_id"] is None
@@ -226,15 +257,15 @@ def test_edit_propagates_vessel_name_and_loa(db_session):
     # Bug #2: changing the name / LOA on a berth request must reach the vessel
     # row (and therefore the reservations view), even though a vessel already
     # exists for this IMO.
-    out = record_manual_request(db_session, _form(imo=9881199, vessel="OLD NAME"))
+    out = record_manual_request(db_session, _form(imo=9881196, vessel="OLD NAME"))
 
     update_manual_request(
         db_session,
         out["intake_event_id"],
-        _form(imo=9881199, vessel="NEW NAME", length_ft=620.0),
+        _form(imo=9881196, vessel="NEW NAME", length_ft=620.0),
     )
 
-    v = db_session.execute(select(Vessel).where(Vessel.imo == 9881199)).scalar_one()
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9881196)).scalar_one()
     assert v.name == "NEW NAME"
     assert float(v.loa) == round(620.0 / FEET_PER_M, 2)
 
@@ -242,15 +273,15 @@ def test_edit_propagates_vessel_name_and_loa(db_session):
 def test_edit_blank_field_keeps_existing_vessel_dim(db_session):
     # Authoritative-but-not-destructive: a value the operator leaves blank does
     # NOT wipe the stored dimension (the request form isn't a vessel eraser).
-    out = record_manual_request(db_session, _form(imo=9882200, beam_ft=91.5))
+    out = record_manual_request(db_session, _form(imo=9882205, beam_ft=91.5))
 
     update_manual_request(
         db_session,
         out["intake_event_id"],
-        _form(imo=9882200, beam_ft=None),  # beam cleared on the form
+        _form(imo=9882205, beam_ft=None),  # beam cleared on the form
     )
 
-    v = db_session.execute(select(Vessel).where(Vessel.imo == 9882200)).scalar_one()
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9882205)).scalar_one()
     assert float(v.beam) == round(91.5 / FEET_PER_M, 2)  # preserved
 
 
@@ -258,15 +289,15 @@ def test_create_overwrites_manual_only_vessel_loa(db_session):
     # A vessel that only ever came from manual entry (no MMSI) is the operator's
     # to correct: a re-submitted request with a different LOA overwrites it,
     # instead of silently keeping the first value (the "always 1000 ft" bug).
-    record_manual_request(db_session, _form(imo=9112233, length_ft=585.0))
+    record_manual_request(db_session, _form(imo=9112234, length_ft=585.0))
     # Re-submit (a distinct payload, so it isn't deduped) with a corrected LOA.
     record_manual_request(
         db_session,
-        _form(imo=9112233, length_ft=400.0,
+        _form(imo=9112234, length_ft=400.0,
               etb=dt.date(2026, 7, 2), etd=dt.date(2026, 7, 5)),
     )
 
-    v = db_session.execute(select(Vessel).where(Vessel.imo == 9112233)).scalar_one()
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9112234)).scalar_one()
     assert float(v.loa) == round(400.0 / FEET_PER_M, 2)  # overwritten, not stuck
 
 
@@ -277,14 +308,14 @@ def test_create_preserves_ais_vessel_loa(db_session):
     db_session.execute(
         text(
             "INSERT INTO vessel (imo, mmsi, name, loa) "
-            "VALUES (9114455, 366114455, 'AIS BOAT', 300)"
+            "VALUES (9114452, 366114455, 'AIS BOAT', 300)"
         )
     )
     record_manual_request(
-        db_session, _form(imo=9114455, vessel="AIS BOAT", length_ft=100.0)
+        db_session, _form(imo=9114452, vessel="AIS BOAT", length_ft=100.0)
     )
 
-    v = db_session.execute(select(Vessel).where(Vessel.imo == 9114455)).scalar_one()
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9114452)).scalar_one()
     assert float(v.loa) == 300.0  # AIS value untouched by the manual request
 
 
@@ -292,30 +323,30 @@ def test_create_rejects_imo_belonging_to_another_ship(db_session):
     # The operator's rule: two ships can't share an IMO. A new request whose IMO
     # is already on file under a *different* ship name is refused (the operator
     # likely mistyped it) rather than silently merging + renaming the other ship.
-    record_manual_request(db_session, _form(imo=9118899, vessel="FIRST SHIP"))
+    record_manual_request(db_session, _form(imo=9118898, vessel="FIRST SHIP"))
 
     with pytest.raises(ValueError, match="already on file"):
-        record_manual_request(db_session, _form(imo=9118899, vessel="SECOND SHIP"))
+        record_manual_request(db_session, _form(imo=9118898, vessel="SECOND SHIP"))
 
     # The first ship's record is untouched — no rename leaked through.
-    v = db_session.execute(select(Vessel).where(Vessel.imo == 9118899)).scalar_one()
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9118898)).scalar_one()
     assert v.name == "FIRST SHIP"
 
 
 def test_create_same_ship_same_imo_is_allowed(db_session):
     # The legitimate case: the SAME ship phoned in twice (same IMO, same name,
     # case/whitespace aside) is not a collision — it's a second visit.
-    record_manual_request(db_session, _form(imo=9119900, vessel="REPEAT CALLER"))
+    record_manual_request(db_session, _form(imo=9119907, vessel="REPEAT CALLER"))
     out = record_manual_request(
         db_session,
-        _form(imo=9119900, vessel="  repeat   caller ",  # sloppy re-typing
+        _form(imo=9119907, vessel="  repeat   caller ",  # sloppy re-typing
               etb=dt.date(2026, 8, 1), etd=dt.date(2026, 8, 3)),
     )
     assert out["duplicate"] is False
     assert out["reservation_id"] is not None  # a second reservation, one vessel
     assert (
         db_session.execute(
-            select(func.count()).select_from(Vessel).where(Vessel.imo == 9119900)
+            select(func.count()).select_from(Vessel).where(Vessel.imo == 9119907)
         ).scalar_one()
         == 1
     )
@@ -325,7 +356,7 @@ def test_corrected_loa_reprojects_placed_footprint(db_session):
     # End-to-end of the reported bug: a bow-placed reservation's footprint must
     # follow a corrected LOA, holding the bow fixed — not stay at the length
     # captured when it was placed.
-    out = record_manual_request(db_session, _form(imo=9116677, length_ft=585.0))
+    out = record_manual_request(db_session, _form(imo=9116670, length_ft=585.0))
     vid = out["vessel_id"]
     loa_ft = 585.0  # the LOA at placement, in feet (the station-range span)
 
@@ -346,7 +377,7 @@ def test_corrected_loa_reprojects_placed_footprint(db_session):
     # Operator re-submits with a corrected, shorter LOA.
     record_manual_request(
         db_session,
-        _form(imo=9116677, length_ft=250.0,
+        _form(imo=9116670, length_ft=250.0,
               etb=dt.date(2026, 7, 2), etd=dt.date(2026, 7, 5)),
     )
 
@@ -375,13 +406,13 @@ def test_empty_submission_records_nothing(db_session):
 
 def test_edit_creates_reservation_when_arrival_date_added(db_session):
     # Originally no ETB -> intake landed, no reservation.
-    out = record_manual_request(db_session, _form(imo=9001122, etb=None))
+    out = record_manual_request(db_session, _form(imo=9001124, etb=None))
     assert out["reservation_id"] is None
 
     edited = update_manual_request(
         db_session,
         out["intake_event_id"],
-        _form(imo=9001122, etb=dt.date(2026, 7, 1), etd=dt.date(2026, 7, 5)),
+        _form(imo=9001124, etb=dt.date(2026, 7, 1), etd=dt.date(2026, 7, 5)),
     )
     assert edited["reservation_id"] is not None
     ev = db_session.execute(
@@ -405,12 +436,12 @@ def test_edit_rejects_online_form_rows(db_session):
 
 def test_edit_missing_event_raises_lookup(db_session):
     with pytest.raises(LookupError):
-        update_manual_request(db_session, 999999, _form(imo=9334455))
+        update_manual_request(db_session, 999999, _form(imo=9334454))
 
 
 def test_delete_removes_intake_event_and_reservation(db_session):
     ev0, res0 = _counts(db_session)
-    out = record_manual_request(db_session, _form(imo=9445566))
+    out = record_manual_request(db_session, _form(imo=9445564))
     rid = out["reservation_id"]
     assert rid is not None
 
@@ -429,7 +460,7 @@ def test_delete_removes_intake_event_and_reservation(db_session):
 
 def test_delete_without_reservation(db_session):
     # No ETB -> intake landed but no reservation; delete still drops the event.
-    out = record_manual_request(db_session, _form(imo=9667788, etb=None))
+    out = record_manual_request(db_session, _form(imo=9667784, etb=None))
     assert out["reservation_id"] is None
 
     deleted = delete_manual_request(db_session, out["intake_event_id"])
@@ -483,7 +514,7 @@ def test_create_endpoint_rejects_duplicate_imo_cleanly(client, db_session):
     # fail with a clean 4xx (not a 500) and leave no orphan berth-request card.
     first = client.post(
         "/intake/berth-request",
-        json={"source": "phone", "vessel": "ALPHA", "imo": 9095959,
+        json={"source": "phone", "vessel": "ALPHA", "imo": 9095955,
               "draft_ft": 10.0, "etb": "2026-07-10T08:00"},
     )
     assert first.status_code == 201
@@ -491,7 +522,7 @@ def test_create_endpoint_rejects_duplicate_imo_cleanly(client, db_session):
 
     clash = client.post(
         "/intake/berth-request",
-        json={"source": "phone", "vessel": "BRAVO", "imo": 9095959,
+        json={"source": "phone", "vessel": "BRAVO", "imo": 9095955,
               "draft_ft": 10.0, "etb": "2026-07-11T08:00"},
     )
     assert clash.status_code == 422
@@ -508,7 +539,7 @@ def test_edit_request_endpoint_updates_reservation_view(client, db_session):
     # confirm the Reservations view reflects it — with no extra berth-request row.
     created = client.post(
         "/intake/berth-request",
-        json={"source": "phone", "vessel": "OLD NAME", "imo": 9090909,
+        json={"source": "phone", "vessel": "OLD NAME", "imo": 9090905,
               "draft_ft": 31.1, "etb": "2026-07-10T08:00"},
     )
     assert created.status_code == 201
@@ -518,7 +549,7 @@ def test_edit_request_endpoint_updates_reservation_view(client, db_session):
 
     patched = client.patch(
         f"/intake/berth-requests/{intake_id}",
-        json={"source": "phone", "vessel": "NEW NAME", "imo": 9090909,
+        json={"source": "phone", "vessel": "NEW NAME", "imo": 9090905,
               "draft_ft": 31.1, "etb": "2026-07-10T08:00"},
     )
     assert patched.status_code == 200
