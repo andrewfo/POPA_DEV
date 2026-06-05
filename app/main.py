@@ -25,7 +25,11 @@ from app import __version__
 from app.auth import BasicAuthMiddleware
 from app.config import get_settings
 from app.conflicts import find_conflicts
-from app.crosswalk import geo_to_station, segment_dockno_params
+from app.crosswalk import (
+    geo_to_station,
+    segment_corps_params,
+    segment_dockno_params,
+)
 from app.db import get_session
 from app.edit import (
     ReservationCreate,
@@ -197,9 +201,10 @@ def positions_recent(
 
     Each fix carries an ``alongside`` flag — whether it sits in the berthing
     zone (the digitized apron polygon, else a centerline buffer; the one
-    predicate in ``app/occupancy/alongside.py``). The map uses ``alongside`` plus
-    a low SOG to colour a contact moored (green) vs underway (red), so a vessel
-    stopped mid-channel reads underway, not moored."""
+    predicate in ``app/occupancy/alongside.py``). The map colours a contact by
+    ship-type category and uses ``alongside`` plus a low SOG to show state by
+    motion — moored contacts sit still, underway ones pulse — so a vessel stopped
+    mid-channel reads underway, not moored."""
     point = "ST_SetSRID(ST_MakePoint(pr.lon, pr.lat), 4326)"
     rows = session.execute(
         text(
@@ -227,9 +232,10 @@ def positions_recent(
             "heading": float(r.heading) if r.heading is not None else None,
             "msg_ts": r.msg_ts.isoformat() if r.msg_ts else None,
             "vessel_name": r.vessel_name,
-            # AIS numeric ship type (e.g. 52 = tug, 31/32 = towing); lets the map
-            # tint tugs distinctly from cargo/tanker traffic. NULL until the
-            # vessel's ShipStaticData lands.
+            # AIS numeric ship type (ITU-R M.1371: 80s tanker, 70s cargo, 52 tug,
+            # 33 dredger, 50 pilot, ...); the map buckets it into a coloured
+            # category (shipTypeCategory). NULL until the vessel's ShipStaticData
+            # lands.
             "ship_type": r.ship_type,
             "alongside": bool(r.alongside),
         }
@@ -451,9 +457,18 @@ def geo_to_station_endpoint(
     lat: float, lon: float, segment_id: int | None = None,
     session: Session = Depends(get_session),
 ) -> dict:
-    """Project a lat/lon onto the wharf centerline -> canonical POPA station."""
+    """Project a lat/lon onto the wharf centerline -> canonical POPA station,
+    with the Corps/USACE and Dock No. equivalents converted server-side through
+    the per-segment crosswalk (the UI never does stationing math)."""
     station = geo_to_station(session, lat, lon, segment_id)
-    return {"lat": lat, "lon": lon, "popa_station": station}
+    corps = dockno = None
+    if station is not None:
+        corps = segment_corps_params(session, segment_id).from_popa(station)
+        dockno = segment_dockno_params(session, segment_id).from_popa(station)
+    return {
+        "lat": lat, "lon": lon, "popa_station": station,
+        "corps": corps, "dockno": dockno,
+    }
 
 
 @app.post("/intake/berth-request", status_code=201)
