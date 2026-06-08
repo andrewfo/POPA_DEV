@@ -36,7 +36,7 @@ import json
 from dataclasses import dataclass, field
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.intake.manual import BerthRequestForm, valid_imo
 
@@ -46,6 +46,20 @@ from app.intake.manual import BerthRequestForm, valid_imo
 # key never breaks validation.
 class LlmExtraction(BaseModel):
     model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_nulls(cls, data):
+        # The system prompt tells the model to emit ``null`` for absent/ambiguous
+        # values. Most fields are Optional and accept it, but the few
+        # non-Optional ones (``bunkers``, ``bunkering_acknowledged``,
+        # ``confidence``) would raise a ValidationError on an explicit ``null`` —
+        # which ``extraction_from_json`` then swallows, discarding the *entire*
+        # otherwise-good extraction. Strip null-valued keys up front so every
+        # such field falls back to its declared default instead.
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if v is not None}
+        return data
 
     vessel: str | None = None
     imo: int | None = None
@@ -324,10 +338,15 @@ def openrouter_complete(
 ):
     """Build a ``complete`` callable that POSTs to OpenRouter's OpenAI-compatible
     chat-completions endpoint. ``temperature=0`` for stable extraction; asks for a
-    JSON object response. Raises on HTTP error (the worker decides retry/skip)."""
+    JSON object response. Raises on HTTP error (the worker decides retry/skip).
+
+    Holds a single pooled ``httpx.Client`` so a batch of rows reuses one
+    keep-alive connection instead of a fresh TLS handshake per call. The client
+    lives for the worker's lifetime (process exit closes it)."""
+    client = httpx.Client(timeout=timeout)
 
     def complete(messages: list[dict]) -> str:
-        resp = httpx.post(
+        resp = client.post(
             f"{base_url}/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
@@ -339,7 +358,6 @@ def openrouter_complete(
                 "temperature": 0,
                 "response_format": {"type": "json_object"},
             },
-            timeout=timeout,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]

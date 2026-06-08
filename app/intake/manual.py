@@ -59,8 +59,16 @@ BUNKER_TYPES = {
 
 def dedupe_key(raw: dict) -> str:
     """Stable content hash of a raw intake row (order-independent), so an
-    identical re-submission is deduped at the ``intake_event`` level."""
-    blob = json.dumps(raw, sort_keys=True, ensure_ascii=False, default=str)
+    identical re-submission is deduped at the ``intake_event`` level.
+
+    ``source_raw`` (the verbatim upstream payload — e.g. a full Dataverse row) is
+    **excluded** from the hash: such rows carry volatile system columns
+    (``modifiedon``, ``@odata.etag``, formatted-value annotations) that drift
+    between polls, so hashing them would defeat idempotency and re-land the same
+    logical request on a re-poll. The normalized form fields are the stable
+    identity; the verbatim payload is still preserved in ``intake_event.raw``."""
+    stable = {k: v for k, v in raw.items() if k != "source_raw"}
+    blob = json.dumps(stable, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
@@ -655,7 +663,10 @@ def update_manual_request(
     """
     existing = session.execute(
         select(
-            IntakeEvent.id, IntakeEvent.source, IntakeEvent.reservation_id
+            IntakeEvent.id,
+            IntakeEvent.source,
+            IntakeEvent.reservation_id,
+            IntakeEvent.raw,
         ).where(IntakeEvent.id == intake_id)
     ).first()
     if existing is None:
@@ -665,6 +676,19 @@ def update_manual_request(
             f"only manual-channel requests ({', '.join(EDITABLE_SOURCES)}) "
             f"can be edited, not {existing.source!r}"
         )
+
+    # The operator edit form has no inputs for the provenance-only fields
+    # (``source_raw`` — the verbatim upstream row — ``signature``, and the AI
+    # ``notes`` caveat), so a PATCH omits them. Carry them forward from the stored
+    # raw rather than wiping an AI card's verbatim Dataverse payload and
+    # confidence note on the first sanctioned edit.
+    prior = existing.raw or {}
+    if form.source_raw is None:
+        form.source_raw = prior.get("source_raw")
+    if form.signature is None:
+        form.signature = prior.get("signature")
+    if form.notes is None:
+        form.notes = prior.get("notes")
 
     req = normalize_form(form)
     key = dedupe_key(req.raw)

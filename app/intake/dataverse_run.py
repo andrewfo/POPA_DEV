@@ -62,12 +62,15 @@ class DataverseClient:
         self._timeout = timeout
         self._token: str | None = None
         self._token_exp = 0.0
+        # One pooled client so a poll's token + fetch + per-row marks reuse a
+        # keep-alive connection instead of a fresh TLS handshake per call.
+        self._http = httpx.Client(timeout=timeout)
 
     # --- auth ---
     def _bearer(self) -> str:
         if self._token and time.time() < self._token_exp - 60:
             return self._token
-        resp = httpx.post(
+        resp = self._http.post(
             f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token",
             data={
                 "grant_type": "client_credentials",
@@ -95,7 +98,7 @@ class DataverseClient:
     def fetch_new(self, *, status_new: int, limit: int) -> list[dict]:
         """Rows whose Request Status = ``status_new``, oldest first, capped at
         ``limit``."""
-        resp = httpx.get(
+        resp = self._http.get(
             f"{self._base}/{self.table}",
             params={
                 "$filter": f"{self.status_field} eq {status_new}",
@@ -103,17 +106,15 @@ class DataverseClient:
                 "$top": str(limit),
             },
             headers=self._headers(),
-            timeout=self._timeout,
         )
         resp.raise_for_status()
         return resp.json().get("value", [])
 
     def mark_triaged(self, row_id: str, status_triaged: int) -> None:
-        resp = httpx.patch(
+        resp = self._http.patch(
             f"{self._base}/{self.table}({row_id})",
             json={self.status_field: status_triaged},
             headers={**self._headers(), "Content-Type": "application/json"},
-            timeout=self._timeout,
         )
         resp.raise_for_status()
 
@@ -128,26 +129,63 @@ def process_batch(
     status_triaged: int,
     limit: int,
     record=record_manual_request,
+    recorded_ids: set | None = None,
 ) -> dict:
     """Fetch a batch of new requests, parse + record each, then mark it triaged.
 
     One transaction per row: a row that records cleanly is committed and marked
-    before the next is touched, so one bad row can't lose the batch. A row that
-    fails to *mark* (but recorded) is left ``New`` and reappears next poll — the
-    intake dedupe makes the re-record a no-op (only one wasted LLM call), so the
-    failure mode is safe, not a duplicate. Returns a summary dict."""
+    before the next is touched, so one bad row can't lose the batch.
+
+    A row that records but then fails to *mark* triaged is left ``New`` and
+    reappears next poll. To avoid re-billing the LLM for it on every poll (a real
+    cost if the mark keeps failing, e.g. a missing write permission), its id is
+    remembered in ``recorded_ids`` (hoist this across polls — see ``main``); on a
+    later poll such a row is only re-marked, never re-parsed/re-recorded. The
+    intake dedupe is still the backstop if the id cache is lost (process
+    restart). Returns a summary dict."""
+    if recorded_ids is None:
+        recorded_ids = set()
     rows = client.fetch_new(status_new=status_new, limit=limit)
-    summary = {"fetched": len(rows), "recorded": 0, "skipped": 0, "errors": 0}
+    summary = {
+        "fetched": len(rows),
+        "recorded": 0,
+        "skipped": 0,
+        "remarked": 0,
+        "errors": 0,
+    }
     for row in rows:
         row_id = row.get(client.id_field)
+        # Already recorded on a prior poll but its triage-mark failed: retry only
+        # the mark, never re-bill the LLM or re-record.
+        if row_id is not None and row_id in recorded_ids:
+            try:
+                client.mark_triaged(row_id, status_triaged)
+                recorded_ids.discard(row_id)
+                summary["remarked"] += 1
+            except Exception:  # noqa: BLE001 - keep going; retry again next poll
+                summary["errors"] += 1
+                logger.exception("retry mark_triaged failed for %s", row_id)
+            continue
         try:
             result = parse_request(row, complete=complete, source=source)
             result.form.source_raw = row  # preserve the verbatim Dataverse row
             outcome = record(session, result.form)
             session.commit()
-            summary["skipped" if outcome.get("skipped") else "recorded"] += 1
+            # A duplicate (dedupe no-op) is a skip, not a fresh record — its path
+            # returns ``duplicate`` rather than ``skipped``, so count both here.
+            no_op = outcome.get("skipped") or outcome.get("duplicate")
+            summary["skipped" if no_op else "recorded"] += 1
             if row_id is not None:
-                client.mark_triaged(row_id, status_triaged)
+                try:
+                    client.mark_triaged(row_id, status_triaged)
+                except Exception:  # noqa: BLE001 - recorded; just remember to re-mark
+                    recorded_ids.add(row_id)
+                    summary["errors"] += 1
+                    logger.exception(
+                        "recorded row %s but mark_triaged failed; will re-mark "
+                        "next poll without re-parsing",
+                        row_id,
+                    )
         except Exception:  # noqa: BLE001 - one bad row must not kill the batch
             session.rollback()
             summary["errors"] += 1
@@ -179,10 +217,16 @@ def main() -> None:
         )
     if not settings.openrouter_api_key:
         raise SystemExit("OPENROUTER_API_KEY is not set. Worker not started.")
-    if not (settings.dataverse_status_new and settings.dataverse_status_triaged):
+    if settings.dataverse_status_new is None or settings.dataverse_status_triaged is None:
         raise SystemExit(
             "DATAVERSE_STATUS_NEW and DATAVERSE_STATUS_TRIAGED must be the choice "
             "option values from your Request Status column. Worker not started."
+        )
+    if settings.dataverse_status_new == settings.dataverse_status_triaged:
+        raise SystemExit(
+            "DATAVERSE_STATUS_NEW and DATAVERSE_STATUS_TRIAGED must differ; equal "
+            "values mean every row stays in the polled state and is re-parsed each "
+            "poll. Worker not started."
         )
 
     client = _build_client(settings)
@@ -199,6 +243,10 @@ def main() -> None:
         poll,
     )
 
+    # Ids of rows recorded but not yet successfully marked triaged, carried across
+    # polls so a stuck mark is retried without re-billing the LLM (see
+    # process_batch). Bounded by the count of genuinely stuck rows.
+    recorded_ids: set = set()
     while True:
         session = SessionLocal()
         try:
@@ -210,6 +258,7 @@ def main() -> None:
                 status_new=settings.dataverse_status_new,
                 status_triaged=settings.dataverse_status_triaged,
                 limit=settings.dataverse_batch_limit,
+                recorded_ids=recorded_ids,
             )
             if summary["fetched"]:
                 logger.info("batch: %s", summary)

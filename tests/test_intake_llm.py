@@ -68,6 +68,24 @@ def test_extraction_non_object_degrades_to_empty():
     assert notes
 
 
+def test_extraction_tolerates_null_on_non_optional_fields():
+    # The prompt tells the model to emit null for absent/ambiguous values. A null
+    # on a non-Optional field (bunkers/bunkering_acknowledged/confidence) must
+    # NOT discard the whole extraction — the good fields must survive, the
+    # nulled ones fall back to their defaults.
+    ext, notes = extraction_from_json(
+        '{"vessel": "SAGA ADVENTURE", "imo": 9317406, "etb": "2026-06-16T08:00", '
+        '"bunkers": null, "bunkering_acknowledged": null, "confidence": null}'
+    )
+    assert ext.vessel == "SAGA ADVENTURE"
+    assert ext.imo == 9317406
+    assert ext.etb == "2026-06-16T08:00"
+    assert ext.bunkers is False
+    assert ext.bunkering_acknowledged is False
+    assert ext.confidence == 0.0
+    assert notes == []
+
+
 # --- to_form mapping -------------------------------------------------------
 def test_to_form_passes_feet_through_and_parses_dates():
     ext = LlmExtraction(

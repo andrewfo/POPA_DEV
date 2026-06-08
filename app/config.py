@@ -13,7 +13,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        # Treat a blank env var (e.g. an unfilled `DATAVERSE_STATUS_NEW=` in the
+        # .env template) as unset, so it falls back to the field default instead
+        # of trying to parse "" — otherwise an empty optional-int crashes every
+        # role at startup.
+        env_ignore_empty=True,
     )
 
     # --- Database ---
@@ -80,10 +87,12 @@ class Settings(BaseSettings):
     # Choice option values for the Request Status column — read the exact integers
     # from your solution (make.powerapps.com -> the choice column shows each
     # option's value). The worker filters on "= new" and PATCHes to "triaged"
-    # after recording, so a row is parsed once. Both must be set or the worker
-    # refuses to run (it would otherwise re-parse every row each poll).
-    dataverse_status_new: int = 0
-    dataverse_status_triaged: int = 0
+    # after recording, so a row is parsed once. Both must be set (and differ) or
+    # the worker refuses to run (it would otherwise re-parse every row each poll).
+    # ``None`` is the unset sentinel — 0 is a *legitimate* option value (some
+    # choice columns number from 0), so we can't use 0 to mean "not configured".
+    dataverse_status_new: int | None = None
+    dataverse_status_triaged: int | None = None
     dataverse_poll_seconds: int = 300
     dataverse_batch_limit: int = 25
 
