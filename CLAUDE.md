@@ -191,11 +191,21 @@ surfaces as a 409.
    highlights the contested stretch. The **draft-vs-controlling-depth** half is
    deferred (no depth data layer yet; confirm stays warned-not-enforced).
 7. 🟡 Request intake — **capture built** ahead of order (`app/intake/*`):
-   **manual phone/email/operator entry** is now the sole intake channel
+   **manual phone/email/operator entry** is the primary intake channel
    (`POST /intake/berth-request` + a form on the map page); the automated
-   online-form feed (Adobe Sign → SharePoint CSV/Graph) was retired. Each entry
-   lands raw in `intake_event` (deduped) and creates a `requested` reservation
-   with an **empty/unassigned `station_range`**. A **manual edit surface**
+   Adobe-Sign online-form feed was retired, but an **optional AI-assisted pull
+   channel** was then added (`app/intake/llm.py` + `dataverse_run.py`): a worker
+   polls the Power Pages / Dataverse "Berth Request" table **outbound**
+   (Azure AD client-creds — no inbound exposure, no HTTP-connector DLP ask),
+   hands each messy row to a cheap LLM via **OpenRouter** (default Gemini Flash)
+   that normalizes it into a `BerthRequestForm`, and records it through the
+   **same `record_manual_request` pipeline**. The model **proposes** (and never
+   places — placement/confirm stay the operator's, like AIS verification); its
+   confidence/caveats ride onto `reservation.notes`, the verbatim source row is
+   preserved in `intake_event.raw` (`BerthRequestForm.source_raw`), and cards are
+   tagged `source='email'` so they stay editable. Each entry (manual or AI) lands
+   raw in `intake_event` (deduped) and creates a `requested` reservation with an
+   **empty/unassigned `station_range`**. A **manual edit surface**
    (`app/edit.py`, sidebar forms over `PATCH /vessels/{id}`,
    `POST /reservations`, `PATCH`/`DELETE /reservations/{id}`) now lets an
    operator correct vessel records and create/edit/cancel/delete reservations,
@@ -236,10 +246,15 @@ row (AIS can't position a not-yet-arrived ship; observed ranges are approximate 
 placement stays operator-driven, and a future optimizer's). The deferred **auto
 status-mutation** half is now built too (`expire_stale` /
 `POST /verification/sweep` + the occupancy worker): stale planned rows past their
-window + grace auto-archive to `completed`/`cancelled`. What remains on step 7:
-the legacy-spreadsheet backfill *commit*. Step 7 intake
-*capture* plus a manual *edit* surface landed early at the user's request;
-step 6's draft-vs-controlling-depth gate is deferred (no depth data layer yet).
+window + grace auto-archive to `completed`/`cancelled`. An **optional AI-assisted
+intake channel** is also now built (`app/intake/llm.py` + `dataverse_run.py`): a
+worker pulls the Power Pages / Dataverse "Berth Request" table outbound and a
+cheap LLM (OpenRouter / Gemini Flash) normalizes each row into a
+`BerthRequestForm`, recorded through the same `record_manual_request` pipeline —
+it **proposes, never places**. What remains on step 7: the legacy-spreadsheet
+backfill *commit*. Step 7 intake *capture* plus a manual *edit* surface landed
+early at the user's request; step 6's draft-vs-controlling-depth gate is deferred
+(no depth data layer yet).
 DB-integration tests need a live PostGIS (they auto-skip without one); pure
 logic — crosswalk, detector/projection, conflict overlap predicates, intake
 parsing & normalization, edit range/validation helpers — is unit-tested.
@@ -269,10 +284,17 @@ app/
     ingest.py          # source-agnostic Ingestor (upsert vessel, land positions)
     run.py             # runnable: python -m app.ais.run
   occupancy/           # step 5: detect.py, project.py, alongside.py, derive.py, run.py
-  intake/              # step 7 capture: manual.py — the sole intake channel
-                       #   (phone/email/operator entry + dedupe_key + in-place
-                       #   request edit/delete: record/update/delete_manual_request).
-                       #   The online-form feed (records/source/ingest/run) was retired.
+  intake/              # step 7 capture: manual.py — manual phone/email/operator
+                       #   entry + dedupe_key + in-place request edit/delete
+                       #   (record/update/delete_manual_request). The Adobe-Sign
+                       #   online-form feed was retired; an OPTIONAL AI-assisted
+                       #   PULL channel was then added (proposes, never places):
+                       #   llm.py            # OpenRouter (Gemini Flash) normalizer:
+                       #                     #   messy row -> BerthRequestForm; tolerant,
+                       #                     #   unit-tested with a faked LLM
+                       #   dataverse_run.py  # worker: poll Power Pages/Dataverse table
+                       #                     #   (outbound, client-creds) -> llm -> the
+                       #                     #   same record_manual_request pipeline
 data/gis/              # build_centerline.py / to_geojson.py: real centerline + apron from
                        #   berth shapefiles (stationing) + quayface.* survey (quay geometry)
                        #   -> static GeoJSON + seed JSON
@@ -316,10 +338,12 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   (a TLS-terminating reverse proxy on a sanctioned network is the sole front
   door — see `DEPLOY.md`). Don't widen that bind to `0.0.0.0` without putting
   TLS in front.
-- Intake today is manual-only (`app/intake/manual.py`); the automated online-form
-  feed was retired. A new intake channel = a thin call into `app/intake/`, landing
-  raw in `intake_event` (deduped by content-hash `dedupe_key`) before any
-  normalization — never skip the raw landing. A
+- Intake is operator-driven (`app/intake/manual.py`); the Adobe-Sign online-form
+  feed was retired. There is also an **optional AI-assisted pull channel**
+  (`app/intake/llm.py` + `dataverse_run.py`) — see the rules for it below. A new
+  intake channel = a thin call into `app/intake/`, landing raw in `intake_event`
+  (deduped by content-hash `dedupe_key`) before any normalization — never skip the
+  raw landing. A
   `requested` reservation projected from intake carries an **empty
   `station_range`** until reconciliation assigns the berth; an empty range never
   conflicts, which is intentional, so don't "fix" it with a placeholder span.
@@ -357,6 +381,24 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   /intake/berth-requests/{id}` likewise removes a manual row outright (raw event
   + its projected reservation), same channel restriction. New *channels* still
   never skip the raw landing.
+- **The AI-assisted intake channel** (`app/intake/llm.py` + `dataverse_run.py`)
+  is a *normalizer*, not a placer — it follows the same "AI proposes, the
+  deterministic layer + operator dispose" rule as AIS verification. The LLM (via
+  **OpenRouter**, model is a config string defaulting to the cheapest Gemini
+  Flash; `httpx`, no SDK dep) only turns a messy row into a `BerthRequestForm`;
+  it then flows through the **same `record_manual_request`** path, so it lands raw
+  + dedupes + creates the empty-range `requested` row exactly like a hand entry.
+  Keep the parse **tolerant** — a bad IMO / unparseable date / ambiguous `"X or
+  Y"` becomes null + a note, never a hard failure (the network call is isolated
+  behind a `complete` callable so the mapping stays unit-testable with a faked
+  LLM). It **never places** (no `station_range`, no confirm) and never auto-writes
+  status — placement/confirm stay the operator's. The worker pulls **outbound**
+  from Dataverse (Azure AD client-creds); do not replace it with an inbound
+  webhook into the api (that reopens the 127.0.0.1-bind + HTTP-connector DLP
+  problem the pull was chosen to avoid). AI cards are tagged `source='email'` (a
+  manual channel) so an operator can still edit/delete them; the verbatim source
+  row is preserved via `BerthRequestForm.source_raw`, and the model's confidence/
+  caveats via `BerthRequestForm.notes` → `reservation.notes`.
 - The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel
   edit overwrites the fields it sets (unlike intake *create*, which only fills
   NULLs except when an IMO resolves to the same manual-only ship — see above —

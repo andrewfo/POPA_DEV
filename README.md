@@ -13,9 +13,12 @@ station overlaps". See [`CLAUDE.md`](./CLAUDE.md) for the full design.
 > retired) were added ahead of the build order. Step 7's **AIS verification
 > layer** now exists too (`GET /verification`): after-arrival checks of operator
 > placements against observed AIS (arrived / no-show / awaiting / where-planned /
-> unplanned), read-only — *not* an auto-placer. Still to come: optional auto
-> status-mutation off those findings, and the legacy-spreadsheet backfill commit.
-> See [`PLAN.md`](./PLAN.md) for status.
+> unplanned), read-only — *not* an auto-placer — plus auto status-mutation of
+> stale rows (`POST /verification/sweep`). An **optional AI-assisted intake
+> channel** also exists: a worker pulls the Power Pages / Dataverse berth-request
+> table and a cheap LLM (OpenRouter / Gemini Flash) normalizes each row before it
+> lands as a `requested` row — it *proposes, never places*. Still to come: the
+> legacy-spreadsheet backfill commit. See [`PLAN.md`](./PLAN.md) for status.
 
 ## Prerequisites
 
@@ -77,8 +80,12 @@ uvicorn app.main:app --reload
 # AIS ingestion (live aisstream.io websocket -> DB). Long-running; reconnects.
 python -m app.ais.run
 
-# Berth-request intake (online-form CSV export -> intake_event; idempotent)
-python -m app.intake.run path/to/BerthRequests.csv [--dry-run]
+# OPTIONAL AI-assisted intake worker: poll the Power Pages / Dataverse berth-
+# request table, LLM-normalize each new row (OpenRouter), record it as a
+# `requested` reservation, then mark the row triaged. Long-running; outbound only.
+# Needs OPENROUTER_API_KEY + the DATAVERSE_* vars (see .env.example); self-exits
+# if they're unset. Manual entry stays available via the form on the map page.
+python -m app.intake.dataverse_run
 ```
 
 ## Deploy (production)

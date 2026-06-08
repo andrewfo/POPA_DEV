@@ -94,5 +94,15 @@ services:
     # $${...} defers to the container shell so OCC_EVERY comes from env_file.
     command: ["sh", "-c", "while true; do python -m app.occupancy.run; sleep $${OCC_EVERY:-60}; done"]
 
+  # OPTIONAL fifth role: poll the Power Pages / Dataverse "Berth Request" table,
+  # LLM-normalize each new row, and record it as a `requested` reservation. Loops
+  # internally (DATAVERSE_POLL_SECONDS). It self-exits at startup if the Dataverse
+  # / OpenRouter env vars aren't set, so leaving them blank simply disables intake
+  # automation — `restart: "no"` so a disabled worker doesn't crash-loop.
+  intake-dataverse:
+    <<: *app
+    restart: "no"
+    command: ["python", "-m", "app.intake.dataverse_run"]
+
 volumes:
   popa_wharf_pgdata_prod:

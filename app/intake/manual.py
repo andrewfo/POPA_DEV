@@ -44,6 +44,18 @@ FEET_PER_M = 3.280839895
 MANUAL_SOURCES = ("phone", "email", "operator")
 _DEFAULT_SOURCE = "phone"
 
+# Bunker fuel grades offered on the online request form (code -> full label).
+# Mirrors the Power Pages "Bunkering Type" choice; stored by code, rendered with
+# the label in notes. Kept here so the form, normalization, and the Dataverse
+# spec (docs/power-pages-berth-intake.md) share one list.
+BUNKER_TYPES = {
+    "BIO": "Biofuels/Alternative Fuels (BIO)",
+    "HFO": "Heavy Fuel Oil (HFO)",
+    "LNG": "Liquified Natural Gas (LNG)",
+    "MGO": "Marine Gas Oil (MGO)",
+    "VLSFO": "Very Low-Sulfur Fuel Oil (VLSFO)",
+}
+
 
 def dedupe_key(raw: dict) -> str:
     """Stable content hash of a raw intake row (order-independent), so an
@@ -92,6 +104,15 @@ class BerthRequestForm(BaseModel):
     draft_ft: float | None = None
     bunkers: bool = False
 
+    # Bunkering detail (only meaningful when ``bunkers`` is set). ``bunker_type``
+    # is one of BUNKER_TYPES (stored by code); ``bunker_qty_mt`` is the
+    # approximate fuel quantity in **metric tons** (not feet/lbs — bunkers are
+    # quoted in MT); ``bunkering_acknowledged`` is the requestor ticking the
+    # port's bunkering acknowledgement on the online form.
+    bunkering_acknowledged: bool = False
+    bunker_type: str | None = None
+    bunker_qty_mt: float | None = None
+
     # "Vessel is due from <origin> on <etb>" / "To Sail For <dest> on <etd>".
     # ETB/ETD carry a time of day (arrival/departure timestamp), interpreted as
     # Central Time; a bare date is still accepted and lands at midnight Central.
@@ -108,6 +129,28 @@ class BerthRequestForm(BaseModel):
 
     agency: str | None = None
 
+    # Who filed the request (the online form's requestor block). Captured into
+    # notes + raw with no dedicated columns — same treatment as agency/flag.
+    # ``signature`` is the online form's typed/drawn acceptance; kept in raw for
+    # audit and not surfaced on the operator entry form.
+    requestor_name: str | None = None
+    requestor_email: str | None = None
+    requestor_phone: str | None = None
+    signature: str | None = None
+
+    # Free-text note carried onto the reservation. The hand-entry form leaves
+    # this blank; the AI-assisted path (app/intake/llm.py) uses it to surface the
+    # model's confidence/caveats ("LLM: ETD 'TBA' -> null") so an operator knows
+    # which auto-parsed cards to eyeball. Appended verbatim to reservation.notes.
+    notes: str | None = None
+
+    # The verbatim upstream payload when this request was derived from another
+    # system (the AI path sets it to the original Dataverse row). It rides into
+    # ``intake_event.raw`` via ``model_dump`` so the pre-normalization input is
+    # preserved — "never skip the raw landing" — and folds into the dedupe hash,
+    # so the same source row is idempotent. The hand-entry form leaves it None.
+    source_raw: dict | None = None
+
     @field_validator("imo")
     @classmethod
     def _check_imo(cls, v: int | None) -> int | None:
@@ -119,6 +162,16 @@ class BerthRequestForm(BaseModel):
                 "correct check digit)"
             )
         return v
+
+    @field_validator("bunker_type")
+    @classmethod
+    def _norm_bunker_type(cls, v: str | None) -> str | None:
+        # Normalize the choice to its uppercase code (e.g. "mgo" -> "MGO"); an
+        # unrecognized value is kept verbatim and warned about in normalize_form,
+        # not rejected (a bad fuel grade is harmless, unlike a bad IMO key).
+        if v is None:
+            return None
+        return v.strip().upper() or None
 
 
 @dataclass
@@ -175,12 +228,33 @@ def _cargo_summary(form: BerthRequestForm) -> str | None:
     return "; ".join(parts)[:200]
 
 
+def _bunker_summary(form: BerthRequestForm) -> str:
+    """One-line bunkering description for notes: ``bunkers: no`` when not taking
+    bunkers; otherwise ``bunkers: yes`` plus type (full label), approximate
+    metric tons, and whether the acknowledgement was given."""
+    if not form.bunkers:
+        return "bunkers: no"
+    detail: list[str] = []
+    if form.bunker_type:
+        detail.append(BUNKER_TYPES.get(form.bunker_type, form.bunker_type))
+    if form.bunker_qty_mt is not None:
+        detail.append(f"~{form.bunker_qty_mt:g} MT")
+    if form.bunkering_acknowledged:
+        detail.append("acknowledged")
+    return "bunkers: yes" + (f" ({', '.join(detail)})" if detail else "")
+
+
 def _notes(form: BerthRequestForm, source: str, warnings: list[str]) -> str:
     """Assemble human-readable notes from the fields without dedicated columns
     (agent, flag, line, DWT, bunkers, origin/destination, berth status)."""
     bits = [f"manual entry ({source})"]
     if form.agency:
         bits.append(f"agent: {form.agency}")
+    requestor = ", ".join(
+        b for b in (form.requestor_name, form.requestor_email, form.requestor_phone) if b
+    )
+    if requestor:
+        bits.append(f"requestor: {requestor}")
     if form.ss_line:
         bits.append(f"line: {form.ss_line}")
     if form.flag:
@@ -191,8 +265,10 @@ def _notes(form: BerthRequestForm, source: str, warnings: list[str]) -> str:
         bits.append(f"destinations: {form.destinations}")
     if form.deadweight_lbs is not None:
         bits.append(f"DWT {form.deadweight_lbs:g} lbs")
-    bits.append(f"bunkers: {'yes' if form.bunkers else 'no'}")
+    bits.append(_bunker_summary(form))
     bits.append("berth UNASSIGNED (port to assign)")
+    if form.notes:
+        bits.append(form.notes.strip())
     if warnings:
         bits.append("warnings: " + "; ".join(warnings))
     return "; ".join(bits)
@@ -213,6 +289,11 @@ def normalize_form(form: BerthRequestForm) -> NormalizedRequest:
         warnings.append("missing IMO — vessel not keyed; reconcile by hand")
     if form.etb is None:
         warnings.append("missing arrival date (ETB) — no time window")
+    if form.bunker_type and form.bunker_type not in BUNKER_TYPES:
+        warnings.append(
+            f"unknown bunker type {form.bunker_type!r}; expected one of "
+            f"{', '.join(BUNKER_TYPES)}"
+        )
 
     return NormalizedRequest(
         source=source,

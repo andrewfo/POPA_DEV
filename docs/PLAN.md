@@ -28,7 +28,7 @@ Docker image + `docker-compose.prod.yml` (db + one-shot migrate/seed + api + ais
 | 4 | AIS ingestion (aisstream.io → DB) | ✅ | `app/ais/*` |
 | 5 | Occupancy derivation | ✅ | `app/occupancy/*`, migration `0002`, `tests/test_occupancy_*` |
 | 6 | Conflict-detection service | ✅ | `app/conflicts.py`, `GET /conflicts` in `app/main.py`, `tests/test_conflicts*.py`, conflicts panel in `app/static/index.html` |
-| 7 | Request intake + AIS verification; legacy backfill | 🟡 capture + AIS verification built; auto status-mutation + legacy backfill TODO | `app/intake/*`, `app/verification.py`, `GET /verification`, `tests/test_verification*.py`, migrations `0003`/`0004` |
+| 7 | Request intake + AIS verification; legacy backfill | 🟡 capture + AI-assisted intake + AIS verification + auto status-mutation built; legacy backfill TODO | `app/intake/*` (incl. `llm.py` + `dataverse_run.py`), `app/verification.py`, `GET /verification`, `POST /verification/sweep`, `tests/test_verification*.py`/`test_intake_*`, migrations `0003`/`0004` |
 
 **Also built ahead of the plan** (deviations from "no UI in phase 1" / "intake
 is a later layer", both user-requested):
@@ -45,8 +45,15 @@ is a later layer", both user-requested):
     a form on the map page (`app/intake/manual.py`). Lands raw in
     `intake_event` *and* creates a `status='requested'` reservation with an
     **empty (unassigned) `station_range`** — the port assigns the berth later.
-  - What's still TODO for step 7: **reconciliation against observed AIS**, and
-    committing the legacy-spreadsheet backfill (parse exists; review→commit not).
+  - **AI-assisted intake channel (2026-06):** an optional pull worker
+    (`app/intake/dataverse_run.py`) polls the Power Pages / Dataverse "Berth
+    Request" table outbound, normalizes each messy row with a cheap LLM
+    (`app/intake/llm.py`, via **OpenRouter**, default Gemini Flash), and records
+    it through the *same* `record_manual_request` pipeline (raw preserved,
+    `requested`/empty-range row). The model **proposes**; placement/confirm stay
+    the operator's. Tagged `source='email'` so cards stay editable.
+  - What's still TODO for step 7: committing the legacy-spreadsheet backfill
+    (parse exists; review→commit not).
 
 ### Known gaps carried forward (do these regardless of feature work)
 
@@ -77,10 +84,15 @@ is a later layer", both user-requested):
   (§4), which checks these operator placements against reality after arrival.
   UI gap: the sidebar form still takes raw station feet — no berth `<select>`
   over `GET /berths` yet.
-- **Intake detail lives only in `intake_event.raw`.** Manual-entry fields with
-  no normalized column (flag, S/S line, deadweight, bunkers, cargo weights,
-  agency) are kept raw + summarized into `reservation.notes`. Promote to columns
-  if/when they're queried.
+- **Intake detail lives only in `intake_event.raw`.** Fields with no normalized
+  column (flag, S/S line, destinations, deadweight, bunkering detail — type /
+  metric tons / acknowledgement, cargo weights, agency, requestor name/email/
+  phone, signature) are kept raw + summarized into `reservation.notes`. Promote
+  to columns if/when they're queried. The `BerthRequestForm` now mirrors the
+  Power Pages **online form** (`docs/power-pages-berth-intake.md`) field-for-field
+  so a submission normalizes cleanly — **in FEET / net tons** (the app converts
+  feet→metres on ingest; the Dataverse form must not pre-convert), bunker fuel in
+  metric tons, `bunker_type` from the shared `BUNKER_TYPES` list.
 - **No automated reconnect/health proof for the AIS client.** `app/ais/run.py`
   is long-running but we have no soak test or metrics.
 - **DB tests are opt-in** and auto-skip without a database; CI needs a real
@@ -170,7 +182,9 @@ Pulled forward at the user's request. **Capture** and the **AIS verification
 layer** now both exist. (This was originally framed as request→AIS
 *reconciliation* that would auto-*place* requests; reframed this session to a
 *verification* layer — see the "Built — AIS verification layer" block below for
-why AIS can't place. Only auto status-mutation off the findings remains.)
+why AIS can't place. The auto status-mutation off those findings is now built
+too; an AI-assisted intake channel was since added. Only the legacy-spreadsheet
+backfill commit remains on step 7.)
 
 **Built:**
 - **Raw landing** — all channels land verbatim in `intake_event` *before*
@@ -219,14 +233,28 @@ so this is identity + time, not the conflict query). For each planned row
 - plus a **where_planned** flag (observed range overlaps the planned one — the
   inline form of step 6's `observed-vs-planned`), and an **unplanned** list of
   observed berthings no request covered.
-It is **read-only** — it surfaces findings, never mutates status (there's also no
-`arrived` status to advance into).
+`GET /verification` itself is **read-only**.
+
+**Built — auto status-mutation** (the once-deferred half, now shipped):
+`expire_stale` + `POST /verification/sweep` (and the occupancy worker runs it each
+batch) auto-archive a planned row whose window has been fully past for longer than
+`verification_grace_minutes` (default 60) to a **terminal** status — `completed`
+if AIS observed the vessel berth, else `cancelled` (no-show) — with an audit line
+appended to `notes`. Status-only; never places, and only ever moves a row
+*outside* the confirmed-only exclusion constraint, so it can't raise a 409.
+
+**Built — AI-assisted intake channel** (2026-06): an optional pull worker
+(`app/intake/dataverse_run.py`) polls the Power Pages / Dataverse "Berth Request"
+table outbound (Azure AD client-creds — no inbound exposure, no DLP ask), a cheap
+LLM (`app/intake/llm.py`, OpenRouter / Gemini Flash) normalizes each messy row
+into a `BerthRequestForm`, and it records through the same `record_manual_request`
+pipeline (raw preserved via `source_raw`, confidence/caveats onto `notes`,
+`requested`/empty-range row). **Proposes, never places.** Tests in
+`tests/test_intake_llm.py` + `tests/test_intake_dataverse.py` (faked LLM/client).
+Needs an Entra app-registration + Dataverse application user + an OpenRouter key
+to run live.
 
 **Still TODO:**
-- **Auto status-mutation from verification** — e.g. auto-`completed` on observed
-  departure, or flagging no-shows for bulk cancel. Deliberately deferred:
-  surfacing for operator action came first (AIS is approximate; don't auto-write
-  off it without review).
 - **Legacy spreadsheet backfill commit** — the parser is conservative and
   tested, but the parse → **human review** → commit pipeline isn't wired. Source
   is messy (`"Chem Orchard - 607'"`, ambiguous `"X or Y"`, inline
@@ -308,10 +336,6 @@ Not tied to a single step — pick up as the system matures.
 - **Scheduling optimizer / auto-assignment** (OR-Tools) — much later. This, not
   AIS, is what would ever *place* ships automatically (from requests + berth
   availability).
-- **Auto status-mutation from AIS verification** — the verification *layer* is
-  built (§4: arrival / no-show / awaiting / where-planned / unplanned, read-only),
-  but auto-*writing* status off those findings (e.g. auto-`completed` on departure)
-  is intentionally not. AIS is approximate; surface for operator action first.
 - Anything that requires blocking `observed` overlaps. Re-read the Core model
   section of `CLAUDE.md` before reaching for that.
 
@@ -334,10 +358,16 @@ Leaflet **UI** and berth-request intake **capture**. See §1.)
    AIS on `vessel_id` + time overlap; report arrival / no-show / awaiting /
    where-planned + unplanned occupancy.~~ **Done** — `app/verification.py`,
    `GET /verification`, `tests/test_verification*.py`, verification panel on the
-   map. Read-only (no auto status-mutation yet — §4 "Still TODO").
-4. **Controlling-depth** table + draft validation in the confirm path (the
+   map; plus auto status-mutation of stale rows (`expire_stale` /
+   `POST /verification/sweep`).
+4. ~~**AI-assisted intake**: pull the Power Pages / Dataverse berth-request table
+   and LLM-normalize each row into a `requested` reservation.~~ **Done** —
+   `app/intake/llm.py` + `dataverse_run.py` (OpenRouter / Gemini Flash, pull /
+   outbound, proposes-never-places); needs IT app-registration + an OpenRouter key
+   to run live.
+5. **Controlling-depth** table + draft validation in the confirm path (the
    deferred half of step 6, §3.3).
-5. **CI** with a PostGIS service container; AIS reconnect/metrics hardening.
+6. **CI** with a PostGIS service container; AIS reconnect/metrics hardening.
    (Production deployment packaging is **done** — see §5.4; the prod image makes a
    CI build/integration job straightforward.)
-6. *(Optional)* wire the legacy-spreadsheet backfill review→commit pipeline.
+7. *(Optional)* wire the legacy-spreadsheet backfill review→commit pipeline.

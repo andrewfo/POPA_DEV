@@ -50,6 +50,52 @@ class Settings(BaseSettings):
     ais_bbox_ne_lat: float = 29.866
     ais_bbox_ne_lon: float = -93.930
 
+    # --- LLM-assisted intake (OpenRouter) ---
+    # The AI normalization path (app/intake/llm.py + the Dataverse worker) reads a
+    # messy berth-request row and asks a cheap LLM to extract canonical fields.
+    # OpenRouter is OpenAI-compatible, so any model id it exposes works by string;
+    # default to the cheapest Gemini Flash. Active only when the key is set.
+    openrouter_api_key: str = Field(default="", repr=False)
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    intake_llm_model: str = "google/gemini-2.0-flash-lite-001"
+    # Source tag for AI-parsed requests. Must be a manual channel
+    # (phone|email|operator) so an operator can still edit/delete the card; these
+    # arrive from the public form, so 'email' is the honest closest fit.
+    intake_llm_source: str = "email"
+
+    # --- Dataverse berth-request poll (AI intake worker) ---
+    # The worker (app/intake/dataverse_run.py) pulls new rows from the Power Pages
+    # "Berth Request" table over the Dataverse Web API using an Azure AD
+    # app-registration (client-credentials) — outbound only, so it needs no
+    # inbound hole in the api bind and no HTTP-connector DLP exception. Active only
+    # when url + tenant + client id/secret are all set.
+    dataverse_url: str = Field(default="", repr=False)  # https://org.crm.dynamics.com
+    dataverse_tenant_id: str = Field(default="", repr=False)
+    dataverse_client_id: str = Field(default="", repr=False)
+    dataverse_client_secret: str = Field(default="", repr=False)
+    dataverse_api_version: str = "v9.2"
+    dataverse_table: str = "popa_berthrequests"  # entity set (plural logical name)
+    dataverse_id_field: str = "popa_berthrequestid"
+    dataverse_status_field: str = "popa_requeststatus"
+    # Choice option values for the Request Status column — read the exact integers
+    # from your solution (make.powerapps.com -> the choice column shows each
+    # option's value). The worker filters on "= new" and PATCHes to "triaged"
+    # after recording, so a row is parsed once. Both must be set or the worker
+    # refuses to run (it would otherwise re-parse every row each poll).
+    dataverse_status_new: int = 0
+    dataverse_status_triaged: int = 0
+    dataverse_poll_seconds: int = 300
+    dataverse_batch_limit: int = 25
+
+    @property
+    def dataverse_configured(self) -> bool:
+        return bool(
+            self.dataverse_url
+            and self.dataverse_tenant_id
+            and self.dataverse_client_id
+            and self.dataverse_client_secret
+        )
+
     # --- Conflict detection ---
     # Minimum clear separation required between two CONFIRMED vessels along the
     # wharf face (feet) — a mooring/standoff gap, not just no-overlap. Enforced

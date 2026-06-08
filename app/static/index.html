@@ -734,6 +734,21 @@
             <div><label>Deadweight (lbs)</label><input type="number" step="any" name="deadweight_lbs" /></div>
             <div class="check"><input type="checkbox" name="bunkers" id="bunkers" /><label for="bunkers" style="margin:0">Taking bunkers</label></div>
           </div>
+          <div class="grid3">
+            <div>
+              <label>Bunker type</label>
+              <select name="bunker_type">
+                <option value="">—</option>
+                <option value="BIO">Biofuels/Alternative Fuels (BIO)</option>
+                <option value="HFO">Heavy Fuel Oil (HFO)</option>
+                <option value="LNG">Liquified Natural Gas (LNG)</option>
+                <option value="MGO">Marine Gas Oil (MGO)</option>
+                <option value="VLSFO">Very Low-Sulfur Fuel Oil (VLSFO)</option>
+              </select>
+            </div>
+            <div><label>Bunker fuel (metric tons)</label><input type="number" step="any" name="bunker_qty_mt" /></div>
+            <div class="check"><input type="checkbox" name="bunkering_acknowledged" id="bunkering_acknowledged" /><label for="bunkering_acknowledged" style="margin:0">Bunkering acknowledged</label></div>
+          </div>
         </fieldset>
 
         <fieldset>
@@ -766,6 +781,16 @@
           <legend>Agency</legend>
           <label>Agency / Owner</label>
           <input type="text" name="agency" />
+        </fieldset>
+
+        <fieldset>
+          <legend>Requestor</legend>
+          <label>Name</label>
+          <input type="text" name="requestor_name" />
+          <div class="grid2">
+            <div><label>Email</label><input type="email" name="requestor_email" /></div>
+            <div><label>Phone</label><input type="tel" name="requestor_phone" /></div>
+          </div>
         </fieldset>
 
         <button type="submit" id="brSubmit">Record berth request</button>
@@ -1017,7 +1042,12 @@ const SHIP_CATEGORIES = {
 };
 // AIS type code (0-99) -> category key, per the ITU-R M.1371 ship-type table
 // (80s tanker, 70s cargo, 60s passenger, 31/32/52 tug, 33 dredger, 50 pilot).
-// Anything else — including a NULL/absent ship_type from the API — is "other".
+// 56/57 are the standard's "spare — local vessels" slots, but on the
+// Sabine-Neches inland waterway the towboat fleet broadcasts them en masse
+// (Cenac/Ingram/Martin etc.), so they read here as tug/towing rather than the
+// "other" grey they'd otherwise land in — verified against the live vessel list.
+// Anything else — including a NULL/absent ship_type from the API, code 0
+// ("not available"), and 90-99 (the spec's own "Other type") — stays "other".
 // Only the commercial-traffic buckets relevant to this port are named; fishing,
 // sailing/pleasure, etc. fall into "other".
 function shipTypeCategory(t) {
@@ -1025,7 +1055,7 @@ function shipTypeCategory(t) {
   if (t == null || Number.isNaN(n)) return "other";
   if (n >= 80 && n <= 89) return "tanker";
   if (n >= 70 && n <= 79) return "cargo";
-  if (n === 31 || n === 32 || n === 52) return "tug";
+  if (n === 31 || n === 32 || n === 52 || n === 56 || n === 57) return "tug";
   if (n === 33) return "dredger";
   if (n === 50) return "pilot";
   if (n >= 60 && n <= 69) return "passenger";
@@ -2046,15 +2076,17 @@ function isValidImo(imo) {
     result.className = "result";
     btn.disabled = true; btn.textContent = editingId ? "Saving…" : "Recording…";
 
-    // Build a typed JSON payload: skip blanks, coerce numbers, bunkers->bool.
-    const numFields = new Set(["imo", "length_ft", "beam_ft", "draft_ft", "deadweight_lbs", "inbound_tons", "outbound_tons"]);
+    // Build a typed JSON payload: skip blanks, coerce numbers, checkboxes->bool.
+    const numFields = new Set(["imo", "length_ft", "beam_ft", "draft_ft", "deadweight_lbs", "inbound_tons", "outbound_tons", "bunker_qty_mt"]);
+    const boolFields = new Set(["bunkers", "bunkering_acknowledged"]);
     const payload = {};
     for (const [k, v] of new FormData(form).entries()) {
-      if (k === "bunkers") continue;            // handled below
+      if (boolFields.has(k)) continue;          // handled below (unchecked boxes are absent from FormData)
       if (v === "" || v == null) continue;
       payload[k] = numFields.has(k) ? Number(v) : v;
     }
     payload.bunkers = form.elements.bunkers.checked;
+    payload.bunkering_acknowledged = form.elements.bunkering_acknowledged.checked;
 
     const editing = editingId;
     // Guard a content-empty NEW request: the native `required` attributes
