@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 import httpx
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from app.intake.manual import BerthRequestForm, valid_imo
+from app.intake.manual import BUNKER_TYPES, BerthRequestForm, valid_imo
 
 # The fields we ask the model to extract. Kept to the canonical berth-request
 # columns ``BerthRequestForm`` actually carries; everything optional so a sparse
@@ -110,10 +110,16 @@ class ParseResult:
 
 
 # --- prompt ----------------------------------------------------------------
+# The allowed bunker-grade codes, sourced from the one shared catalogue in
+# app/intake/manual so the prompt, the form, and normalize_form's validation
+# never drift. Computed once at import, so SYSTEM_PROMPT stays a static string
+# the provider can cache across calls.
+_BUNKER_CODES = ", ".join(BUNKER_TYPES)
+
 # Static so the provider can cache it across calls. Describes the task, the
 # canonical units/timezone rules, and the anti-hallucination guardrails that the
 # messy legacy text demands (CLAUDE.md: "X or Y", TBA, inline CANCELLED/?).
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT = f"""\
 You normalize berth-request submissions for the Port of Port Arthur into a \
 single JSON object. A submission is often messy or partial (free text, missing \
 fields, inconsistent units). Extract only what is actually present.
@@ -134,7 +140,7 @@ outbound_tons: numeric tonnages if given
 flag state; destinations: listed destination(s); deadweight_lbs: deadweight in \
 pounds if given; due_from: origin; sail_for: destination
 - bunkers: true if the vessel is taking on bunker fuel, else false; bunker_type: \
-one of BIO, HFO, LNG, MGO, VLSFO (the fuel grade, by code) or null; \
+one of {_BUNKER_CODES} (the fuel grade, by code) or null; \
 bunker_qty_mt: approximate bunker fuel quantity in METRIC TONS; \
 bunkering_acknowledged: true if a bunkering acknowledgement was given, else false
 - requestor_name, requestor_email, requestor_phone: who filed the request
@@ -271,34 +277,13 @@ def to_form(ext: LlmExtraction, *, source: str) -> tuple[BerthRequestForm, list[
     if ext.etd and etd is None:
         notes.append(f"could not parse ETD {ext.etd!r}; dropped")
 
-    form = BerthRequestForm(
-        source=source,
-        vessel=ext.vessel,
-        imo=imo,
-        length_ft=ext.length_ft,
-        beam_ft=ext.beam_ft,
-        draft_ft=ext.draft_ft,
-        etb=etb,
-        etd=etd,
-        inbound_cargo=ext.inbound_cargo,
-        inbound_tons=ext.inbound_tons,
-        outbound_cargo=ext.outbound_cargo,
-        outbound_tons=ext.outbound_tons,
-        agency=ext.agency,
-        ss_line=ext.ss_line,
-        flag=ext.flag,
-        destinations=ext.destinations,
-        deadweight_lbs=ext.deadweight_lbs,
-        due_from=ext.due_from,
-        sail_for=ext.sail_for,
-        bunkers=ext.bunkers,
-        bunker_type=ext.bunker_type,
-        bunker_qty_mt=ext.bunker_qty_mt,
-        bunkering_acknowledged=ext.bunkering_acknowledged,
-        requestor_name=ext.requestor_name,
-        requestor_email=ext.requestor_email,
-        requestor_phone=ext.requestor_phone,
-    )
+    # LlmExtraction's fields are a same-named subset of BerthRequestForm, so copy
+    # them in bulk and override only the ones that differ: imo (checksum-dropped
+    # above), etb/etd (parsed str -> datetime), and the LLM-only confidence/
+    # parse_notes (which aren't form fields). This keeps a new request column from
+    # having to be threaded through a hand-written mapping as well.
+    carried = ext.model_dump(exclude={"imo", "etb", "etd", "confidence", "parse_notes"})
+    form = BerthRequestForm(source=source, imo=imo, etb=etb, etd=etd, **carried)
     return form, notes
 
 
