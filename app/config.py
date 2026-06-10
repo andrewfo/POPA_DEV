@@ -106,15 +106,13 @@ class Settings(BaseSettings):
         )
 
     # --- Conflict detection ---
-    # Minimum clear separation required between two CONFIRMED vessels along the
-    # wharf face (feet) — a mooring/standoff gap, not just no-overlap. Enforced
-    # by the no_wharf_overlap exclusion constraint, which pads each station range
-    # by half this gap on each side before the && test (migration 0007). Two
-    # boats with a real gap of exactly this many feet are allowed; anything
-    # tighter is a conflict. NOTE: the DB constraint bakes in the literal value;
-    # changing it here is documentation only — author a new migration to change
-    # what the constraint enforces.
-    min_vessel_gap_ft: float = 75.0
+    # The minimum clear mooring gap between two CONFIRMED vessels (75 ft) is NOT a
+    # setting: the no_wharf_overlap exclusion constraint bakes the literal in (it
+    # pads each station range by half the gap before the && test — migration
+    # 0007's GAP_FT), and nothing app-side reads a config value for it. Changing
+    # the gap means authoring a new migration, not editing config. A former
+    # ``min_vessel_gap_ft`` field lived here but did nothing — it looked tunable
+    # while the constraint ignored it — so it was removed to avoid the trap.
 
     # --- Occupancy derivation (step 5) ---
     # "Alongside" buffer: a vessel within this many metres of the wharf
@@ -134,13 +132,17 @@ class Settings(BaseSettings):
 
     # --- AIS verification auto-expiry (step 7 auto status-mutation) ---
     # How long after a planned reservation's window has *fully ended* it lingers
-    # in the AIS-verification panel before being auto-archived. A row whose window
-    # just closed still shows (as arrived / no_show) so the operator can act; once
-    # it has been past its ETD by this many minutes it is swept to a terminal
-    # status — `completed` if AIS saw the vessel berth, else `cancelled` (no-show)
-    # — so it drops out of the live panel and lands in History instead. The sweep
-    # is the deferred "auto status-mutation" half of step 7. 0 disables expiry.
-    verification_grace_minutes: int = 60
+    # in the AIS-verification panel before being swept. A row whose window just
+    # closed still shows (as arrived / no_show) so the operator can act; once it has
+    # been past its ETD by this many minutes the sweep acts on evidence: `completed`
+    # if AIS saw the vessel berth, `cancelled` for a no-show of a requested/tentative
+    # row (a confirmed no-show is only flagged, not cancelled; a window with no AIS
+    # traffic at all is left alone — a dead feed is not a no-show). Defaulted to 12h,
+    # not minutes: marine ETAs routinely slip by hours, so a short grace cancels
+    # merely-late arrivals that then reappear as `unplanned`. The sweep is the
+    # deferred "auto status-mutation" half of step 7. 0 disables the grace (expire
+    # as soon as the window ends).
+    verification_grace_minutes: int = 720
 
     # --- Sidebar "Vessels" stat ---
     # The headline "Vessels" count is vessels *present* — those with an AIS fix

@@ -88,13 +88,34 @@ def where_planned(
     return station_overlaps(p_sta_lo, p_sta_hi, o_sta_lo, o_sta_hi)
 
 
-def expiry_status(arrived: bool) -> str:
-    """Terminal status a *stale* planned row is auto-archived to: ``completed`` if
-    AIS observed the vessel berth (it came and the window has since closed), else
-    ``cancelled`` — the no-show. Neither status participates in the confirmed-only
-    no-overlap exclusion constraint, so archiving can never raise an IntegrityError
-    (it only ever *removes* a row from the constraint's set)."""
-    return "completed" if arrived else "cancelled"
+def expiry_action(arrived: bool, feed_alive: bool, status: str) -> str | None:
+    """What to do with a *stale* planned row (window past + grace). Returns the
+    action, deliberately split so a missing AIS feed can never be read as a no-show:
+
+    * ``"completed"`` — AIS observed the vessel berth (``arrived``); the booking ran
+      its course. Evidence-backed, so it applies to **any** planned status.
+    * ``None`` — no berthing **and** the AIS feed showed no traffic at all during the
+      window (``not feed_alive``). A dead feed is indistinguishable from a no-show on
+      a per-vessel basis, so this is *not negative evidence*: leave the row untouched
+      and let a later sweep (once the feed is back) judge it. **No data ≠ no-show.**
+    * ``"cancelled"`` — a genuine no-show (the feed was live, the vessel just never
+      came) of a ``requested``/``tentative`` row. These are cheap to re-create, so
+      auto-archiving them is safe.
+    * ``"flagged"`` — a genuine no-show of a **confirmed** booking. Marine ETAs slip
+      by hours; auto-cancelling a confirmed row on a slipped ETA destroys an operator
+      commitment. So it is *not* cancelled — it is left ``confirmed`` and flagged
+      (a one-time audit note) for the operator to resolve.
+
+    The terminal statuses (``completed``/``cancelled``) sit outside the
+    confirmed-only no-overlap exclusion constraint, so archiving can never raise an
+    IntegrityError (it only ever *removes* a row from the constraint's set)."""
+    if arrived:
+        return "completed"
+    if not feed_alive:
+        return None
+    if status == "confirmed":
+        return "flagged"
+    return "cancelled"
 
 
 # ---------------------------------------------------------------------------
@@ -266,19 +287,28 @@ def verify(
 # Auto-expiry — the deferred step-7 "auto status-mutation" half
 # ---------------------------------------------------------------------------
 # A planned row whose window has been fully past for longer than the grace period
-# is swept to a terminal status so it stops lingering in the live verification
-# panel and lands in History instead. Unlike ``verify`` (read-only), this MUTATES:
+# is swept so it stops lingering in the live verification panel. Unlike ``verify``
+# (read-only), this MUTATES, but only on evidence (see ``expiry_action``):
 #   * arrived (an observed AIS berthing overlapped the window) -> ``completed``
-#   * otherwise (no-show)                                      -> ``cancelled``
+#   * no-show (feed was live, vessel unseen) of requested/tentative -> ``cancelled``
+#   * no-show of a CONFIRMED booking -> FLAGGED (note only; stays ``confirmed`` for
+#     the operator — a slipped ETA must not auto-destroy a commitment)
+#   * no berthing AND no AIS traffic at all in the window -> LEFT ALONE (a dead feed
+#     is not a no-show; ``feed_alive`` distinguishes the two — `position_report`
+#     carries the whole bbox's traffic, so any landed fix in the window proves the
+#     feed was up). A later sweep judges it once the feed returns.
 # The grace period (``config.verification_grace_minutes``) is why a row whose
 # window *just* closed still shows — the operator gets a window to react before it
 # auto-archives. An audit line is appended to ``notes`` (operator notes are kept,
-# not clobbered) so History records why and when the status flipped. Open-ended
-# windows (NULL upper) never expire — they have not "ended".
+# not clobbered) so History records why/when. The confirmed-flag note is guarded by
+# a ``[no-show flag]`` marker so repeat sweeps don't spam it. Open-ended windows
+# (NULL upper) never expire — they have not "ended".
 _EXPIRE_SQL = text(
     """
     WITH stale AS (
         SELECT p.id,
+               p.status::text AS prev_status,
+               p.notes        AS prev_notes,
                upper(p.time_range) AS t_end,
                v.name AS vessel_name,
                v.imo  AS vessel_imo,
@@ -287,39 +317,72 @@ _EXPIRE_SQL = text(
                    WHERE o.status::text = 'observed'
                      AND o.vessel_id = p.vessel_id
                      AND o.time_range && p.time_range
-               ) AS arrived
+               ) AS arrived,
+               EXISTS (
+                   SELECT 1 FROM position_report pr
+                   WHERE p.time_range @> COALESCE(pr.msg_ts, pr.created_at)
+               ) AS feed_alive
         FROM reservation p
         LEFT JOIN vessel v ON v.id = p.vessel_id
         WHERE p.status::text IN ('requested', 'tentative', 'confirmed')
           AND NOT isempty(p.time_range)
           AND upper(p.time_range) IS NOT NULL
           AND upper(p.time_range) <= now() - make_interval(mins => :grace)
+    ),
+    decided AS (
+        SELECT s.*,
+               CASE
+                   WHEN s.arrived THEN 'completed'
+                   WHEN NOT s.feed_alive THEN NULL
+                   WHEN s.prev_status = 'confirmed' THEN 'flagged'
+                   ELSE 'cancelled'
+               END AS action
+        FROM stale s
     )
     UPDATE reservation r
-    SET status = CASE WHEN s.arrived THEN 'completed' ELSE 'cancelled' END
-                 ::reservation_status,
+    SET status = CASE d.action
+                     WHEN 'completed' THEN 'completed'::reservation_status
+                     WHEN 'cancelled' THEN 'cancelled'::reservation_status
+                     ELSE r.status                     -- 'flagged' keeps confirmed
+                 END,
         notes = COALESCE(r.notes || E'\\n', '')
                 || '[auto ' || to_char(now(), 'YYYY-MM-DD HH24:MI') || '] '
-                || CASE WHEN s.arrived
-                        THEN 'completed — vessel berthed (AIS) and window elapsed'
-                        ELSE 'cancelled — no-show; window elapsed '
-                             || to_char(s.t_end, 'YYYY-MM-DD HH24:MI') END
-    FROM stale s
-    WHERE r.id = s.id
-    RETURNING r.id, r.status::text AS status, s.arrived,
-              s.t_end, s.vessel_name AS vessel_name, s.vessel_imo AS vessel_imo
+                || CASE d.action
+                       WHEN 'completed' THEN
+                            'completed — vessel berthed (AIS) and window elapsed'
+                       WHEN 'cancelled' THEN
+                            'cancelled — no-show; AIS feed live but vessel not seen; '
+                            || 'window elapsed ' || to_char(d.t_end, 'YYYY-MM-DD HH24:MI')
+                       ELSE
+                            '[no-show flag] confirmed booking — AIS feed live but '
+                            || 'vessel not seen; window elapsed '
+                            || to_char(d.t_end, 'YYYY-MM-DD HH24:MI')
+                            || '; operator action required (not auto-cancelled)'
+                   END
+    FROM decided d
+    WHERE r.id = d.id
+      AND d.action IS NOT NULL
+      -- A confirmed no-show is flagged once; don't re-append the note each sweep.
+      AND NOT (d.action = 'flagged'
+               AND COALESCE(d.prev_notes, '') LIKE '%[no-show flag]%')
+    RETURNING r.id, r.status::text AS status, d.action AS action, d.arrived,
+              d.t_end, d.vessel_name AS vessel_name, d.vessel_imo AS vessel_imo
     """
 )
 
 
 def expire_stale(session: Session, *, grace_minutes: int) -> list[dict]:
-    """Archive planned rows whose window has been past for > ``grace_minutes``.
+    """Sweep planned rows whose window has been past for > ``grace_minutes``.
 
-    Mutates each to a terminal status (``completed`` if AIS observed a berthing,
-    else ``cancelled``) and appends an audit line to ``notes``. Returns the rows
-    that were archived (id, new ``status``, ``arrived``, vessel name/imo, ``t_end``)
-    so the caller can report what it swept. Does **not** commit — the endpoint /
-    worker owns the transaction boundary, like the rest of the write surface.
+    Acts only on evidence (see ``expiry_action``): ``completed`` when AIS observed a
+    berthing, ``cancelled`` for a no-show of a ``requested``/``tentative`` row,
+    ``flagged`` (note only, status unchanged) for a no-show of a **confirmed**
+    booking. A stale row with **no AIS traffic at all in its window** is left
+    untouched — a dead feed is not a no-show. Each touched row gets an audit line in
+    ``notes``. Returns the rows it acted on (id, current ``status``, the ``action``
+    taken, ``arrived``, vessel name/imo, ``t_end``) so the caller can report. Does
+    **not** commit — the endpoint / worker owns the transaction boundary, like the
+    rest of the write surface.
 
     ``grace_minutes <= 0`` expires as soon as the window ends (no grace). The SQL
     anchors on ``now()`` (the Central-pinned DB clock) so the comparison matches
@@ -331,6 +394,7 @@ def expire_stale(session: Session, *, grace_minutes: int) -> list[dict]:
         {
             "id": r.id,
             "status": r.status,
+            "action": r.action,
             "arrived": bool(r.arrived),
             "vessel_name": r.vessel_name,
             "vessel_imo": r.vessel_imo,

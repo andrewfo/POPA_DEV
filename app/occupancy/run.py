@@ -50,10 +50,12 @@ def main() -> None:
         results = derive_observed(
             session, segment_id=args.segment_id, since=args.since
         )
-        # Same batch also auto-archives stale planned rows (the step-7 auto
+        # Same batch also sweeps stale planned rows (the step-7 auto
         # status-mutation): a planned booking past its window beyond the grace
-        # period becomes completed (AIS saw it berth) or cancelled (no-show), so
-        # it drops out of the live verification panel and lands in History.
+        # period becomes completed (AIS saw it berth) or cancelled (a no-show of a
+        # requested/tentative row); a no-show of a *confirmed* booking is only
+        # flagged (a slipped ETA must not auto-destroy a commitment), and a row with
+        # no AIS traffic in its window is left alone (a dead feed is not a no-show).
         expired = expire_stale(
             session, grace_minutes=get_settings().verification_grace_minutes
         )
@@ -70,9 +72,8 @@ def main() -> None:
     )
     for e in expired:
         logger.info(
-            "  archived reservation=%d -> %s (%s) vessel=%s",
-            e["id"], e["status"],
-            "arrived" if e["arrived"] else "no-show", e["vessel_name"] or "?",
+            "  %s reservation=%d -> %s vessel=%s",
+            e["action"], e["id"], e["status"], e["vessel_name"] or "?",
         )
     for r in results:
         logger.info(

@@ -228,9 +228,16 @@ surfaces as a 409.
    approximate, so *placement* stays the operator's job. The **auto
    status-mutation** half is now also built (`expire_stale`,
    `POST /verification/sweep`): a planned row whose window has been fully past for
-   longer than the grace period (`config.verification_grace_minutes`, default 60)
-   is auto-archived to a **terminal** status — `completed` if AIS observed the
-   vessel berth, else `cancelled` (no-show) — with an audit line appended to
+   longer than the grace period (`config.verification_grace_minutes`, default 12h —
+   marine ETAs slip by hours, so a minutes-scale grace cancels merely-late arrivals)
+   acts **on evidence**: `completed` if AIS observed the vessel berth, `cancelled`
+   for a no-show of a `requested`/`tentative` row. A no-show of a **confirmed**
+   booking is **only flagged** (a one-time `[no-show flag]` audit note; status stays
+   `confirmed`) — a slipped ETA must not auto-destroy an operator commitment. And a
+   stale row with **no AIS traffic at all in its window** is **left alone**: a dead
+   feed is indistinguishable from a no-show per-vessel, so the negative inference is
+   gated on `feed_alive` (any `position_report` landed in the window — the whole
+   bbox's traffic — proves the feed was up). Each touched row gets an audit line in
    `notes`, so it stops lingering in the live panel and shows in History instead.
    This is a *status-lifecycle* mutation only; it still never **places** a row.
    `GET /verification` stays read-only (the sweep is the explicit write companion;

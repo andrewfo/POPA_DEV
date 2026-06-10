@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.verification import classify_planned, expiry_status, where_planned
+from app.verification import classify_planned, expiry_action, where_planned
 
 UTC = timezone.utc
 
@@ -64,12 +64,26 @@ def test_where_planned_false_when_disjoint():
     assert where_planned(400.0, 900.0, 1000.0, 1200.0) is False
 
 
-# --- expiry_status (auto-archive terminal status) --------------------------
-def test_expiry_status_arrived_completes():
-    # Vessel was observed berthing -> the booking ran its course.
-    assert expiry_status(True) == "completed"
+# --- expiry_action (what a stale planned row becomes) ----------------------
+def test_expiry_action_arrived_completes_any_status():
+    # An observed berthing is positive evidence regardless of feed/status.
+    assert expiry_action(True, False, "confirmed") == "completed"
+    assert expiry_action(True, True, "requested") == "completed"
 
 
-def test_expiry_status_no_show_cancels():
-    # Window elapsed with no AIS berthing -> archive the no-show.
-    assert expiry_status(False) == "cancelled"
+def test_expiry_action_dead_feed_is_not_a_no_show():
+    # No berthing AND no AIS traffic in the window -> can't infer a no-show; the
+    # feed may simply have been down. Leave the row alone (None).
+    assert expiry_action(False, False, "requested") is None
+    assert expiry_action(False, False, "confirmed") is None
+
+
+def test_expiry_action_no_show_cancels_requested_tentative():
+    # Feed was live, vessel unseen -> a genuine no-show; cheap to re-create.
+    assert expiry_action(False, True, "requested") == "cancelled"
+    assert expiry_action(False, True, "tentative") == "cancelled"
+
+
+def test_expiry_action_confirmed_no_show_is_flagged_not_cancelled():
+    # A slipped ETA must not auto-destroy a confirmed commitment.
+    assert expiry_action(False, True, "confirmed") == "flagged"

@@ -60,6 +60,22 @@ def _add_res(session, *, vessel_id, lo, hi, t_start, t_end, status, source="phon
     ).scalar_one()
 
 
+def _add_position(session, *, when, lat=29.86, lon=-93.95):
+    """Land a raw AIS position at ``when`` — stand-in for "the feed was alive in the
+    window". `position_report` carries the whole bbox's traffic, so any landed fix
+    inside a planned window proves the feed was up then (not vessel-specific)."""
+    session.execute(
+        text(
+            """
+            INSERT INTO position_report (lat, lon, geom, msg_ts, source, raw)
+            VALUES (:lat, :lon, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326),
+                    :when, 'ais', '{}'::jsonb)
+            """
+        ),
+        {"lat": lat, "lon": lon, "when": when},
+    )
+
+
 def _t(year, day, hour=0):
     return dt.datetime(year, 7, day, hour, tzinfo=UTC)
 
@@ -180,19 +196,63 @@ def _expired_ids(payload):
     return {e["id"] for e in payload.get("expired", [])}
 
 
-def test_sweep_archives_no_show_as_cancelled(client, db_session):
-    # A confirmed booking whose window is long past with no observed berthing.
+def test_sweep_cancels_no_show_when_feed_was_live(client, db_session):
+    # A requested booking whose window is long past with no observed berthing, but
+    # the AIS feed WAS live during the window (other traffic landed) -> a genuine
+    # no-show, safe to auto-cancel.
     v = _add_vessel(db_session, mmsi=636000020, imo=9000020)
     rid = _add_res(db_session, vessel_id=v, lo=None, hi=None,
-                   t_start=_t(2020, 10), t_end=_t(2020, 14), status="confirmed")
+                   t_start=_t(2020, 10), t_end=_t(2020, 14), status="requested")
+    _add_position(db_session, when=_t(2020, 11))   # feed alive inside the window
     # Read-only GET must NOT mutate — still surfaces it as a no_show.
     assert _planned(client.get("/verification").json(), rid)["state"] == "no_show"
-    assert _status_of(db_session, rid) == "confirmed"
+    assert _status_of(db_session, rid) == "requested"
     # The sweep archives it: status -> cancelled, gone from planned, in `expired`.
     out = client.post("/verification/sweep").json()
     assert rid in _expired_ids(out)
     assert _planned(out, rid) is None
     assert _status_of(db_session, rid) == "cancelled"
+
+
+def test_sweep_leaves_no_show_when_feed_was_dead(client, db_session):
+    # No observed berthing AND no AIS traffic at all in the window -> a dead feed,
+    # not a no-show. The row must be left untouched (no data != negative evidence).
+    # A position OUTSIDE the window doesn't count.
+    v = _add_vessel(db_session, mmsi=636000026, imo=9000026)
+    rid = _add_res(db_session, vessel_id=v, lo=None, hi=None,
+                   t_start=_t(2020, 10), t_end=_t(2020, 14), status="requested")
+    _add_position(db_session, when=_t(2019, 11))
+    out = client.post("/verification/sweep").json()
+    assert rid not in _expired_ids(out)
+    assert _status_of(db_session, rid) == "requested"
+    assert _planned(out, rid)["state"] == "no_show"
+
+
+def test_sweep_flags_confirmed_no_show_not_cancelled(client, db_session):
+    # A *confirmed* booking that no-shows (feed live, vessel unseen): a slipped ETA
+    # must not auto-destroy the commitment -> flagged (note), status stays confirmed.
+    v = _add_vessel(db_session, mmsi=636000025, imo=9000025)
+    rid = _add_res(db_session, vessel_id=v, lo=None, hi=None,
+                   t_start=_t(2020, 10), t_end=_t(2020, 14), status="confirmed")
+    _add_position(db_session, when=_t(2020, 11))
+    out = client.post("/verification/sweep").json()
+    assert rid in _expired_ids(out)
+    e = next(x for x in out["expired"] if x["id"] == rid)
+    assert e["action"] == "flagged"
+    assert _status_of(db_session, rid) == "confirmed"     # NOT cancelled
+    note = db_session.execute(
+        text("SELECT notes FROM reservation WHERE id = :id"), {"id": rid}
+    ).scalar_one()
+    assert note is not None and "[no-show flag]" in note
+    # Still surfaces to the operator as a no_show (not silently archived).
+    assert _planned(out, rid)["state"] == "no_show"
+    # A second sweep does not re-append the flag note (guarded by the marker).
+    out2 = client.post("/verification/sweep").json()
+    assert rid not in _expired_ids(out2)
+    note2 = db_session.execute(
+        text("SELECT notes FROM reservation WHERE id = :id"), {"id": rid}
+    ).scalar_one()
+    assert note2.count("[no-show flag]") == 1
 
 
 def test_sweep_completes_arrived(client, db_session):
@@ -211,7 +271,7 @@ def test_sweep_leaves_future_and_within_grace(client, db_session):
     vf = _add_vessel(db_session, mmsi=636000022, imo=9000022)
     future = _add_res(db_session, vessel_id=vf, lo=None, hi=None,
                       t_start=_t(2030, 10), t_end=_t(2030, 14), status="confirmed")
-    # Window ended ~10 min ago — inside the default 60-min grace, so it lingers.
+    # Window ended ~10 min ago — well inside the default 12-h grace, so it lingers.
     vr = _add_vessel(db_session, mmsi=636000023, imo=9000023)
     now = dt.datetime.now(UTC)
     recent = _add_res(db_session, vessel_id=vr, lo=None, hi=None,
@@ -231,6 +291,7 @@ def test_sweep_appends_audit_note(client, db_session):
     v = _add_vessel(db_session, mmsi=636000024, imo=9000024, name="GHOST")
     rid = _add_res(db_session, vessel_id=v, lo=None, hi=None,
                    t_start=_t(2020, 10), t_end=_t(2020, 14), status="requested")
+    _add_position(db_session, when=_t(2020, 11))   # feed alive -> genuine no-show
     client.post("/verification/sweep")
     note = db_session.execute(
         text("SELECT notes FROM reservation WHERE id = :id"), {"id": rid}
