@@ -26,7 +26,7 @@ from app.intake.manual import (
     valid_imo,
 )
 from app.main import app
-from app.models import IntakeEvent, Reservation, Vessel
+from app.models import AuditLog, IntakeEvent, Reservation, Vessel
 from app.tz import CENTRAL
 
 
@@ -60,6 +60,20 @@ def test_dates_become_midnight_central_timestamps():
     req = normalize_form(_form())
     assert req.etb == dt.datetime(2026, 6, 16, tzinfo=CENTRAL)
     assert req.etd == dt.datetime(2026, 6, 19, tzinfo=CENTRAL)
+
+
+def test_ai_source_is_accepted_not_downgraded():
+    # 'ai' is the AI normalizer's own provenance tag — a real accepted source,
+    # not downgraded to 'phone' the way an unknown value is.
+    req = normalize_form(_form(source="ai"))
+    assert req.source == "ai"
+    assert not any("unknown source" in w for w in req.warnings)
+
+
+def test_unknown_source_still_downgrades_with_warning():
+    req = normalize_form(_form(source="carrier-pigeon"))
+    assert req.source == "phone"
+    assert any("unknown source" in w for w in req.warnings)
 
 
 def test_etb_etd_keep_time_of_day():
@@ -455,7 +469,7 @@ def test_edit_missing_event_raises_lookup(db_session):
         update_manual_request(db_session, 999999, _form(imo=9334454))
 
 
-def test_delete_removes_intake_event_and_reservation(db_session):
+def test_delete_soft_deletes_event_and_drops_reservation(db_session):
     ev0, res0 = _counts(db_session)
     out = record_manual_request(db_session, _form(imo=9445564))
     rid = out["reservation_id"]
@@ -464,26 +478,65 @@ def test_delete_removes_intake_event_and_reservation(db_session):
     deleted = delete_manual_request(db_session, out["intake_event_id"])
     assert deleted["deleted"] is True
     assert deleted["reservation_id"] == rid
-    # Back to the starting counts — both the audit row and its projection gone.
-    assert _counts(db_session) == (ev0, res0)
-    assert db_session.execute(
+    # The audit row SURVIVES (soft-delete — "the evidence a request arrived"), so
+    # the intake count is unchanged; only the projected reservation is dropped.
+    assert _counts(db_session) == (ev0 + 1, res0)
+    row = db_session.execute(
         select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
-    ).scalar_one_or_none() is None
+    ).scalar_one()
+    assert row.deleted_at is not None  # marked deleted, not erased
     assert db_session.execute(
         select(Reservation).where(Reservation.id == rid)
     ).scalar_one_or_none() is None
 
 
 def test_delete_without_reservation(db_session):
-    # No ETB -> intake landed but no reservation; delete still drops the event.
+    # No ETB -> intake landed but no reservation; delete still soft-deletes it.
     out = record_manual_request(db_session, _form(imo=9667784, etb=None))
     assert out["reservation_id"] is None
 
     deleted = delete_manual_request(db_session, out["intake_event_id"])
     assert deleted["reservation_id"] is None
-    assert db_session.execute(
+    row = db_session.execute(
         select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
-    ).scalar_one_or_none() is None
+    ).scalar_one()
+    assert row.deleted_at is not None
+
+
+def test_deleted_row_can_be_resubmitted_and_is_not_re_editable(db_session):
+    # A soft-deleted row no longer blocks an identical re-submission (the dedupe
+    # index is partial on deleted_at IS NULL), and is itself off-limits to a
+    # second delete/edit (it's invisible to the live API).
+    out = record_manual_request(db_session, _form(imo=9445564))
+    delete_manual_request(db_session, out["intake_event_id"])
+
+    again = record_manual_request(db_session, _form(imo=9445564))
+    assert again["duplicate"] is False
+    assert again["intake_event_id"] != out["intake_event_id"]
+
+    with pytest.raises(LookupError):
+        delete_manual_request(db_session, out["intake_event_id"])
+    with pytest.raises(LookupError):
+        update_manual_request(db_session, out["intake_event_id"], _form(imo=9445564))
+
+
+def test_ai_channel_is_editable_and_deletable(db_session):
+    # Provenance ('ai') is decoupled from permission: an AI-tagged card carries a
+    # distinct source but stays operator-correctable.
+    out = record_manual_request(db_session, _form(imo=9317406, source="ai"))
+    assert out["intake_event_id"] is not None
+    src = db_session.execute(
+        select(IntakeEvent.source).where(IntakeEvent.id == out["intake_event_id"])
+    ).scalar_one()
+    assert src == "ai"
+    # Editable...
+    edited = update_manual_request(
+        db_session, out["intake_event_id"], _form(imo=9317406, vessel="NEW", source="ai")
+    )
+    assert edited["intake_event_id"] == out["intake_event_id"]
+    # ...and deletable.
+    deleted = delete_manual_request(db_session, out["intake_event_id"])
+    assert deleted["deleted"] is True
 
 
 def test_delete_rejects_online_form_rows(db_session):
@@ -577,3 +630,39 @@ def test_edit_request_endpoint_updates_reservation_view(client, db_session):
     # ...and no phantom berth-request card was created (bug #1).
     ev_after = len(client.get("/intake/berth-requests", params={"limit": 500}).json())
     assert ev_after == ev_before
+
+
+def test_writes_leave_an_audit_trail(client, db_session):
+    # Every mutating endpoint lands an audit_log row in the same transaction, so a
+    # create + edit + delete each leave a trace of what was touched.
+    def _audit_rows():
+        return db_session.execute(
+            select(AuditLog).where(AuditLog.entity == "intake_event")
+        ).scalars().all()
+
+    before = len(_audit_rows())
+    created = client.post(
+        "/intake/berth-request",
+        json={"source": "phone", "vessel": "AUDIT ME", "imo": 9445564,
+              "draft_ft": 10.0, "etb": "2026-07-10T08:00"},
+    )
+    assert created.status_code == 201
+    intake_id = created.json()["intake_event_id"]
+
+    client.patch(
+        f"/intake/berth-requests/{intake_id}",
+        json={"source": "phone", "vessel": "AUDIT ME 2", "imo": 9445564,
+              "draft_ft": 10.0, "etb": "2026-07-10T08:00"},
+    )
+    client.delete(f"/intake/berth-requests/{intake_id}")
+
+    rows = _audit_rows()
+    assert len(rows) == before + 3
+    actions = [r.action for r in rows if r.entity_id == intake_id]
+    assert actions == ["create", "edit", "delete"]
+    # The delete's audit detail preserves the pre-delete raw — the trail outlives
+    # even the (soft-deleted) row's payload.
+    delete_row = next(
+        r for r in rows if r.entity_id == intake_id and r.action == "delete"
+    )
+    assert delete_row.detail["prior_raw"]["vessel"] == "AUDIT ME 2"

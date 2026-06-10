@@ -599,27 +599,76 @@
     0%, 100% { background: transparent; }
     25%      { background: rgba(224,168,58,.28); }
   }
-  /* ===== Ship detail hover panel (floats beside a hovered History entry) ===== */
+  /* ===== Ship dossier hover panel (floats beside a hovered History entry) ===== */
   #shipHover {
     position: fixed; z-index: 4000; display: none;
-    width: 360px; max-height: 70vh; overflow: auto;
+    width: 388px; max-height: 80vh; overflow: auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
     box-shadow: 0 14px 44px rgba(0,0,0,.5);
-    padding: 12px 14px; font-size: 13px;
+    font-size: 13px;
     pointer-events: none;  /* a hover preview — never steals the pointer */
   }
   #shipHover.open { display: block; }
-  #shipHover h2 { margin: 0 0 4px; font-size: 15px; }
+  #shipHover .empty { padding: 16px; }
+  /* Header band — the dossier's top strip */
+  .dossier-head {
+    padding: 12px 14px 10px; border-bottom: 1px solid var(--line);
+    border-radius: var(--r) var(--r) 0 0;
+  }
+  .dossier-title { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.2; }
+  .dossier-sub { margin-top: 3px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .dossier-body { padding: 8px 14px 14px; }
   #shipHover h3 {
     margin: 14px 0 6px; font-size: 11px; letter-spacing: .6px;
     text-transform: uppercase; color: var(--muted);
   }
-  #shipHover h3:first-of-type { margin-top: 10px; }
-  #shipHover .kv {
-    display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px;
-  }
+  #shipHover .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; }
   #shipHover .kv .k { color: var(--muted); }
   #shipHover .kv .v { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .dossier-none { color: var(--muted); font-size: 11px; padding: 4px 0; font-style: italic; }
+  /* AIS fix with compass */
+  .ais-row { display: flex; align-items: center; gap: 12px; }
+  .compass { flex: 0 0 40px; }
+  .compass .cmp-ring { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; }
+  .compass .cmp-n { fill: var(--muted); font-size: 8px; font-family: var(--font-mono); }
+  .compass .cmp-arrow { fill: var(--accent); }
+  .ais-facts { font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+  .ais-facts .k { color: var(--muted); }
+  /* Reservation timeline strip */
+  .restimeline { display: block; margin: 2px 0 6px; }
+  .tl-label { fill: var(--muted); font-size: 8px; font-family: var(--font-mono); }
+  /* Compact reservation rows (with notes) */
+  .dossier-res { display: flex; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .dossier-res .dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; }
+  .dossier-res .rbody { flex: 1; min-width: 0; }
+  .dossier-res .rhead { font-size: 12px; }
+  .dossier-res .rmeta { font-size: 11px; color: var(--muted); }
+  /* Styled notes list (renderResNotes) — pills + definition grid + AI chip */
+  .note-block { margin-top: 5px; display: flex; flex-direction: column; gap: 5px; }
+  .note-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .note-tag {
+    font-size: 9px; text-transform: uppercase; letter-spacing: .4px;
+    padding: 1px 8px; border-radius: 999px;
+    background: var(--panel-2); color: var(--ink-dim); border: 1px solid var(--line);
+  }
+  .note-tag.warn { color: var(--amber); border-color: rgba(224,165,46,.45); background: rgba(224,165,46,.09); }
+  .note-kv {
+    display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px;
+    font-size: 11px; padding: 2px 0 1px;
+  }
+  .note-kv .nk {
+    color: var(--accent); text-transform: uppercase; font-size: 9px;
+    letter-spacing: .4px; align-self: center;
+  }
+  .note-kv .nv { color: var(--ink); }
+  .note-ai { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+  .note-ai .ai-chip {
+    font-size: 9px; font-weight: 700; letter-spacing: .3px; white-space: nowrap;
+    padding: 1px 8px; border-radius: 999px;
+    background: rgba(52,196,216,.14); color: var(--accent); border: 1px solid var(--accent-dim);
+  }
+  .note-ai .ai-detail { font-size: 10px; color: var(--muted); }
+  .note-warn { font-size: 10px; color: var(--amber); }
   /* History rows are hover-to-preview; show the affordance. */
   #historyList .hist-card { cursor: default; }
   #historyList .hist-card:hover { border-color: var(--accent); }
@@ -810,6 +859,7 @@
         <option value="phone">Phone</option>
         <option value="email">Email</option>
         <option value="operator">Operator</option>
+        <option value="ai">AI-parsed</option>
       </select>
     </div>
     <div id="berthRequests"><div class="empty">loading…</div></div>
@@ -2247,10 +2297,11 @@ function reqCard(r) {
   if (berth) lines.push(`berth ${esc(berth)}`);
   if (agency) lines.push(esc(agency));
   if (cargo) lines.push(esc(cargo));
-  // Only manual-channel rows (phone/email/operator) carry this form's lowercase
-  // keys, so only they can be re-edited here; a legacy online-form row is
-  // immutable.
-  const editable = ["phone", "email", "operator"].includes(r.source);
+  // Editable channels (phone/email/operator + the AI-parsed 'ai' channel) carry
+  // this form's lowercase keys, so they can be re-edited here. Editability is a
+  // separate axis from provenance: 'ai' is a distinct source tag but still
+  // operator-correctable; a legacy online-form ('form') row stays immutable.
+  const editable = ["phone", "email", "operator", "ai"].includes(r.source);
   return `
     <div class="card req-card">
       <div class="name">${esc(vessel || "(no vessel name)")}
@@ -2286,29 +2337,18 @@ function shipTypeLabel(t) {
 
 function histCard(h) {
   const color = RES_STATUS_COLOR[h.status] || "#888";
-  const tug = isTugType(h.ship_type)
-    ? ' <span class="status-badge" style="background:var(--ais-tug)">tug</span>' : "";
   const imo = h.vessel_imo ? ` <span style="color:var(--muted);font-weight:400">IMO ${esc(h.vessel_imo)}</span>` : "";
-  const sta = h.station_unassigned
-    ? "berth unassigned"
-    : `Dock ${Math.round(Math.min(h.station_lo_dock, h.station_hi_dock))}–${Math.round(Math.max(h.station_lo_dock, h.station_hi_dock))}`;
-  // Second line: position + berth + direction + priority, all that's set.
-  const bits = [esc(sta)];
-  if (h.berth_name) bits.push(esc(h.berth_name));
-  if (h.direction) bits.push(esc(h.direction));
-  if (h.priority != null) bits.push("priority " + esc(h.priority));
-  if (h.cargo) bits.push(esc(h.cargo));
-  const typeLabel = shipTypeLabel(h.ship_type);
-  // Hover -> ship detail, but only when there's a vessel row to show (an
-  // IMO-less intake has no vessel_id; its card stays inert).
+  // Pared down to identity + status + the booking window. Everything else
+  // (position, cargo, direction, notes, dimensions, AIS) lives in the dossier
+  // that floats on hover (showShipHover -> renderShipDetail). Hover only fires
+  // when there's a vessel row to show (an IMO-less intake has no vessel_id).
   const hoverable = h.vessel_id != null;
+  const dates = `ETB <b>${fmtCentral(h.t_start)}</b>${h.t_end ? ` → ETD <b>${fmtCentral(h.t_end)}</b>` : ""}`;
   return `
-    <div class="card${hoverable ? " hist-card" : ""}" data-vessel-id="${h.vessel_id ?? ""}"${hoverable ? ' title="Hover for ship details"' : ""}>
-      <div class="name">${esc(h.vessel_name || "(unnamed)")}${imo}${tug}
+    <div class="card${hoverable ? " hist-card" : ""}" data-vessel-id="${h.vessel_id ?? ""}"${hoverable ? ' title="Hover for the ship dossier"' : ""}>
+      <div class="name">${esc(h.vessel_name || "(unnamed)")}${imo}
         <span class="status-badge" style="background:${color}">${esc(h.status)}</span></div>
-      <div class="meta">${esc(h.type)}${typeLabel ? " · " + esc(typeLabel) : ""} · ETB <b>${fmtCentral(h.t_start)}</b>${h.t_end ? ` → ETD <b>${fmtCentral(h.t_end)}</b>` : ""} · via ${esc(h.source)}</div>
-      <div class="meta">${bits.join(" · ")}</div>
-      ${h.notes ? `<div class="meta" style="color:var(--muted);white-space:pre-line">${esc(h.notes)}</div>` : ""}
+      <div class="meta">${dates}</div>
     </div>`;
 }
 
@@ -2329,15 +2369,98 @@ function kvRow(k, v) {
   if (v == null || v === "") return "";
   return `<div class="k">${esc(k)}</div><div class="v">${v}</div>`;
 }
-// Metres (canonical store) shown with its feet equivalent, the dual readout the
-// rest of the UI uses. null in -> null out (row skipped).
+// Metres (canonical store) shown with its feet equivalent — the dual readout the
+// rest of the UI uses. null in -> null out (row skipped by kvRow).
 function mFt(m) {
   if (m == null) return null;
   return `${Number(m).toFixed(1)} m · ${Math.round(Number(m) * FT_PER_M)} ft`;
 }
 
-// One reservation row inside the detail sheet (same shape as a history card,
-// minus the click-through — we're already in the ship's detail).
+// A small compass: a ringed dial with an arrow at `deg` (0 = N, clockwise). Used
+// for the AIS heading/COG — an orientation read at a glance, not a number.
+function compassSvg(deg) {
+  if (deg == null) return "";
+  return `
+    <svg class="compass" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
+      <circle class="cmp-ring" cx="20" cy="20" r="18"/>
+      <text class="cmp-n" x="20" y="9" text-anchor="middle">N</text>
+      <g transform="rotate(${Math.round(deg)} 20 20)">
+        <path class="cmp-arrow" d="M20,6 L24,23 L20,19 L16,23 Z"/>
+      </g>
+    </svg>`;
+}
+
+// A horizontal strip placing every reservation as a status-coloured bar on one
+// shared time axis — the ship's whole booking life at a glance (a compact
+// timeline, distinct from the occupancy Gantt which is per-berth).
+function resTimeline(res) {
+  const items = res.filter((r) => r.t_start);
+  if (!items.length) return "";
+  const times = [];
+  items.forEach((r) => {
+    times.push(+new Date(r.t_start));
+    if (r.t_end) times.push(+new Date(r.t_end));
+  });
+  let min = Math.min(...times), max = Math.max(...times);
+  if (max <= min) max = min + 86400000;                    // 1-day span fallback
+  const W = 320, H = 30, padX = 6, top = 4, lane = 12;
+  const x = (t) => padX + (W - padX * 2) * ((t - min) / (max - min));
+  const bars = items.map((r) => {
+    const a = x(+new Date(r.t_start));
+    const b = r.t_end ? x(+new Date(r.t_end)) : a + 3;
+    const w = Math.max(3, b - a);
+    const c = RES_STATUS_COLOR[r.status] || "#888";
+    return `<rect x="${a.toFixed(1)}" y="${top}" width="${w.toFixed(1)}" height="${lane}" rx="2" fill="${c}"/>`;
+  }).join("");
+  const lab =
+    `<text class="tl-label" x="${padX}" y="${H - 3}" text-anchor="start">${fmtCentral(new Date(min).toISOString())}</text>` +
+    `<text class="tl-label" x="${W - padX}" y="${H - 3}" text-anchor="end">${fmtCentral(new Date(max).toISOString())}</text>`;
+  return `<svg class="restimeline" viewBox="0 0 ${W} ${H}" width="100%">${bars}${lab}</svg>`;
+}
+
+// Turn a reservation's notes (our newline "key: value" + flag-line format, see
+// app/intake/manual._notes) into a styled list instead of a flat grey blob:
+//  - flag lines with no "key:" (e.g. "manual entry (phone)", "berth UNASSIGNED")
+//    become pills (an unassigned/warning one tinted amber);
+//  - "key: value" lines become a definition grid (accent key, ink value);
+//  - the AI provenance line becomes a chip + muted caveat;
+//  - warnings get an amber line.
+// Operator-typed free-form notes (no recognised shape) fall through as a tag.
+function renderResNotes(notes) {
+  if (!notes) return "";
+  const tags = [], kv = [], ai = [], warn = [];
+  notes.split("\n").map((s) => s.trim()).filter(Boolean).forEach((line) => {
+    if (/^AI-parsed/i.test(line)) { ai.push(line); return; }
+    if (/^warnings?:/i.test(line)) { warn.push(line.replace(/^warnings?:\s*/i, "")); return; }
+    const m = line.match(/^([^:]{1,22}):\s*(.+)$/);
+    if (m) { kv.push([m[1], m[2]]); return; }
+    tags.push(line);
+  });
+  let html = "";
+  if (tags.length) {
+    html += `<div class="note-tags">` + tags.map((t) =>
+      `<span class="note-tag${/unassigned/i.test(t) ? " warn" : ""}">${esc(t)}</span>`
+    ).join("") + `</div>`;
+  }
+  if (kv.length) {
+    html += `<div class="note-kv">` + kv.map(([k, v]) =>
+      `<span class="nk">${esc(k)}</span><span class="nv">${esc(v)}</span>`
+    ).join("") + `</div>`;
+  }
+  if (ai.length) {
+    html += ai.map((line) => {
+      const parts = line.split(/\s[—–-]\s/);          // chip text — caveat detail
+      const head = parts.shift();
+      const detail = parts.join(" — ");
+      return `<div class="note-ai"><span class="ai-chip">✦ ${esc(head)}</span>${detail ? `<span class="ai-detail">${esc(detail)}</span>` : ""}</div>`;
+    }).join("");
+  }
+  if (warn.length) html += `<div class="note-warn">⚠ ${esc(warn.join("; "))}</div>`;
+  return `<div class="note-block">${html}</div>`;
+}
+
+// One reservation, compact: a status dot + the window + position + its notes
+// (the notes that used to sit on the History card now live here).
 function shipResRow(r) {
   const color = RES_STATUS_COLOR[r.status] || "#888";
   const sta = r.station_unassigned
@@ -2346,59 +2469,66 @@ function shipResRow(r) {
   const bits = [esc(sta)];
   if (r.berth_name) bits.push(esc(r.berth_name));
   if (r.direction) bits.push(esc(r.direction));
-  if (r.priority != null) bits.push("priority " + esc(r.priority));
   if (r.cargo) bits.push(esc(r.cargo));
   return `
-    <div class="card">
-      <div class="name">${esc(r.type)}
-        <span class="status-badge" style="background:${color}">${esc(r.status)}</span>
-        <span style="color:var(--muted);font-weight:400">via ${esc(r.source)}</span></div>
-      <div class="meta">ETB <b>${fmtCentral(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtCentral(r.t_end)}</b>` : ""}</div>
-      <div class="meta">${bits.join(" · ")}</div>
-      ${r.notes ? `<div class="meta" style="color:var(--muted);white-space:pre-line">${esc(r.notes)}</div>` : ""}
+    <div class="dossier-res">
+      <span class="dot" style="background:${color}"></span>
+      <div class="rbody">
+        <div class="rhead"><b>${esc(r.status)}</b> · ${esc(r.type)} · via ${esc(r.source)}</div>
+        <div class="rmeta">ETB ${fmtCentral(r.t_start)}${r.t_end ? " → ETD " + fmtCentral(r.t_end) : ""}</div>
+        <div class="rmeta">${bits.join(" · ")}</div>
+        ${renderResNotes(r.notes)}
+      </div>
     </div>`;
 }
 
-// Build the detail panel's HTML for one vessel payload (no DOM side effects, so
-// it paints identically from cache or a fresh fetch).
+// The vessel dossier: a header band, dimensions (LOA/beam/draft), identity, an
+// AIS fix with a compass, and the booking timeline + reservation rows (with
+// notes). Pure -> paints identically from cache or a fresh fetch.
 function renderShipDetail(v) {
   const typeLabel = shipTypeLabel(v.ship_type);
+  const sub = [
+    v.imo ? "IMO " + esc(v.imo) : null,
+    v.mmsi ? "MMSI " + esc(v.mmsi) : null,
+    v.callsign ? esc(v.callsign) : null,
+    typeLabel ? esc(typeLabel) : null,
+  ].filter(Boolean).join("  ·  ");
   const ident = [
-    kvRow("Name", v.name ? esc(v.name) : "<i>unknown</i>"),
-    kvRow("IMO", v.imo),
-    kvRow("MMSI", v.mmsi),
-    kvRow("Callsign", esc(v.callsign)),
-    kvRow("Ship type", typeLabel ? esc(typeLabel) : null),
     kvRow("Destination", esc(v.destination)),
     kvRow("First seen", v.created_at ? fmtCentral(v.created_at) : null),
-    kvRow("Updated", v.updated_at ? fmtCentral(v.updated_at) : null),
+    kvRow("Last update", v.updated_at ? fmtCentral(v.updated_at) : null),
   ].join("");
   const dims = [
     kvRow("LOA", mFt(v.loa)),
     kvRow("Beam", mFt(v.beam)),
     kvRow("Draft", mFt(v.draft)),
-    kvRow("Bow offset (A)", v.dim_a != null ? Number(v.dim_a).toFixed(1) + " m" : null),
-    kvRow("Stern offset (B)", v.dim_b != null ? Number(v.dim_b).toFixed(1) + " m" : null),
   ].join("");
   const p = v.latest_position;
-  const posSection = p ? `
+  // Always show the AIS section so its absence reads as "no contact" rather than
+  // a missing panel — a manual / non-AIS-tracked ship simply has no fix on record.
+  const aisSection = `
     <h3>Latest AIS fix</h3>
-    <div class="kv">
-      ${kvRow("Time", fmtCentral(p.msg_ts))}
-      ${kvRow("Position", `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`)}
-      ${kvRow("Speed", p.sog != null ? p.sog.toFixed(1) + " kn" : null)}
-      ${kvRow("Course", p.cog != null ? Math.round(p.cog) + "°" : null)}
-      ${kvRow("Heading", p.heading != null ? Math.round(p.heading) + "°" : null)}
-      ${kvRow("Nav status", p.nav_status != null ? esc(NAV_STATUS[p.nav_status] || ("code " + p.nav_status)) : null)}
-    </div>` : "";
+    ${p ? `<div class="ais-row">
+      ${compassSvg(p.heading != null ? p.heading : p.cog)}
+      <div class="ais-facts">
+        <div><span class="k">speed</span> ${p.sog != null ? p.sog.toFixed(1) + " kn" : "—"}${p.cog != null ? ` · <span class="k">cog</span> ${Math.round(p.cog)}°` : ""}${p.heading != null ? ` · <span class="k">hdg</span> ${Math.round(p.heading)}°` : ""}</div>
+        <div><span class="k">${esc(NAV_STATUS[p.nav_status] || (p.nav_status != null ? "code " + p.nav_status : "status n/a"))}</span></div>
+        <div>${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} · ${fmtCentral(p.msg_ts)}</div>
+      </div>
+    </div>` : `<div class="dossier-none">no AIS fix on record (not AIS-tracked)</div>`}`;
   const res = v.reservations || [];
   return `
-    <h2>${v.name ? esc(v.name) : ("Ship #" + v.id)}</h2>
-    <h3>Identity</h3><div class="kv">${ident || '<div class="k">—</div>'}</div>
-    <h3>Dimensions</h3><div class="kv">${dims || '<div class="k">none on file</div>'}</div>
-    ${posSection}
-    <h3>Reservation history (${res.length})</h3>
-    ${res.length ? res.map(shipResRow).join("") : '<div class="empty">none on record</div>'}`;
+    <div class="dossier-head">
+      <h2 class="dossier-title">${v.name ? esc(v.name) : ("Ship #" + v.id)}</h2>
+      ${sub ? `<div class="dossier-sub">${sub}</div>` : ""}
+    </div>
+    <div class="dossier-body">
+      ${dims ? `<h3>Dimensions</h3><div class="kv">${dims}</div>` : ""}
+      ${ident ? `<h3>Identity</h3><div class="kv">${ident}</div>` : ""}
+      ${aisSection}
+      <h3>Reservations (${res.length})</h3>
+      ${res.length ? resTimeline(res) + res.map(shipResRow).join("") : '<div class="empty">none on record</div>'}
+    </div>`;
 }
 
 const SHIP_DETAIL_CACHE = new Map();   // vessel_id -> detail payload (per session)

@@ -79,7 +79,16 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         settings = get_settings()
         user, password = settings.operator_user, settings.operator_password
         if not (user and password):
-            return await call_next(request)  # auth disabled (open)
+            # Auth disabled (open) — no authenticated principal to attribute
+            # writes to. The audit_log actor is NULL in this mode (dev / tests).
+            request.state.operator = None
+            return await call_next(request)
         if not check_credentials(request.headers.get("Authorization"), user, password):
             return _challenge()
+        # Authenticated. With a single shared credential the principal is always
+        # the configured OPERATOR_USER; expose it on request.state so write
+        # endpoints can stamp it onto audit rows (app/audit.py). When multiple
+        # credentials are added later, this is the one place to derive the real
+        # username from the header.
+        request.state.operator = user
         return await call_next(request)

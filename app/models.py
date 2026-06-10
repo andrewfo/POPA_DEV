@@ -44,10 +44,12 @@ RESERVATION_STATUSES = (
     "cancelled",
     "completed",
 )
-# 'email' added in migration 0004 (manual berth-request entry channel).
-RESERVATION_SOURCES = ("ais", "form", "phone", "operator", "email")
+# 'email' added in migration 0004 (manual berth-request entry channel); 'ai'
+# added in migration 0009 (the AI-assisted normalizer's own provenance tag —
+# distinct from the human 'email' channel it used to borrow).
+RESERVATION_SOURCES = ("ais", "form", "phone", "operator", "email", "ai")
 DIRECTIONS = ("upstream", "downstream")
-INTAKE_SOURCES = ("ais", "form", "phone", "operator", "email")
+INTAKE_SOURCES = ("ais", "form", "phone", "operator", "email", "ai")
 
 reservation_type_enum = Enum(*RESERVATION_TYPES, name="reservation_type")
 reservation_status_enum = Enum(*RESERVATION_STATUSES, name="reservation_status")
@@ -180,11 +182,12 @@ class Reservation(Base):
     a station interval over a time window. The no-overlap exclusion constraint
     (confirmed-only) is added in the migration via btree_gist.
 
-    That constraint enforces a **minimum mooring gap** (75 ft, see
-    ``config.min_vessel_gap_ft``), not bare no-overlap: migration 0007 pads each
-    station range by half the gap on each side before the ``&&`` test, so two
-    confirmed vessels closer than the gap collide. Empty ranges (an unassigned
-    ``requested`` row) stay empty and never conflict.
+    That constraint enforces a **minimum mooring gap** (75 ft, baked into the
+    constraint as migration 0007's ``GAP_FT`` — the single source of truth; there
+    is deliberately no app-config mirror), not bare no-overlap: migration 0007
+    pads each station range by half the gap on each side before the ``&&`` test,
+    so two confirmed vessels closer than the gap collide. Empty ranges (an
+    unassigned ``requested`` row) stay empty and never conflict.
     """
 
     __tablename__ = "reservation"
@@ -247,6 +250,11 @@ class IntakeEvent(Base):
     reservation_id: Mapped[int | None] = mapped_column(
         ForeignKey("reservation.id", ondelete="SET NULL")
     )
+    # Soft-delete marker (migration 0010). NULL = live; set = removed by an
+    # operator but kept for audit ("the evidence that a request ever arrived").
+    # The dedupe unique index is partial on ``deleted_at IS NULL`` so a deleted
+    # row neither blocks a re-submission nor is seen by the live API.
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PositionReport(Base):
@@ -277,6 +285,34 @@ class PositionReport(Base):
     msg_ts: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AuditLog(Base):
+    """Append-only record of who changed what, written by every mutating
+    endpoint (migration 0010).
+
+    The whole app sits behind a single shared HTTP-Basic credential, so there was
+    no record of which writes happened or by whom — a stray edit/delete left no
+    trail. ``actor`` is the Basic username (NULL when auth is disabled, e.g. dev /
+    tests run open); ``detail`` is free-form JSONB carrying the useful context for
+    the action (the pre-edit/pre-delete ``raw`` payload, the changed field list,
+    the swept reservation ids). No FK to the touched row: a reservation may be
+    hard-deleted and an ``intake_event`` soft-deleted, but the log must outlive
+    both. Append-only and constraint-free, so logging never blocks the write it
+    records.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    entity: Mapped[str] = mapped_column(String(32), nullable=False)
+    entity_id: Mapped[int | None] = mapped_column(Integer)
+    detail: Mapped[dict | None] = mapped_column(JSONB)
+    at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

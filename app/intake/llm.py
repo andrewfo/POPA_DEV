@@ -339,7 +339,7 @@ def parse_request(
     raw: dict | str,
     *,
     complete,
-    source: str = "email",
+    source: str = "ai",
 ) -> ParseResult:
     """Run one request through the LLM and return a ready-to-record form.
 
@@ -353,7 +353,8 @@ def parse_request(
     notes = jnotes + mnotes
     # Stamp the AI provenance + confidence + caveats onto the form's notes so they
     # ride into reservation.notes and an operator sees which auto-parsed cards to
-    # eyeball. The card already says "manual entry (email)"; this rides alongside.
+    # eyeball. The card already says "manual entry (ai)" (its source tag); this
+    # rides alongside.
     summary = f"AI-parsed (confidence {ext.confidence:.0%})"
     if notes:
         summary += " — " + "; ".join(notes)

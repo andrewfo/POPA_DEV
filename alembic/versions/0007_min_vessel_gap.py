@@ -27,9 +27,11 @@ unbounded and collide with everything, so the ``CASE`` guards it explicitly.
 
 The expression is built from immutable functions (``isempty``/``lower``/
 ``upper``/``numrange`` + numeric arithmetic), which an exclusion constraint
-requires. ``GAP_FT`` is also mirrored in ``app.config.Settings.min_vessel_gap_ft``
-for app-side use; the constraint bakes in the literal here (it cannot read app
-config), so the two must be changed together via a new migration.
+requires. ``GAP_FT`` here is the **single source of truth** for the mooring gap:
+the constraint bakes in the literal (it cannot read app config), and there is
+deliberately no ``app.config`` mirror — a former ``Settings.min_vessel_gap_ft``
+field looked tunable but the constraint ignored it, so it was removed. Changing
+the gap means a new migration that recreates the constraint, not a config edit.
 """
 from typing import Sequence, Union
 

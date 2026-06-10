@@ -65,10 +65,12 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="", repr=False)
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     intake_llm_model: str = "google/gemini-2.0-flash-lite-001"
-    # Source tag for AI-parsed requests. Must be a manual channel
-    # (phone|email|operator) so an operator can still edit/delete the card; these
-    # arrive from the public form, so 'email' is the honest closest fit.
-    intake_llm_source: str = "email"
+    # Source tag for AI-parsed requests — its own provenance value ('ai', migration
+    # 0009), NOT a borrowed human channel. Editability is decoupled: 'ai' is in
+    # app/intake/manual.EDITABLE_SOURCES, so an AI card stays operator-editable
+    # without pretending it arrived by email. Keeping it a config string lets a
+    # deployment pin it elsewhere if needed, but 'ai' is the honest default.
+    intake_llm_source: str = "ai"
 
     # --- Dataverse berth-request poll (AI intake worker) ---
     # The worker (app/intake/dataverse_run.py) pulls new rows from the Power Pages

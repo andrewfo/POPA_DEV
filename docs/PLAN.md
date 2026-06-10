@@ -27,7 +27,7 @@ Docker image + `docker-compose.prod.yml` (db + one-shot migrate/seed + api + ais
 | 3 | Measured wharf centerline (real, derived from ArcGIS berths) | ✅ | `data/gis/build_centerline.py` → `app/seed/wharf_seed.py` |
 | 4 | AIS ingestion (aisstream.io → DB) | ✅ | `app/ais/*` |
 | 5 | Occupancy derivation | ✅ | `app/occupancy/*`, migration `0002`, `tests/test_occupancy_*` |
-| 6 | Conflict-detection service | ✅ | `app/conflicts.py`, `GET /conflicts` in `app/main.py`, `tests/test_conflicts*.py`, conflicts panel in `app/static/index.html` |
+| 6 | Conflict-detection service | ✅ | `app/conflicts.py`, `GET /conflicts` (`app/routers/analysis.py`), `tests/test_conflicts*.py`, conflicts panel in `app/static/index.html` |
 | 7 | Request intake + AIS verification; legacy backfill | 🟡 capture + AI-assisted intake + AIS verification + auto status-mutation built; legacy backfill TODO | `app/intake/*` (incl. `llm.py` + `dataverse_run.py`), `app/verification.py`, `GET /verification`, `POST /verification/sweep`, `tests/test_verification*.py`/`test_intake_*`, migrations `0003`/`0004` |
 
 **Also built ahead of the plan** (deviations from "no UI in phase 1" / "intake
@@ -341,6 +341,22 @@ Not tied to a single step — pick up as the system matures.
 - Keep `app/models.py` enum tuples and the migration in lockstep. The exclusion
   constraint stays **`confirmed`-only** — do not extend it to block `observed`.
 
+### 5.7 Code organization
+- ✅ **HTTP surface split into `app/routers/`** — `main.py` was a 1,000-line
+  module mixing every endpoint with app assembly. The routes now live in
+  `app/routers/{read_only,intake,edit,analysis}.py` (+ `common.py` for the
+  `do_write` write-wrapper and the `actor` audit helper); `main.py` keeps only
+  app assembly (middleware, the `OperationalError` handler, the static mount,
+  `/` + `/health`) and includes the routers. Pure mechanical move — `from
+  app.main import app` is unchanged, so the test suite is untouched.
+- 🟡 **Frontend modularization (planned, deferred)** — `app/static/index.html`
+  is where most commits land; its ~2,250-line inline `<script>` should split
+  into plain ES modules (`static/js/{api,state,map,timeline,panels,forms,history,app}.js`,
+  no framework / build step) loaded via `<script type="module">`. Full breakdown
+  in **[`FRONTEND_SPLIT_PLAN.md`](../FRONTEND_SPLIT_PLAN.md)**. Deferred because it
+  needs browser smoke-testing and the file was under active concurrent edit; do
+  it when quiescent, before it hits 5,000 lines.
+
 ---
 
 ## 6. Out of scope (still)
@@ -383,3 +399,6 @@ Leaflet **UI** and berth-request intake **capture**. See §1.)
    (Production deployment packaging is **done** — see §5.4; the prod image makes a
    CI build/integration job straightforward.)
 7. *(Optional)* wire the legacy-spreadsheet backfill review→commit pipeline.
+8. **Frontend modularization** — split `index.html`'s inline script into ES
+   modules per [`FRONTEND_SPLIT_PLAN.md`](../FRONTEND_SPLIT_PLAN.md) (no build
+   step); needs a browser smoke-test pass. See §5.7.

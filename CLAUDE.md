@@ -87,9 +87,20 @@ from day one with no manual intake.
   (`vessel|dredge|layberth`), `station_range numrange`, `time_range tstzrange`,
   direction (`upstream|downstream`), status
   (`observed|requested|tentative|confirmed|cancelled|completed`), source
-  (`ais|form|phone|operator|email`), priority, cargo, notes, created_at
+  (`ais|form|phone|operator|email|ai`; `ai` = the AI-assisted normalizer's own
+  provenance tag, migration 0009 — distinct from the human `email` channel it
+  used to borrow), priority, cargo, notes, created_at
 - `intake_event` — raw inbound request exactly as received, before
-  normalization (audit + reconciliation trail)
+  normalization (audit + reconciliation trail). **Soft-deleted, not erased**
+  (`deleted_at`, migration 0010): withdrawing a request keeps the raw row (and
+  its payload) for audit; it just leaves the live API and stops blocking a
+  re-submission. The dedupe unique index is partial on
+  `dedupe_key IS NOT NULL AND deleted_at IS NULL`.
+- `audit_log` — append-only "who changed what" (actor, action, entity,
+  entity_id, JSONB `detail`, at; migration 0010). Every mutating endpoint lands
+  one row in the same transaction as the write. `actor` is the HTTP-Basic
+  username (NULL when auth is open); `detail` carries the pre-edit/pre-delete
+  raw, the changed-field list, or the swept reservation ids.
 - `position_report` — landed raw AIS positions (source-agnostic)
 
 Enforce no-overlap at the DB, not in app code:
@@ -203,7 +214,10 @@ surfaces as a 409.
    places — placement/confirm stay the operator's, like AIS verification); its
    confidence/caveats ride onto `reservation.notes`, the verbatim source row is
    preserved in `intake_event.raw` (`BerthRequestForm.source_raw`), and cards are
-   tagged `source='email'` so they stay editable. Each entry (manual or AI) lands
+   tagged `source='ai'` — a distinct **provenance** value (migration 0009), no
+   longer the borrowed `email` channel — while staying editable via an explicit
+   `EDITABLE_SOURCES` set that *includes* `ai` (permission decoupled from
+   provenance). Each entry (manual or AI) lands
    raw in `intake_event` (deduped) and creates a `requested` reservation with an
    **empty/unassigned `station_range`**. A **manual edit surface**
    (`app/edit.py`, sidebar forms over `PATCH /vessels/{id}`,
@@ -216,8 +230,9 @@ surfaces as a 409.
    berth request** (Edit / Delete buttons on each request card → `PATCH` /
    `DELETE /intake/berth-requests/{id}`): edit re-projects the linked reservation
    in place (the one sanctioned mutation of an `intake_event.raw` row), delete
-   drops the raw row and its projected reservation. Both are manual channels only
-   (`phone|email|operator`); any legacy online-form row stays immutable. The
+   **soft-deletes** the raw row (`deleted_at`, kept for audit; migration 0010) and
+   drops its projected reservation. Both are editable channels only
+   (`phone|email|operator|ai`); any legacy online-form row stays immutable. The
    **AIS verification layer** is now built (`app/verification.py`,
    `GET /verification`): a **read-only** check of operator placements against
    observed AIS — each planned row (vessel + window) is `arrived` / `no_show` /
@@ -262,6 +277,14 @@ it **proposes, never places**. What remains on step 7: the legacy-spreadsheet
 backfill *commit*. Step 7 intake *capture* plus a manual *edit* surface landed
 early at the user's request; step 6's draft-vs-controlling-depth gate is deferred
 (no depth data layer yet).
+
+**Audit hardening (migrations 0009–0010):** three review findings were closed —
+(1) the AI channel got its **own `source='ai'` provenance** (was the borrowed
+`email`), with editability decoupled into an explicit `EDITABLE_SOURCES` set that
+includes `ai`; (2) deleting a berth request now **soft-deletes** `intake_event`
+(`deleted_at`) instead of erasing the audit row, with the dedupe index partial on
+`deleted_at IS NULL`; (3) an **`audit_log`** table records who/what for every
+mutating endpoint (actor from the HTTP-Basic user, in-transaction with the write).
 DB-integration tests need a live PostGIS (they auto-skip without one); pure
 logic — crosswalk, detector/projection, conflict overlap predicates, intake
 parsing & normalization, edit range/validation helpers — is unit-tested.
@@ -275,14 +298,19 @@ app/
   models.py            # ORM models (mirror the migration; migration is truth)
   crosswalk.py         # THE stationing module — all position math lives here
   tz.py                # THE time module — Central Time canon (assume_central); no inline offsets
-  main.py              # FastAPI: read-only endpoints + map page + intake + edit + conflicts
+  main.py              # FastAPI app assembly: middleware + OperationalError handler + static
+                       #   mount + / and /health; the HTTP surface itself lives in routers/
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
   conflicts.py         # step 6: time×station overlap primitive + find_conflicts (GET /conflicts)
   verification.py      # step 7: AIS verification of operator placements (GET /verification) —
                        #   arrived/no-show/awaiting + where-planned + unplanned; never PLACES.
                        #   expire_stale (POST /verification/sweep + occupancy worker) auto-archives
                        #   stale planned rows past window+grace -> completed/cancelled (status only)
-  auth.py              # HTTP Basic gate (whole-app middleware); active only when OPERATOR_USER+PASSWORD set
+  auth.py              # HTTP Basic gate (whole-app middleware); active only when OPERATOR_USER+PASSWORD set;
+                       #   sets request.state.operator (the authenticated user) for the audit_log
+  audit.py             # record_audit: append-only audit_log writes (who/what), via do_write's audit= hook
+  routers/             # HTTP surface split by concern: common.py (do_write + actor), read_only.py,
+                       #   intake.py, edit.py, analysis.py — wired onto the app by main.py
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
   seed/wharf_seed.py   # seeds wharf_segment (real centerline + apron) + berth catalog (from data/gis/)
   ais/
@@ -309,7 +337,9 @@ alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intak
                        #   0004 'email' source · 0005 wharf_segment.apron ·
                        #   0006 berth catalog + reservation.berth_id ·
                        #   0007 min mooring-gap buffer on the overlap constraint ·
-                       #   0008 database default TimeZone = America/Chicago
+                       #   0008 database default TimeZone = America/Chicago ·
+                       #   0009 'ai' source (AI-channel provenance) ·
+                       #   0010 intake_event soft-delete (deleted_at) + audit_log table
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation, conflict overlap predicates; db-marked (auto-skip):
                        #   geo→station, occupancy derive, intake, reservations, edit (vessel patch /
@@ -332,7 +362,12 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
 - Any schema change goes through a new Alembic revision and a matching update to
   `app/models.py`. Keep enum value tuples in `models.py` and the migration in sync.
 - The exclusion constraint stays `confirmed`-only. If you think you need to block
-  `observed` overlaps, re-read the Core model section first.
+  `observed` overlaps, re-read the Core model section first. The 75 ft minimum
+  mooring gap it enforces is **baked into the constraint** (migration 0007's
+  `GAP_FT`, padding each station range by half the gap before the `&&` test) —
+  it is the single source of truth, there is deliberately **no** `app.config`
+  mirror (a former `min_vessel_gap_ft` setting looked tunable but the constraint
+  ignored it, so it was removed). Change the gap via a new migration, never config.
 - **Auth is whole-app HTTP Basic via a middleware** (`app/auth.py`), not per-route
   dependencies — the middleware is the only thing that also covers the mounted
   static map (`/`, `/static/*`). It is **active only when both `OPERATOR_USER`
@@ -344,7 +379,11 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   api port therefore binds to **`127.0.0.1` only** in `docker-compose.prod.yml`
   (a TLS-terminating reverse proxy on a sanctioned network is the sole front
   door — see `DEPLOY.md`). Don't widen that bind to `0.0.0.0` without putting
-  TLS in front.
+  TLS in front. The middleware also sets `request.state.operator` (the
+  authenticated user, NULL when open) so write endpoints can stamp it onto
+  `audit_log`; with one shared credential that's the configured `OPERATOR_USER`,
+  but the middleware is the single place to derive a real per-user identity if
+  multiple credentials are added.
 - Intake is operator-driven (`app/intake/manual.py`); the Adobe-Sign online-form
   feed was retired. There is also an **optional AI-assisted pull channel**
   (`app/intake/llm.py` + `dataverse_run.py`) — see the rules for it below. A new
@@ -385,9 +424,25 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   re-derived `confirmed` row that now collides surfaces as a 409. A content-empty submission (no vessel/imo/etb) is refused
   outright (`record_manual_request` returns `skipped`, lands no row) so a stray
   POST can't create a blank request card. `delete_manual_request` / `DELETE
-  /intake/berth-requests/{id}` likewise removes a manual row outright (raw event
-  + its projected reservation), same channel restriction. New *channels* still
-  never skip the raw landing.
+  /intake/berth-requests/{id}` **soft-deletes** the raw event (stamps
+  `deleted_at`, keeping it for the audit trail — `intake_event` is "the audit +
+  reconciliation trail", so a delete must not erase the evidence) and drops the
+  projected reservation, same channel restriction; the row then leaves the live
+  API and no longer blocks a re-submission (the dedupe index is partial on
+  `deleted_at IS NULL`, and the `ON CONFLICT` `index_where` matches). New
+  *channels* still never skip the raw landing.
+- **Every mutating endpoint writes one `audit_log` row** (`app/audit.py`
+  `record_audit`, via the `do_write` `audit=` hook in `app/routers/common.py`;
+  migration 0010) in the **same transaction** as the write — actor =
+  authenticated HTTP-Basic user (`request.state.operator`, set by the auth
+  middleware; NULL when auth is open), action/entity/entity_id, and a JSONB
+  `detail` (the pre-edit/pre-delete raw, the changed-field list, the swept ids).
+  With a single shared credential this records *that the operator did it and
+  when*, the best identity available; the middleware is the one place to derive a
+  real username if multiple credentials are added later. The log is append-only
+  and constraint-free, so logging never blocks the write it records. The audit
+  hook returns `None` to skip a no-op (a deduped re-submission, a 404, an empty
+  sweep) — only real changes are logged.
 - **The AI-assisted intake channel** (`app/intake/llm.py` + `dataverse_run.py`)
   is a *normalizer*, not a placer — it follows the same "AI proposes, the
   deterministic layer + operator dispose" rule as AIS verification. The LLM (via
@@ -402,8 +457,12 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   status — placement/confirm stay the operator's. The worker pulls **outbound**
   from Dataverse (Azure AD client-creds); do not replace it with an inbound
   webhook into the api (that reopens the 127.0.0.1-bind + HTTP-connector DLP
-  problem the pull was chosen to avoid). AI cards are tagged `source='email'` (a
-  manual channel) so an operator can still edit/delete them; the verbatim source
+  problem the pull was chosen to avoid). AI cards are tagged `source='ai'` — its
+  **own provenance value** (migration 0009), not a borrowed human channel, so
+  "how many requests came via the AI channel?" is answerable from the data.
+  Editability is a **separate** axis: `app/intake/manual.EDITABLE_SOURCES`
+  (`phone|email|operator|ai`) explicitly includes `ai`, so an operator can still
+  edit/delete an AI card without it pretending to be email. The verbatim source
   row is preserved via `BerthRequestForm.source_raw`, and the model's confidence/
   caveats via `BerthRequestForm.notes` → `reservation.notes`.
 - The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel

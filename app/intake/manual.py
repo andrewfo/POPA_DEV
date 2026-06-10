@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, field_validator
-from sqlalchemy import func, insert, select, text, update
+from sqlalchemy import and_, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,21 @@ FEET_PER_M = 3.280839895
 # added in migration 0004.
 MANUAL_SOURCES = ("phone", "email", "operator")
 _DEFAULT_SOURCE = "phone"
+
+# Provenance values a *new* intake request may legitimately carry: the human
+# channels PLUS 'ai' (the AI-assisted normalizer's own tag, migration 0009 —
+# distinct from the human 'email' channel it used to borrow). An unrecognized
+# source is downgraded to ``_DEFAULT_SOURCE`` with a warning (see normalize_form).
+ACCEPTED_SOURCES = MANUAL_SOURCES + ("ai",)
+
+# Sources whose raw payload uses *this form's* lowercase keys, so an operator can
+# re-edit / delete them through the same form. DELIBERATELY decoupled from
+# provenance (that was the whole point of the 'ai' tag): it INCLUDES the AI
+# channel because AI cards are operator-correctable, while the legacy online-form
+# export ('form', different column names) stays read-only history. "Provenance"
+# answers *how it was parsed*; this set answers *may an operator edit it* — two
+# separate questions that used to share one tuple.
+EDITABLE_SOURCES = MANUAL_SOURCES + ("ai",)
 
 # Bunker fuel grades offered on the online request form (code -> full label).
 # Mirrors the Power Pages "Bunkering Type" choice; stored by code, rendered with
@@ -290,8 +305,8 @@ def normalize_form(form: BerthRequestForm) -> NormalizedRequest:
     No database access — unit-testable on its own."""
     warnings: list[str] = []
 
-    source = form.source if form.source in MANUAL_SOURCES else _DEFAULT_SOURCE
-    if form.source not in MANUAL_SOURCES:
+    source = form.source if form.source in ACCEPTED_SOURCES else _DEFAULT_SOURCE
+    if form.source not in ACCEPTED_SOURCES:
         warnings.append(f"unknown source {form.source!r}; recorded as {source!r}")
 
     if not form.vessel:
@@ -546,16 +561,26 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
         pg_insert(IntakeEvent)
         .values(source=req.source, raw=req.raw, dedupe_key=key, processed=False)
         .on_conflict_do_nothing(
+            # Must match the partial unique index predicate exactly (migration
+            # 0010): a *live* row's dedupe_key is unique, but a soft-deleted row
+            # (deleted_at set) is excluded — so re-submitting content that was
+            # deleted lands a fresh request rather than silently no-op'ing.
             index_elements=["dedupe_key"],
-            index_where=IntakeEvent.dedupe_key.isnot(None),
+            index_where=and_(
+                IntakeEvent.dedupe_key.isnot(None),
+                IntakeEvent.deleted_at.is_(None),
+            ),
         )
         .returning(IntakeEvent.id)
     ).scalar_one_or_none()
 
     if intake_id is None:
+        # A conflict means a *live* row already holds this content; surface it
+        # (not a soft-deleted one, which the partial index ignores).
         existing = session.execute(
             select(IntakeEvent.id, IntakeEvent.reservation_id).where(
-                IntakeEvent.dedupe_key == key
+                IntakeEvent.dedupe_key == key,
+                IntakeEvent.deleted_at.is_(None),
             )
         ).first()
         return {
@@ -598,34 +623,51 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
 
 
 def delete_manual_request(session: Session, intake_id: int) -> dict:
-    """Delete a manual berth request: drop the raw ``intake_event`` row and the
-    ``requested`` reservation it projected. An operator removing a phoned/emailed
-    request that was mistaken or withdrawn, rather than leaving a stale row + an
-    orphan reservation behind.
+    """Withdraw a manual berth request: **soft-delete** the raw ``intake_event``
+    row (stamp ``deleted_at``) and drop the ``requested`` reservation it
+    projected. An operator removing a phoned/emailed request that was mistaken or
+    withdrawn.
 
-    Like the in-place edit, this is restricted to manual channels
-    (``phone|email|operator``); the immutable online-form CSV export cannot be
-    deleted here. Does NOT commit — the endpoint owns the transaction boundary.
-    Raises ``LookupError`` if the event doesn't exist (-> 404) and ``ValueError``
-    if it isn't an editable manual-channel row (-> 422).
+    The raw row is kept, not erased: ``intake_event`` is "the audit +
+    reconciliation trail", so the evidence that a request ever arrived must
+    survive a delete (migration 0010). It just stops appearing in the live API
+    (``GET /intake/berth-requests`` filters ``deleted_at IS NULL``) and no longer
+    blocks a re-submission of the same content (the dedupe index is partial on
+    ``deleted_at IS NULL``). The projected reservation IS hard-dropped — a
+    withdrawn request is no longer scheduled — and its id is returned (-> the
+    audit_log) so the trail still names what was removed.
+
+    Restricted to editable channels (``phone|email|operator|ai``); the immutable
+    online-form export cannot be deleted here. Does NOT commit — the endpoint owns
+    the transaction boundary. Raises ``LookupError`` if the event doesn't exist or
+    was already deleted (-> 404) and ``ValueError`` if it isn't editable (-> 422).
     """
     existing = session.execute(
-        select(IntakeEvent.source, IntakeEvent.reservation_id).where(
-            IntakeEvent.id == intake_id
-        )
+        select(
+            IntakeEvent.source,
+            IntakeEvent.reservation_id,
+            IntakeEvent.deleted_at,
+            IntakeEvent.raw,
+        ).where(IntakeEvent.id == intake_id)
     ).first()
     if existing is None:
         raise LookupError(f"intake_event {intake_id} not found")
+    if existing.deleted_at is not None:
+        raise LookupError(f"intake_event {intake_id} was already deleted")
     if existing.source not in EDITABLE_SOURCES:
         raise ValueError(
-            f"only manual-channel requests ({', '.join(EDITABLE_SOURCES)}) "
+            f"only editable-channel requests ({', '.join(EDITABLE_SOURCES)}) "
             f"can be deleted, not {existing.source!r}"
         )
 
-    # The intake_event -> reservation FK is ON DELETE SET NULL, so deleting the
-    # event first just clears the link; then drop the projected reservation.
+    # Soft-delete the raw audit row (keep it + its verbatim payload). Then drop
+    # the projected reservation; the intake_event -> reservation FK is ON DELETE
+    # SET NULL, so dropping it clears the link on the now-archived row — the id is
+    # preserved in the return (-> audit detail) so the trail still names it.
     session.execute(
-        text("DELETE FROM intake_event WHERE id = :id"), {"id": intake_id}
+        update(IntakeEvent)
+        .where(IntakeEvent.id == intake_id)
+        .values(deleted_at=func.now())
     )
     reservation_id = existing.reservation_id
     if reservation_id is not None:
@@ -637,13 +679,10 @@ def delete_manual_request(session: Session, intake_id: int) -> dict:
         "deleted": True,
         "intake_event_id": intake_id,
         "reservation_id": reservation_id,
+        # Pre-delete raw, preserved for the audit_log even though the soft-deleted
+        # row still holds it (keeps the audit entry self-contained).
+        "prior_raw": existing.raw,
     }
-
-
-# Channels whose raw payload uses this form's lowercase keys, so an operator can
-# re-edit them through the same form. A legacy 'form' row (the retired online
-# feed) carries the old export's column names, so it stays read-only here.
-EDITABLE_SOURCES = ("phone", "email", "operator")
 
 
 def update_manual_request(
@@ -670,13 +709,16 @@ def update_manual_request(
             IntakeEvent.source,
             IntakeEvent.reservation_id,
             IntakeEvent.raw,
+            IntakeEvent.deleted_at,
         ).where(IntakeEvent.id == intake_id)
     ).first()
     if existing is None:
         raise LookupError(f"intake_event {intake_id} not found")
+    if existing.deleted_at is not None:
+        raise LookupError(f"intake_event {intake_id} was already deleted")
     if existing.source not in EDITABLE_SOURCES:
         raise ValueError(
-            f"only manual-channel requests ({', '.join(EDITABLE_SOURCES)}) "
+            f"only editable-channel requests ({', '.join(EDITABLE_SOURCES)}) "
             f"can be edited, not {existing.source!r}"
         )
 
@@ -762,4 +804,7 @@ def update_manual_request(
         "reservation_id": reservation_id,
         "vessel_id": vessel_id,
         "warnings": req.warnings,
+        # Pre-edit raw, for the audit_log: the edit overwrites raw in place (the one
+        # sanctioned mutation), so the prior payload only survives if captured here.
+        "prior_raw": prior,
     }
