@@ -251,8 +251,20 @@ into a `BerthRequestForm`, and it records through the same `record_manual_reques
 pipeline (raw preserved via `source_raw`, confidence/caveats onto `notes`,
 `requested`/empty-range row). **Proposes, never places.** Tests in
 `tests/test_intake_llm.py` + `tests/test_intake_dataverse.py` (faked LLM/client).
+The worker has a CLI to validate before going live — `--once`, `--dry-run`
+(fetch+parse+print, no writes), and `--input FILE` (parse local sample rows;
+OpenRouter only, no Dataverse/DB — sample in `docs/sample_berth_requests.json`).
 Needs an Entra app-registration + Dataverse application user + an OpenRouter key
-to run live.
+to run live; IT-side setup in `docs/dataverse-entra-setup.md`,
+`docs/berth-intake-handoff.md`.
+
+**Caveat — model reliability.** Live sampling showed the cheapest model
+(`gemini-2.0-flash-lite`) occasionally returns prose-wrapped or truncated JSON and
+silently drops an otherwise-clean row. `extraction_from_json` is hardened against
+this (string-aware brace extraction + `max_tokens` + raw-text logging on failure),
+which rescued the failing sample; still, for production prefer a non-lite model
+(`--model google/gemini-2.0-flash-001`) and watch the worker logs for the
+"did not return valid JSON" warning.
 
 **Still TODO:**
 - **Legacy spreadsheet backfill commit** — the parser is conservative and
