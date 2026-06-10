@@ -431,6 +431,10 @@ def stats(session: Session = Depends(get_session)) -> dict:
     # fix with the same ordering /positions/recent uses (msg_ts DESC NULLS LAST,
     # id DESC), and apply the same alongside predicate + the shared
     # berth_enter_sog_kn threshold (also handed to the client via /config/bbox).
+    # The latest fix must also be *recent* (within the present window): a vessel
+    # that left stops broadcasting in the bbox, so its last fix — even if it was
+    # alongside and stopped — ages out and must not linger as "moored now"
+    # (same recency gate as vessels_present below).
     settings = get_settings()
     point = "ST_SetSRID(ST_MakePoint(l.lon, l.lat), 4326)"
     moored = session.execute(
@@ -438,7 +442,7 @@ def stats(session: Session = Depends(get_session)) -> dict:
             f"""
             WITH latest AS (
                 SELECT DISTINCT ON (pr.mmsi)
-                       pr.mmsi, pr.lat, pr.lon, pr.sog
+                       pr.mmsi, pr.lat, pr.lon, pr.sog, pr.msg_ts
                 FROM position_report pr
                 WHERE pr.mmsi IS NOT NULL
                 ORDER BY pr.mmsi, pr.msg_ts DESC NULLS LAST, pr.id DESC
@@ -447,12 +451,14 @@ def stats(session: Session = Depends(get_session)) -> dict:
             FROM latest l
             {nearest_segment_lateral(point)}
             WHERE l.sog IS NOT NULL AND l.sog < :enter_sog
+              AND l.msg_ts >= now() - (:window_h * interval '1 hour')
               AND COALESCE({alongside_sql(point)}, false)
             """
         ),
         {
             "enter_sog": settings.berth_enter_sog_kn,
             "buffer_m": settings.berth_buffer_m,
+            "window_h": settings.vessel_present_window_h,
         },
     ).scalar_one()
     # Arrivals in the next 24h = non-cancelled reservations whose ETB (the lower
@@ -532,7 +538,10 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
     crosswalk path ``geo_to_station``) and labelled with the berth whose station
     range contains it. This reads **live positions**, not derived ``observed``
     reservations, so "who's alongside" populates without the occupancy-derivation
-    worker running. Newest fix first."""
+    worker running. Newest fix first. The latest fix must be *recent* (within the
+    present window): a departed vessel's last fix — even if it was alongside and
+    stopped — ages out, so it never lingers here (same gate as the ``moored``
+    stat and ``vessels_present``)."""
     settings = get_settings()
     point = "ST_SetSRID(ST_MakePoint(l.lon, l.lat), 4326)"
     rows = session.execute(
@@ -550,11 +559,16 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
             LEFT JOIN vessel v ON v.id = l.vessel_id
             {nearest_segment_lateral(point)}
             WHERE l.sog IS NOT NULL AND l.sog < :enter_sog
+              AND l.msg_ts >= now() - (:window_h * interval '1 hour')
               AND COALESCE({alongside_sql(point)}, false)
             ORDER BY l.msg_ts DESC NULLS LAST
             """
         ),
-        {"enter_sog": settings.berth_enter_sog_kn, "buffer_m": settings.berth_buffer_m},
+        {
+            "enter_sog": settings.berth_enter_sog_kn,
+            "buffer_m": settings.berth_buffer_m,
+            "window_h": settings.vessel_present_window_h,
+        },
     ).all()
     # Berth catalog loaded once; matching a POPA station to a named berth is a
     # range-membership lookup, not stationing math (that stays in the crosswalk).
