@@ -254,32 +254,35 @@ def _bunker_summary(form: BerthRequestForm) -> str:
 
 def _notes(form: BerthRequestForm, source: str, warnings: list[str]) -> str:
     """Assemble human-readable notes from the fields without dedicated columns
-    (agent, flag, line, DWT, bunkers, origin/destination, berth status)."""
-    bits = [f"manual entry ({source})"]
+    (agent, requestor, flag, line, DWT, bunkers, origin/destination, berth
+    status). One labelled item per line — newline-separated, not a semicolon
+    run-on — so it reads as a list. The UI renders reservation notes with
+    ``white-space:pre-line``, so the line breaks show through."""
+    lines = [f"manual entry ({source})"]
     if form.agency:
-        bits.append(f"agent: {form.agency}")
+        lines.append(f"agent: {form.agency}")
     requestor = ", ".join(
         b for b in (form.requestor_name, form.requestor_email, form.requestor_phone) if b
     )
     if requestor:
-        bits.append(f"requestor: {requestor}")
+        lines.append(f"requestor: {requestor}")
     if form.ss_line:
-        bits.append(f"line: {form.ss_line}")
+        lines.append(f"line: {form.ss_line}")
     if form.flag:
-        bits.append(f"flag: {form.flag}")
+        lines.append(f"flag: {form.flag}")
     if form.due_from or form.sail_for:
-        bits.append(f"from {form.due_from or '?'} → {form.sail_for or '?'}")
+        lines.append(f"route: {form.due_from or '?'} → {form.sail_for or '?'}")
     if form.destinations:
-        bits.append(f"destinations: {form.destinations}")
+        lines.append(f"destinations: {form.destinations}")
     if form.deadweight_lbs is not None:
-        bits.append(f"DWT {form.deadweight_lbs:g} lbs")
-    bits.append(_bunker_summary(form))
-    bits.append("berth UNASSIGNED (port to assign)")
+        lines.append(f"DWT: {form.deadweight_lbs:g} lbs")
+    lines.append(_bunker_summary(form))
+    lines.append("berth UNASSIGNED (port to assign)")
     if form.notes:
-        bits.append(form.notes.strip())
+        lines.append(form.notes.strip())
     if warnings:
-        bits.append("warnings: " + "; ".join(warnings))
-    return "; ".join(bits)
+        lines.append("warnings: " + "; ".join(warnings))
+    return "\n".join(lines)
 
 
 def normalize_form(form: BerthRequestForm) -> NormalizedRequest:

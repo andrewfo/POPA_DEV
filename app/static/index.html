@@ -377,7 +377,7 @@
     background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
   }
   .intake input:focus, .intake select:focus,
-  .edit-form input:focus, .edit-form select:focus,
+  .edit-form input:focus, .edit-form select:focus, .edit-form textarea:focus,
   .filter-bar select:focus { outline: none; border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-dim); }
   /* Utilitarian checkboxes — square, accent tick */
   .intake .check input, .edit-form .check input, input[type=checkbox] { accent-color: var(--accent); }
@@ -433,10 +433,11 @@
   .edit-form legend { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .8px; padding: 0; }
   .edit-form .hint { color: var(--muted); font-size: 11px; }
   .edit-form label { display: block; font-size: 10px; color: var(--muted); margin: 8px 0 3px; text-transform: uppercase; letter-spacing: .4px; }
-  .edit-form input, .edit-form select {
+  .edit-form input, .edit-form select, .edit-form textarea {
     width: 100%; padding: 5px 7px; border-radius: var(--r-int); border: 1px solid var(--line);
     background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
   }
+  .edit-form textarea { resize: vertical; line-height: 1.4; box-sizing: border-box; }
   .edit-form .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
   .edit-form .check { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: var(--ink); }
   .edit-form .check input { width: auto; }
@@ -1864,7 +1865,7 @@ function resCard(r) {
             <div><label>Departure (ETD)</label><input type="datetime-local" name="etd" value="${isoToLocalInput(r.t_end)}" /></div>
           </div>
           <label>Cargo</label><input name="cargo" value="${esc(r.cargo)}" />
-          <label>Notes</label><input name="notes" value="${esc(r.notes)}" />
+          <label>Notes</label><textarea name="notes" rows="4">${esc(r.notes)}</textarea>
         </fieldset>
         <div class="row-actions">
           <button type="submit" class="btn-sm primary">Save request</button>
@@ -1891,7 +1892,7 @@ function resCard(r) {
           <div></div>
         </div>
         <label>Cargo</label><input name="cargo" value="${esc(r.cargo)}" />
-        <label>Notes</label><input name="notes" value="${esc(r.notes)}" />
+        <label>Notes</label><textarea name="notes" rows="4">${esc(r.notes)}</textarea>
         <div class="row-actions">
           <button type="submit" class="btn-sm primary">Save changes</button>
           <button type="button" class="btn-sm" data-act="close">Close</button>
@@ -2935,7 +2936,7 @@ const loadTimeline = (function () {
       `<span class="k">${esc(r.type)} · ${esc(r.status)} · via ${esc(r.source)}</span><br>` +
       `${fmtDT(r.t_start)} → ${r.t_end ? fmtDT(r.t_end) : "open"}<br>` +
       `<span class="k">${esc(sta)}</span>` +
-      (r.cargo ? `<br>${esc(r.cargo)}` : "") + (r.notes ? `<br><span class="k">${esc(r.notes)}</span>` : "");
+      (r.cargo ? `<br>${esc(r.cargo)}` : "") + (r.notes ? `<br><span class="k" style="white-space:pre-line">${esc(r.notes)}</span>` : "");
     tip.style.display = "block";
     const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
     let lx = ev.clientX + pad, ly = ev.clientY + pad;

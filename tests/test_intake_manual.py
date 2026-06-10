@@ -147,6 +147,22 @@ def test_notes_flag_unassigned_berth_and_bunkers():
     assert "bunkers: yes" in req.notes
 
 
+def test_notes_are_one_labelled_item_per_line():
+    # Readability: notes are a newline-separated list, not a semicolon run-on, so
+    # each captured field shows on its own line (the UI renders pre-line).
+    req = normalize_form(
+        _form(agency="ISS BEAUMONT", flag="LR", due_from="Beaumont", sail_for="Houston")
+    )
+    lines = req.notes.split("\n")
+    assert lines[0] == "manual entry (phone)"
+    assert "agent: ISS BEAUMONT" in lines
+    assert "flag: LR" in lines
+    assert "route: Beaumont → Houston" in lines
+    assert "berth UNASSIGNED (port to assign)" in lines
+    # no semicolon-joined run-on between distinct fields
+    assert "; agent:" not in req.notes
+
+
 # --- DB: end-to-end landing ------------------------------------------------
 def _counts(session):
     return (
