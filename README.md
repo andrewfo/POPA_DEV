@@ -86,6 +86,11 @@ python -m app.ais.run
 # Needs OPENROUTER_API_KEY + the DATAVERSE_* vars (see .env.example); self-exits
 # if they're unset. Manual entry stays available via the form on the map page.
 python -m app.intake.dataverse_run
+#   --once       run one batch then exit (instead of looping)
+#   --dry-run    fetch + parse + PRINT each row, write nothing (Dataverse + key, no DB)
+#   --input F    parse sample rows from a local JSON file; needs ONLY OpenRouter —
+#                no Dataverse, no DB. Eyeball the model before going live:
+python -m app.intake.dataverse_run --input docs/sample_berth_requests.json
 ```
 
 ## Deploy (production)

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-from app.intake.dataverse_run import process_batch
+from app.intake.dataverse_run import process_batch, run_input_file
 
 
 class _FakeClient:
@@ -188,3 +188,54 @@ def test_process_batch_isolates_a_failing_row():
     # the failing row was rolled back and never marked; the good one was marked
     session.rollback.assert_called_once()
     assert client.marked == [("id-2", 2)]
+
+
+def test_dry_run_parses_but_writes_nothing(capsys):
+    rows = [{"popa_berthrequestid": "id-1", "popa_vesselname": "SAGA ADVENTURE"}]
+    client = _FakeClient(rows)
+    record = MagicMock()
+
+    summary = process_batch(
+        None,  # no session needed in dry-run
+        client,
+        complete=_fake_complete(_canned()),
+        source="email",
+        status_new=1,
+        status_triaged=2,
+        limit=25,
+        record=record,
+        dry_run=True,
+    )
+
+    assert summary["previewed"] == 1
+    assert summary["recorded"] == 0
+    record.assert_not_called()       # nothing recorded
+    assert client.marked == []       # nothing marked triaged
+    # the parse is printed for eyeballing
+    out = capsys.readouterr().out
+    assert "SAGA ADVENTURE" in out
+    assert "confidence" in out
+
+
+def test_run_input_file_parses_each_sample(tmp_path, capsys):
+    sample = tmp_path / "rows.json"
+    sample.write_text(
+        json.dumps(
+            [
+                {"Vessel Name": "Chem Orchard", "Notes": "abt 607' loa"},
+                {"Vessel Name": "OTHER"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    # one canned response is fine for both rows (we're testing the harness, not
+    # the model)
+    run_input_file(
+        str(sample),
+        complete=_fake_complete(_canned(vessel="Chem Orchard", length_ft=607.0)),
+        source="email",
+    )
+    out = capsys.readouterr().out
+    assert "parsing 2 row(s)" in out
+    assert "Chem Orchard" in out
+    assert "607" in out

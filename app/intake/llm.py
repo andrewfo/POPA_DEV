@@ -33,12 +33,15 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from dataclasses import dataclass, field
 
 import httpx
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.intake.manual import BUNKER_TYPES, BerthRequestForm, valid_imo
+
+logger = logging.getLogger("app.intake.llm")
 
 # The fields we ask the model to extract. Kept to the canonical berth-request
 # columns ``BerthRequestForm`` actually carries; everything optional so a sparse
@@ -221,20 +224,65 @@ def _strip_fences(text: str) -> str:
     return s.strip()
 
 
+def _find_json_object(s: str) -> str | None:
+    """Return the first balanced ``{...}`` substring, or ``None``. String-aware
+    (braces inside quoted strings don't count), so it rescues a JSON object the
+    model wrapped in prose ("Here is the result: {…}") or followed with a trailing
+    explanation — a real failure mode for weaker models that ignore the
+    JSON-object response format."""
+    start = s.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        c = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start : i + 1]
+    return None
+
+
 def extraction_from_json(text: str) -> tuple[LlmExtraction, list[str]]:
     """Parse the model's text into an :class:`LlmExtraction`. Never raises — junk
     or a non-object yields an empty extraction plus a note, so a bad LLM response
-    degrades to "nothing extracted" rather than dropping the request."""
-    notes: list[str] = []
-    try:
-        data = json.loads(_strip_fences(text))
-    except (json.JSONDecodeError, TypeError):
+    degrades to "nothing extracted" rather than dropping the request.
+
+    Two parse attempts before giving up: the stripped text as-is, then the first
+    balanced ``{...}`` block dug out of it (rescues prose-wrapped JSON). On total
+    failure the raw text is logged (truncated) so a silent drop is diagnosable."""
+    stripped = _strip_fences(text)
+    data = None
+    for candidate in (stripped, _find_json_object(stripped)):
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(parsed, dict):
+            data = parsed
+            break
+    if data is None:
+        logger.warning("LLM did not return a parseable JSON object; raw=%r", text[:500])
         return LlmExtraction(), ["LLM did not return valid JSON; nothing extracted"]
-    if not isinstance(data, dict):
-        return LlmExtraction(), ["LLM JSON was not an object; nothing extracted"]
     try:
-        return LlmExtraction.model_validate(data), notes
+        return LlmExtraction.model_validate(data), []
     except Exception:  # pragma: no cover - pydantic is tolerant here, but be safe
+        logger.warning("LLM JSON did not match the expected shape; raw=%r", text[:500])
         return LlmExtraction(), ["LLM JSON did not match the expected shape"]
 
 
@@ -342,6 +390,10 @@ def openrouter_complete(
                 "messages": messages,
                 "temperature": 0,
                 "response_format": {"type": "json_object"},
+                # Bound the response so a chatty/looping model can't truncate the
+                # JSON mid-object (a truncated object => unparseable). The extraction
+                # object is ~25 short fields; 1024 is comfortable headroom.
+                "max_tokens": 1024,
             },
         )
         resp.raise_for_status()

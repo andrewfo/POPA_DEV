@@ -56,6 +56,27 @@ def test_extraction_ignores_unknown_keys():
     assert ext.vessel == "Z"
 
 
+def test_extraction_rescues_prose_wrapped_json():
+    # weaker models sometimes ignore the json_object format and prepend prose
+    ext, notes = extraction_from_json('Here is the extraction:\n{"vessel": "SAGA"}')
+    assert ext.vessel == "SAGA"
+    assert notes == []
+
+
+def test_extraction_rescues_json_with_trailing_text():
+    ext, _ = extraction_from_json('{"vessel": "SAGA"}\n\nLet me know if you need more.')
+    assert ext.vessel == "SAGA"
+
+
+def test_extraction_brace_scan_is_string_aware():
+    # a closing brace inside a string value must not end the object early
+    ext, _ = extraction_from_json(
+        'prefix {"inbound_cargo": "bags } of cement", "imo": 9317406} end'
+    )
+    assert ext.inbound_cargo == "bags } of cement"
+    assert ext.imo == 9317406
+
+
 def test_extraction_junk_degrades_to_empty():
     ext, notes = extraction_from_json("the vessel is the SAGA ADVENTURE")
     assert ext.vessel is None

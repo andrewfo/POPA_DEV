@@ -18,14 +18,17 @@ Run:  python -m app.intake.dataverse_run
 from __future__ import annotations
 
 import logging
+import argparse
+import json
 import time
+from pathlib import Path
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import SessionLocal
-from app.intake.llm import openrouter_complete, parse_request
+from app.intake.llm import ParseResult, openrouter_complete, parse_request
 from app.intake.manual import record_manual_request
 
 logging.basicConfig(
@@ -130,6 +133,7 @@ def process_batch(
     limit: int,
     record=record_manual_request,
     recorded_ids: set | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Fetch a batch of new requests, parse + record each, then mark it triaged.
 
@@ -142,7 +146,12 @@ def process_batch(
     remembered in ``recorded_ids`` (hoist this across polls — see ``main``); on a
     later poll such a row is only re-marked, never re-parsed/re-recorded. The
     intake dedupe is still the backstop if the id cache is lost (process
-    restart). Returns a summary dict."""
+    restart). Returns a summary dict.
+
+    ``dry_run`` parses + prints each row's extraction and writes nothing — no
+    record, no commit, no triage-mark — so you can eyeball the LLM output against
+    real rows before turning the loop on. ``session`` is unused in that mode (pass
+    ``None``)."""
     if recorded_ids is None:
         recorded_ids = set()
     rows = client.fetch_new(status_new=status_new, limit=limit)
@@ -152,9 +161,20 @@ def process_batch(
         "skipped": 0,
         "remarked": 0,
         "errors": 0,
+        "previewed": 0,
     }
     for row in rows:
         row_id = row.get(client.id_field)
+        if dry_run:
+            # Parse + show, never write. A parse failure here is just reported.
+            try:
+                result = parse_request(row, complete=complete, source=source)
+                _print_parse(row_id, result)
+                summary["previewed"] += 1
+            except Exception:  # noqa: BLE001 - report and keep previewing
+                summary["errors"] += 1
+                logger.exception("dry-run parse failed for %s", row_id)
+            continue
         # Already recorded on a prior poll but its triage-mark failed: retry only
         # the mark, never re-bill the LLM or re-record.
         if row_id is not None and row_id in recorded_ids:
@@ -193,6 +213,40 @@ def process_batch(
     return summary
 
 
+def _print_parse(label, result: ParseResult) -> None:
+    """Print one parse for human eyeballing (dry-run / --input). Shows only the
+    fields the model actually populated, plus confidence and any caveats."""
+    fields = {
+        k: v
+        for k, v in result.form.model_dump(mode="json").items()
+        if v not in (None, False, "") and k != "source_raw"
+    }
+    print(f"\n=== {label} ===")
+    print(f"confidence: {result.confidence:.0%}")
+    print("parsed fields:")
+    print(json.dumps(fields, indent=2, ensure_ascii=False, default=str))
+    if result.notes:
+        print("notes:")
+        for n in result.notes:
+            print(f"  - {n}")
+
+
+def run_input_file(path: str, *, complete, source: str) -> None:
+    """Parse rows from a local JSON file (a single object or a list of objects)
+    through the LLM and print each result. Needs only OpenRouter — no Dataverse,
+    no DB — so you can validate the prompt/model against sample rows today."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    rows = data if isinstance(data, list) else [data]
+    print(f"parsing {len(rows)} row(s) from {path}")
+    for i, row in enumerate(rows):
+        label = row.get("Vessel Name") or row.get("vessel") or f"row[{i}]"
+        try:
+            result = parse_request(row, complete=complete, source=source)
+            _print_parse(label, result)
+        except Exception:  # noqa: BLE001 - report and continue to the next sample
+            logger.exception("parse failed for %s", label)
+
+
 def _build_client(settings: Settings) -> DataverseClient:
     return DataverseClient(
         url=settings.dataverse_url,
@@ -206,66 +260,116 @@ def _build_client(settings: Settings) -> DataverseClient:
     )
 
 
-def main() -> None:
-    settings = get_settings()
+def _parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="python -m app.intake.dataverse_run",
+        description="Poll the Power Pages / Dataverse berth-request table, "
+        "LLM-normalize each new row, and record it. Default: loop forever.",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="run a single batch then exit (default: poll forever)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="parse and PRINT each row; write nothing (no record, no triage-mark). "
+        "Needs Dataverse read + OpenRouter, but no DB.",
+    )
+    parser.add_argument(
+        "--input",
+        metavar="FILE",
+        help="parse rows from a local JSON file (one object or a list) instead of "
+        "polling Dataverse; prints results, writes nothing. Needs only OpenRouter "
+        "- no Dataverse config, no DB. Good for testing the prompt/model today.",
+    )
+    parser.add_argument(
+        "--model",
+        help="override INTAKE_LLM_MODEL for this run (e.g. a different OpenRouter id)",
+    )
+    return parser.parse_args(argv)
 
-    # Fail fast on missing config rather than silently looping over nothing.
+
+def main(argv=None) -> None:
+    args = _parse_args(argv)
+    settings = get_settings()
+    model = args.model or settings.intake_llm_model
+
+    # Every mode calls the LLM, so OpenRouter is always required.
+    if not settings.openrouter_api_key:
+        raise SystemExit("OPENROUTER_API_KEY is not set.")
+    complete = openrouter_complete(
+        api_key=settings.openrouter_api_key,
+        model=model,
+        base_url=settings.openrouter_base_url,
+    )
+
+    # --input: parse local sample rows; no Dataverse, no DB.
+    if args.input:
+        run_input_file(args.input, complete=complete, source=settings.intake_llm_source)
+        return
+
+    # All other modes talk to Dataverse — validate that config now.
     if not settings.dataverse_configured:
         raise SystemExit(
             "Dataverse is not configured (need DATAVERSE_URL, DATAVERSE_TENANT_ID, "
-            "DATAVERSE_CLIENT_ID, DATAVERSE_CLIENT_SECRET). Worker not started."
-        )
-    if not settings.openrouter_api_key:
-        raise SystemExit("OPENROUTER_API_KEY is not set. Worker not started.")
-    if settings.dataverse_status_new is None or settings.dataverse_status_triaged is None:
-        raise SystemExit(
-            "DATAVERSE_STATUS_NEW and DATAVERSE_STATUS_TRIAGED must be the choice "
-            "option values from your Request Status column. Worker not started."
+            "DATAVERSE_CLIENT_ID, DATAVERSE_CLIENT_SECRET). Use --input to test the "
+            "LLM without Dataverse."
         )
     if settings.dataverse_status_new == settings.dataverse_status_triaged:
         raise SystemExit(
-            "DATAVERSE_STATUS_NEW and DATAVERSE_STATUS_TRIAGED must differ; equal "
-            "values mean every row stays in the polled state and is re-parsed each "
-            "poll. Worker not started."
+            "DATAVERSE_STATUS_NEW and DATAVERSE_STATUS_TRIAGED must differ (and be "
+            "the choice option values from your Request Status column); equal values "
+            "mean every row stays in the polled state and is re-parsed each poll."
         )
 
     client = _build_client(settings)
-    complete = openrouter_complete(
-        api_key=settings.openrouter_api_key,
-        model=settings.intake_llm_model,
-        base_url=settings.openrouter_base_url,
+    common = dict(
+        complete=complete,
+        source=settings.intake_llm_source,
+        status_new=settings.dataverse_status_new,
+        status_triaged=settings.dataverse_status_triaged,
+        limit=settings.dataverse_batch_limit,
     )
+
+    # --dry-run: fetch + parse + print, write nothing (so no DB session needed).
+    if args.dry_run:
+        logger.info("dry-run: model=%s table=%s (no writes)", model, settings.dataverse_table)
+        summary = process_batch(None, client, dry_run=True, **common)
+        logger.info("dry-run batch: %s", summary)
+        return
+
+    def _one_batch(recorded_ids: set) -> dict:
+        session = SessionLocal()
+        try:
+            return process_batch(session, client, recorded_ids=recorded_ids, **common)
+        finally:
+            session.close()
+
+    if args.once:
+        logger.info("single batch: model=%s table=%s", model, settings.dataverse_table)
+        logger.info("batch: %s", _one_batch(set()))
+        return
+
     poll = settings.dataverse_poll_seconds
     logger.info(
         "Dataverse intake worker up: model=%s table=%s poll=%ss",
-        settings.intake_llm_model,
+        model,
         settings.dataverse_table,
         poll,
     )
-
     # Ids of rows recorded but not yet successfully marked triaged, carried across
     # polls so a stuck mark is retried without re-billing the LLM (see
     # process_batch). Bounded by the count of genuinely stuck rows.
     recorded_ids: set = set()
     while True:
-        session = SessionLocal()
         try:
-            summary = process_batch(
-                session,
-                client,
-                complete=complete,
-                source=settings.intake_llm_source,
-                status_new=settings.dataverse_status_new,
-                status_triaged=settings.dataverse_status_triaged,
-                limit=settings.dataverse_batch_limit,
-                recorded_ids=recorded_ids,
-            )
+            summary = _one_batch(recorded_ids)
             if summary["fetched"]:
                 logger.info("batch: %s", summary)
         except Exception:  # noqa: BLE001 - keep the long-running worker alive
             logger.exception("poll failed; retrying next interval")
-        finally:
-            session.close()
         time.sleep(poll)
 
 
