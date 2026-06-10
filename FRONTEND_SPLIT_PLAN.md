@@ -1,8 +1,9 @@
 # Frontend split plan — `app/static/index.html` → ES modules
 
-Plan only (not executed). The actual move was deferred because `index.html` was
-under active concurrent edit at planning time; a 2,250-line restructure would
-clobber in-flight changes. Execute when the file is quiescent.
+**Executed.** The inline `<script>` is now `app/static/js/{api,state,map,timeline,
+panels,history,forms,app}.js`, loaded by a single `<script type="module"
+src="/static/js/app.js">`. The line numbers below reference the pre-split
+`index.html` and are kept as a record of where each piece came from.
 
 No framework, no build step. Plain ES modules loaded with
 `<script type="module">`. Target Leaflet stays a classic CDN `<script>` (sets the
