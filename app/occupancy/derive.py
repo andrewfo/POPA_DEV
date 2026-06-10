@@ -213,6 +213,17 @@ def derive_observed(
     dwell = dt.timedelta(minutes=settings.berth_dwell_min)
     gap = dt.timedelta(minutes=settings.berth_depart_gap_min)
 
+    # The FEED clock: the newest fix the whole bbox has landed. A vessel whose
+    # trailing alongside segment has gone silent for berth_stale_close_min
+    # against THIS clock departed during a coverage gap and gets its event
+    # closed at the last fix (see detect_berthings) — while a dead feed (no new
+    # fixes for anyone) advances nothing and closes nothing. Same "no data is
+    # not departure evidence" principle as the verification sweep's feed_alive.
+    feed_as_of = session.execute(
+        text("SELECT max(COALESCE(msg_ts, created_at)) FROM position_report")
+    ).scalar_one_or_none()
+    stale_after = dt.timedelta(minutes=settings.berth_stale_close_min)
+
     results: list[DerivedReservation] = []
     for vessel_id, track in grouped.items():
         events = detect_berthings(
@@ -221,6 +232,8 @@ def derive_observed(
             depart_sog=depart,
             dwell=dwell,
             depart_gap=gap,
+            as_of=feed_as_of,
+            stale_after=stale_after,
         )
         dims = dims_by_vessel.get(vessel_id, {})
         for ev in events:

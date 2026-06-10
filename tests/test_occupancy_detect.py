@@ -68,6 +68,41 @@ def test_open_ended_when_still_berthed_at_end():
     assert events[0].open_ended is True
 
 
+# --- stale-close: a silent vessel against a live feed clock ------------------
+def test_trailing_segment_closes_when_stale_against_feed_clock():
+    # Berthed 0..30, then silence — while the feed clock marched on 4 h. The
+    # vessel left during a coverage gap; the event closes at its last fix.
+    track = _track([(i * 5, True, 0.1) for i in range(7)])
+    events = detect_berthings(
+        track,
+        as_of=T0 + dt.timedelta(hours=4, minutes=30),
+        stale_after=dt.timedelta(hours=3),
+    )
+    assert len(events) == 1
+    assert events[0].open_ended is False
+    assert events[0].t_end == T0 + dt.timedelta(minutes=30)
+
+
+def test_trailing_segment_stays_open_within_staleness():
+    # Last fix 30 min before the feed clock — well inside the threshold.
+    track = _track([(i * 5, True, 0.1) for i in range(7)])
+    events = detect_berthings(
+        track,
+        as_of=T0 + dt.timedelta(minutes=60),
+        stale_after=dt.timedelta(hours=3),
+    )
+    assert len(events) == 1
+    assert events[0].open_ended is True
+
+
+def test_no_feed_clock_keeps_legacy_open_ended():
+    # Without as_of/stale_after (e.g. a caller that can't know the feed clock)
+    # the trailing segment stays open-ended exactly as before.
+    track = _track([(i * 5, True, 0.1) for i in range(7)])
+    events = detect_berthings(track, stale_after=dt.timedelta(hours=3))
+    assert events[0].open_ended is True
+
+
 def test_speed_between_thresholds_keeps_berthed():
     # SOG drifts between enter (0.5) and depart (1.0) — neither re-enters nor
     # departs; the vessel stays berthed across the whole window.

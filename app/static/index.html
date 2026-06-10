@@ -936,7 +936,8 @@
     <details class="section" open>
       <summary>Conflicts</summary>
     <div class="hint" style="margin:0 0 8px">
-      Reservations overlapping in both time and station. Click one to highlight
+      Reservations overlapping in both time and station — current and upcoming
+      only (resolved past overlaps live in History). Click one to highlight
       the contested stretch.
     </div>
     <div id="conflicts"><div class="empty">none</div></div>
@@ -948,9 +949,15 @@
       <summary>AIS verification</summary>
     <div class="hint" style="margin:0 0 8px">
       Operator placements checked against observed AIS: <b>arrived</b> /
-      <b>no-show</b> / <b>awaiting</b>, plus any <b>unplanned</b> arrival.
-      Read-only; AIS never places.
+      <b>no-show</b> / <b>awaiting</b>, plus any <b>unplanned</b> arrival
+      currently alongside. Read-only; AIS never places.
     </div>
+    <!-- Harbor craft (tugs/towboats/pilots) are filtered out of this panel AND
+         the conflicts feed server-side; this one toggle re-fetches both with
+         service_craft=1 (wired in panels.js). -->
+    <label class="tl-chk" style="display:block;margin:0 0 8px">
+      <input type="checkbox" id="svcCraftToggle" /> show harbor craft (tugs · towboats · pilots)
+    </label>
     <div id="verification"><div class="empty">none</div></div>
     </details>
     <!-- ===== /AIS verification ===== -->

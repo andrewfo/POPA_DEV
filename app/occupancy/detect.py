@@ -50,8 +50,19 @@ def detect_berthings(
     depart_sog: float = 1.0,
     dwell: dt.timedelta = dt.timedelta(minutes=20),
     depart_gap: dt.timedelta = dt.timedelta(minutes=10),
+    as_of: dt.datetime | None = None,
+    stale_after: dt.timedelta | None = None,
 ) -> list[BerthingEvent]:
-    """Reduce a single vessel's track to its berthing events."""
+    """Reduce a single vessel's track to its berthing events.
+
+    A trailing alongside segment is normally ``open_ended`` (still berthed at the
+    last sample). But a vessel that *departs while coverage is down* (or leaves
+    the receiver's range) just stops sampling — its segment would stay "ongoing"
+    forever. When ``as_of``/``stale_after`` are given, a trailing segment whose
+    last sample is older than ``stale_after`` relative to ``as_of`` is emitted
+    CLOSED at that last sample instead. Pass the *feed clock* (the newest sample
+    across the whole feed) as ``as_of``, never the wall clock — silence of the
+    entire feed is an outage, not a departure."""
     ordered = sorted(samples, key=lambda s: s.ts)
 
     events: list[BerthingEvent] = []
@@ -95,7 +106,13 @@ def detect_berthings(
             seg_last_still = s.ts
 
     if seg_start is not None and seg_last_still is not None:
-        # Trailing open segment: still berthed at the last sample we have.
-        _emit(seg_start, seg_last_still, open_ended=True)
+        # Trailing open segment: still berthed at the last sample we have —
+        # unless that sample has gone stale against the feed clock (see above).
+        stale = (
+            as_of is not None
+            and stale_after is not None
+            and as_of - seg_last_still >= stale_after
+        )
+        _emit(seg_start, seg_last_still, open_ended=not stale)
 
     return events

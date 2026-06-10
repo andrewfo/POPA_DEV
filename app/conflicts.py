@@ -40,6 +40,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.crosswalk import segment_dockno_params
+from app.shiptypes import SERVICE_CRAFT_SQL
 
 # Statuses that are off the board — a cancelled or completed reservation no
 # longer occupies the wharf, so it never participates in a conflict.
@@ -157,6 +158,16 @@ _NAME_FALLBACK = (
     "FROM intake_event e WHERE e.reservation_id = {r}.id ORDER BY e.id LIMIT 1))"
 )
 
+# Two live-panel filters (both gated by params so historical queries can widen):
+#   * :current_only — keep only pairs whose overlap rectangle reaches the present
+#     or future (open-ended, or its time intersection ends after now()). A
+#     collision that fully resolved in the past is History, not an alert.
+#   * :include_service_craft — an OBSERVED harbor tug/towboat/pilot boat (see
+#     app/shiptypes.py) holding station against a planned ship is almost always
+#     the tug *working that ship's move*, not a berth collision; drop pairs where
+#     an observed side's vessel is a service craft. A *planned* row for a tug is
+#     operator-entered and always kept; NULL ship_type is kept (when in doubt,
+#     show it).
 _CONFLICTS_SQL = text(
     f"""
     SELECT
@@ -190,12 +201,26 @@ _CONFLICTS_SQL = text(
     LEFT JOIN berth  b2 ON b2.id = r2.berth_id
     WHERE r1.status::text NOT IN ('cancelled', 'completed')
       AND r2.status::text NOT IN ('cancelled', 'completed')
+      -- AIS can't conflict with itself: an observed-vs-observed overlap is a
+      -- rafted tug, projection slop, or a stale derivation artifact — never a
+      -- scheduling decision. Conflicts protect the PLAN, so at least one side
+      -- must be a planned row (classify() has no both-observed category either).
+      AND NOT (r1.status::text = 'observed' AND r2.status::text = 'observed')
       AND (CAST(:status AS text) IS NULL
            OR r1.status::text = CAST(:status AS text)
            OR r2.status::text = CAST(:status AS text))
       AND ((CAST(:t_from AS timestamptz) IS NULL AND CAST(:t_to AS timestamptz) IS NULL)
            OR (r1.time_range && tstzrange(:t_from, :t_to, '[]')
                AND r2.time_range && tstzrange(:t_from, :t_to, '[]')))
+      AND (NOT CAST(:current_only AS boolean)
+           OR upper(r1.time_range * r2.time_range) IS NULL
+           OR upper(r1.time_range * r2.time_range) > now())
+      AND (CAST(:include_service_craft AS boolean)
+           OR NOT (r1.status::text = 'observed'
+                   AND COALESCE(v1.ship_type, -1) IN ({SERVICE_CRAFT_SQL})))
+      AND (CAST(:include_service_craft AS boolean)
+           OR NOT (r2.status::text = 'observed'
+                   AND COALESCE(v2.ship_type, -1) IN ({SERVICE_CRAFT_SQL})))
     ORDER BY ov_t_start
     LIMIT :limit
     """
@@ -209,18 +234,37 @@ def find_conflicts(
     t_to: datetime | None = None,
     status: str | None = None,
     limit: int = 200,
+    current_only: bool = False,
+    include_service_craft: bool = True,
 ) -> list[dict]:
     """All current conflict pairs (time AND station overlap), each with the
     overlapping sub-rectangle so the UI can highlight the exact collision.
 
-    Cancelled/completed rows never participate. ``status`` (optional) restricts to
-    pairs where at least one side has that status — e.g. ``observed`` yields the
-    observed-vs-planned signal. ``t_from``/``t_to`` (optional) keep only pairs
-    whose windows both overlap that span, mirroring ``GET /reservations``.
+    Cancelled/completed rows never participate, and at least one side must be a
+    planned row — two ``observed`` rows overlapping is AIS noise (rafted tug,
+    projection slop, stale artifact), not a scheduling conflict. ``status``
+    (optional) restricts to pairs where at least one side has that status — e.g.
+    ``observed`` yields the observed-vs-planned signal. ``t_from``/``t_to``
+    (optional) keep only pairs whose windows both overlap that span, mirroring
+    ``GET /reservations``.
+
+    ``current_only`` drops pairs whose overlap rectangle ended before now (a
+    fully-resolved past collision is History, not an alert);
+    ``include_service_craft=False`` drops pairs where an **observed** side is a
+    harbor tug/towboat/pilot boat (``app/shiptypes.py``) — almost always the tug
+    working the very move the planned row describes. Function defaults preserve
+    the unfiltered behaviour; the endpoint flips them for the live panel.
     """
     rows = session.execute(
         _CONFLICTS_SQL,
-        {"status": status, "t_from": t_from, "t_to": t_to, "limit": limit},
+        {
+            "status": status,
+            "t_from": t_from,
+            "t_to": t_to,
+            "limit": limit,
+            "current_only": current_only,
+            "include_service_craft": include_service_craft,
+        },
     ).all()
 
     # Dock No. alongside POPA, converted server-side through the wharf segment's

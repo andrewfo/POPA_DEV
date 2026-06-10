@@ -302,6 +302,9 @@ app/
                        #   mount + / and /health; the HTTP surface itself lives in routers/
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
   conflicts.py         # step 6: time×station overlap primitive + find_conflicts (GET /conflicts)
+  shiptypes.py         # AIS service-craft set (tug/towing/pilot) shared by the live-panel
+                       #   filters (conflicts + verification unplanned); mirrors the UI's
+                       #   shipTypeCategory buckets (static/js/api.js); 33 (dredger) NEVER in it
   verification.py      # step 7: AIS verification of operator placements (GET /verification) —
                        #   arrived/no-show/awaiting + where-planned + unplanned; never PLACES.
                        #   expire_stale (POST /verification/sweep + occupancy worker) auto-archives
@@ -368,6 +371,21 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   it is the single source of truth, there is deliberately **no** `app.config`
   mirror (a former `min_vessel_gap_ft` setting looked tunable but the constraint
   ignored it, so it was removed). Change the gap via a new migration, never config.
+- **The live panels are alert surfaces, not logs — separate them from the data
+  at the QUERY layer, never at derivation.** `observed` rows stay in the one
+  reservation table (ground truth; History keeps everything), but
+  `GET /conflicts` and `GET /verification`'s *unplanned* list default to
+  current/future + no harbor service craft (`current=true`,
+  `service_craft=false`; explicit `from`/`to` or the params widen). The
+  service-craft set lives in `app/shiptypes.py` (tug/towing/pilot — keep it
+  mirroring the UI's `shipTypeCategory`; dredgers deliberately excluded from the
+  set; NULL ship_type is always shown). Observed-vs-observed pairs are **never**
+  conflicts (AIS can't conflict with itself — rafted tugs, projection slop).
+  Relatedly, a trailing open-ended berthing whose vessel went silent past
+  `berth_stale_close_min` is closed at its last fix **against the feed clock**
+  (the newest `position_report` anywhere), never the wall clock — a dead feed is
+  not departure evidence, the same principle as the sweep's `feed_alive` gate.
+  Don't "fix" panel noise by suppressing rows at ingest/derivation.
 - **Auth is whole-app HTTP Basic via a middleware** (`app/auth.py`), not per-route
   dependencies — the middleware is the only thing that also covers the mounted
   static map (`/`, `/static/*`). It is **active only when both `OPERATOR_USER`

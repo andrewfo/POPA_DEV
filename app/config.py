@@ -131,6 +131,15 @@ class Settings(BaseSettings):
     berth_depart_sog_kn: float = 1.0
     berth_dwell_min: float = 20.0
     berth_depart_gap_min: float = 10.0
+    # A trailing open-ended berthing whose vessel has been SILENT this long is
+    # closed at its last fix: the ship almost certainly departed during a
+    # coverage gap (a moored Class A transmits every ~3 min) and would otherwise
+    # read "ongoing" forever. The comparison clock is the latest landed
+    # position_report — the FEED clock, not the wall clock — so a dead feed
+    # closes nothing (no data is not departure evidence, the same principle as
+    # the sweep's feed_alive gate). Self-healing: derivation is idempotent, so a
+    # vessel that reappears alongside re-extends and reopens the same event.
+    berth_stale_close_min: float = 180.0
 
     # --- AIS verification auto-expiry (step 7 auto status-mutation) ---
     # How long after a planned reservation's window has *fully ended* it lingers

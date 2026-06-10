@@ -52,7 +52,7 @@ def _insert_vessel(session) -> int:
     return int(row.id)
 
 
-def _insert_position(session, vessel_id, minute, *, lat, sog, heading):
+def _insert_position(session, vessel_id, minute, *, lat, sog, heading, t0=T0):
     session.execute(
         text(
             """
@@ -70,16 +70,16 @@ def _insert_position(session, vessel_id, minute, *, lat, sog, heading):
             "lat": lat,
             "sog": sog,
             "heading": heading,
-            "ts": T0 + dt.timedelta(minutes=minute),
+            "ts": t0 + dt.timedelta(minutes=minute),
         },
     )
 
 
-def _seed_berthing_track(session, vessel_id):
+def _seed_berthing_track(session, vessel_id, t0=T0):
     # 0..70 min alongside (lat 0.5, on the line), still, heading north (along line).
     # Still berthed at the last sample -> an OPEN-ENDED event.
     for i in range(8):
-        _insert_position(session, vessel_id, i * 10, lat=0.5, sog=0.1, heading=0.0)
+        _insert_position(session, vessel_id, i * 10, lat=0.5, sog=0.1, heading=0.0, t0=t0)
 
 
 def _seed_berth_then_depart_track(session, vessel_id):
@@ -142,12 +142,16 @@ def test_observed_reservation_has_expected_status_and_source(db_session):
 
 def test_open_ended_berthing_has_unbounded_upper_and_contains_now(db_session):
     # A still-alongside (open-ended) berthing must stay open above so it contains
-    # `now()` while the vessel sits there — not capped at the last AIS fix.
+    # `now()` while the vessel sits there — not capped at the last AIS fix. The
+    # track must be FRESH against the feed clock (a trailing segment silent past
+    # berth_stale_close_min is closed as departed-during-a-gap), so seed it
+    # ending near now — on a dev DB with live traffic the feed clock IS now.
+    t0 = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=70)
     seg_id = _insert_segment(db_session)
     vid = _insert_vessel(db_session)
-    _seed_berthing_track(db_session, vid)
+    _seed_berthing_track(db_session, vid, t0=t0)
 
-    res = derive_observed(db_session, segment_id=seg_id, since=T0 - dt.timedelta(days=1))
+    res = derive_observed(db_session, segment_id=seg_id, since=t0 - dt.timedelta(days=1))
     assert [r for r in res if r.vessel_id == vid][0].open_ended is True
 
     row = db_session.execute(
@@ -159,6 +163,43 @@ def test_open_ended_berthing_has_unbounded_upper_and_contains_now(db_session):
     ).one()
     assert row.hi is None            # unbounded above
     assert row.contains_now is True
+
+
+def test_stale_open_berthing_is_closed_at_last_fix(db_session):
+    # The vessel never sent a departure — it left while coverage was down — but
+    # the FEED kept landing fixes (another vessel reports now). The trailing
+    # segment is stale against the feed clock and must be CLOSED at its last
+    # fix instead of reading "ongoing" forever.
+    seg_id = _insert_segment(db_session)
+    vid = _insert_vessel(db_session)
+    _seed_berthing_track(db_session, vid)          # ends T0+70, long ago
+    other = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name) VALUES (999000778, 'FEED PROOF') "
+             "RETURNING id")
+    ).scalar_one()
+    db_session.execute(
+        text(
+            """
+            INSERT INTO position_report
+                (vessel_id, mmsi, lat, lon, geom, sog, source, msg_ts, raw)
+            VALUES (:vid, 999000778, 0.9, 0.0,
+                    ST_SetSRID(ST_MakePoint(0.0, 0.9), 4326),
+                    7.0, 'ais', now(), '{}'::jsonb)
+            """
+        ),
+        {"vid": other},
+    )
+
+    res = derive_observed(db_session, segment_id=seg_id, since=T0 - dt.timedelta(days=1))
+    mine = [r for r in res if r.vessel_id == vid]
+    assert len(mine) == 1
+    assert mine[0].open_ended is False
+
+    row = db_session.execute(
+        text("SELECT upper(time_range) AS hi FROM reservation WHERE vessel_id = :v"),
+        {"v": vid},
+    ).one()
+    assert row.hi == T0 + dt.timedelta(minutes=70)   # closed at the last fix
 
 
 def test_departed_berthing_has_bounded_upper(db_session):

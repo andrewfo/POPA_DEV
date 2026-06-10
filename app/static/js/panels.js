@@ -60,6 +60,20 @@ export async function loadStats() {
 const conflictLayer = L.layerGroup().addTo(map);
 let CONFLICTS = [];
 
+// Both live panels hide harbor craft (tugs/towboats/pilots) server-side by
+// default; one toggle (#svcCraftToggle, in the verification section) re-fetches
+// both with service_craft=1. State lives here because both loaders read it.
+let SHOW_SERVICE_CRAFT = false;
+const svcQS = () => (SHOW_SERVICE_CRAFT ? "?service_craft=1" : "");
+(function () {
+  const t = document.getElementById("svcCraftToggle");
+  if (t) t.addEventListener("change", () => {
+    SHOW_SERVICE_CRAFT = t.checked;
+    loadConflicts();
+    loadVerification();
+  });
+})();
+
 const CONFLICT_CAT = {
   "observed-vs-planned": "observed vs planned",
   "dredge-vs-vessel": "dredge vs vessel",
@@ -115,7 +129,7 @@ export async function loadConflicts() {
   const el = document.getElementById("conflicts");
   const stat = document.getElementById("statConflicts");
   try {
-    const cs = await api("/conflicts");
+    const cs = await api("/conflicts" + svcQS());
     CONFLICTS = cs;
     if (stat) stat.textContent = cs.length;
     setConflictAlert(cs.length);
@@ -179,7 +193,7 @@ export async function loadVerification() {
     // or arrived past its window + grace period -> cancelled/completed), so they
     // drop out of this panel into History, then returns the fresh payload. The
     // read-only GET /verification is still there for clients that must not mutate.
-    const w = await apiWrite("POST", "/verification/sweep");
+    const w = await apiWrite("POST", "/verification/sweep" + svcQS());
     if (!w.ok) throw new Error("sweep failed");
     const v = w.data || {};
     VERIFY_PLANNED = v.planned || [];

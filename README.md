@@ -72,7 +72,11 @@ uvicorn app.main:app --reload
 #   GET  /stats           -> row counts
 #   GET  /geo-to-station?lat=..&lon=..  -> project a point to POPA station
 #   GET  /reservations[?status=&from=&to=]  -> reservations (status + time-window filter)
-#   GET  /conflicts[?status=&from=&to=]  -> pairs overlapping in time AND station (+ overlap rect)
+#   GET  /conflicts[?status=&from=&to=&current=&service_craft=]  -> pairs overlapping in time AND
+#                            station (+ overlap rect). Live-scoped by default: current/future only,
+#                            harbor craft (tugs/towboats/pilots) hidden; widen via the params
+#   GET  /verification[?current=&service_craft=]  -> plan vs observed AIS (unplanned list is
+#                            ongoing-only + no harbor craft by default)
 #   GET  /berths          -> named berth catalog (POPA station ranges) to assign from
 #   POST /intake/berth-request  -> manual berth request (phone/email); also a form on /
 #   PATCH /reservations/{id}    -> edit; assign a berth via {"berth_id": N} (fills station_range)
@@ -175,7 +179,14 @@ survey would densify it via the same script.
 `[stern_sta, bow_sta]` POPA station range, and writes idempotent `observed`
 reservations. "Alongside" prefers the digitized **apron polygon**
 (`ST_Contains`), falling back to a centerline buffer when a segment has none
-(`app/occupancy/alongside.py`). See `app/occupancy/*` and `PLAN.md` §2.
+(`app/occupancy/alongside.py`). A berthing whose vessel has gone silent past
+`BERTH_STALE_CLOSE_MIN` (default 180) — while the feed kept landing other
+traffic — is closed at its last fix instead of reading "ongoing" forever.
+See `app/occupancy/*` and `PLAN.md` §2.
+
+The AIS verification panel needs this worker running (it is what turns raw
+positions into `observed` rows) — in dev, start the stack with
+`.\scripts\dev.ps1 -Occupancy` / `./scripts/dev.sh --occupancy`.
 
 ## Project layout
 

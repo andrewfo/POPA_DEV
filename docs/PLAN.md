@@ -51,7 +51,9 @@ is a later layer", both user-requested):
     (`app/intake/llm.py`, via **OpenRouter**, default Gemini Flash), and records
     it through the *same* `record_manual_request` pipeline (raw preserved,
     `requested`/empty-range row). The model **proposes**; placement/confirm stay
-    the operator's. Tagged `source='email'` so cards stay editable.
+    the operator's. Tagged `source='ai'` (its own provenance value, migration
+    `0009`); editability is the separate `EDITABLE_SOURCES` axis, which includes
+    `ai`.
   - What's still TODO for step 7: committing the legacy-spreadsheet backfill
     (parse exists; review→commit not).
 
@@ -118,6 +120,17 @@ rows by design. The "alongside" test now prefers the digitized apron polygon
 (buffer fallback). Remaining caveats live in §1's "known gaps" (coarse 7-vertex
 centerline; apron DB-path unexercised until PostGIS is up).
 
+**Stale-open closure (2026-06):** a vessel that departs *while coverage is down*
+(or leaves the receiver's range) just stops sampling, so its trailing berthing
+used to read "ongoing" forever — the source of ghost ships in the live panels.
+`detect_berthings` now takes `as_of`/`stale_after`: a trailing segment silent
+longer than `berth_stale_close_min` (config, default 180 min) is emitted CLOSED
+at its last fix. The clock is the **feed clock** (newest `position_report`
+anywhere in the bbox), never the wall clock, so a dead feed closes nothing —
+the same "no data is not departure evidence" principle as the sweep's
+`feed_alive`. Self-healing because derivation is idempotent: a vessel that
+reappears alongside re-extends and reopens the same `derived_key` event.
+
 ---
 
 ## 3. Step 6 — Conflict-detection service ✅ (done)
@@ -142,6 +155,17 @@ given a thin map surface in `app/static/index.html`.
   `classify` labels each pair `observed-vs-planned` / `dredge-vs-vessel` /
   `planned-vs-planned`. Empty (unassigned) station ranges never match `&&`, so
   `requested` rows drop out for free — the intended "no false conflict".
+- **At least one side must be a planned row** (2026-06): an
+  observed-vs-observed overlap is AIS noise (a rafted tug, projection slop, a
+  stale derivation artifact), never a scheduling decision — excluded in the SQL
+  unconditionally.
+- **Live-alert defaults** (2026-06): `GET /conflicts` defaults to
+  `current=true` (the overlap rectangle must reach the present/future; an
+  explicit `from`/`to` window disables it) and `service_craft=false` (pairs
+  where an *observed* side is a harbor tug/towboat/pilot boat —
+  `app/shiptypes.py`, mirroring the UI's type buckets — are hidden; a *planned*
+  row for a tug always shows). Filtering is query-layer only; the observed rows
+  themselves are untouched.
 
 ### 3.2 Service / API surface ✅
 - `GET /conflicts?from=..&to=..&status=..&limit=..` → list of conflict pairs,
@@ -233,12 +257,19 @@ so this is identity + time, not the conflict query). For each planned row
 - plus a **where_planned** flag (observed range overlaps the planned one — the
   inline form of step 6's `observed-vs-planned`), and an **unplanned** list of
   observed berthings no request covered.
-`GET /verification` itself is **read-only**.
+`GET /verification` itself is **read-only**. The **unplanned list is live-scoped
+by default** (2026-06): `current=true` keeps only *ongoing* berthings (a closed
+visit means the vessel left — that's History; an explicit `from`/`to` disables
+it) and `service_craft=false` hides harbor tugs/towboats/pilot boats
+(`app/shiptypes.py`) — nobody files a berth request for a tug working a ship
+move, so each pause was becoming a permanent "unplanned" card. The planned list
+is operator rows and is never filtered this way; a UI toggle ("show harbor
+craft") re-fetches both this panel and `/conflicts` with `service_craft=1`.
 
 **Built — auto status-mutation** (the once-deferred half, now shipped):
 `expire_stale` + `POST /verification/sweep` (and the occupancy worker runs it each
 batch) auto-archive a planned row whose window has been fully past for longer than
-`verification_grace_minutes` (default 60) to a **terminal** status — `completed`
+`verification_grace_minutes` (default 720 = 12 h) to a **terminal** status — `completed`
 if AIS observed the vessel berth, else `cancelled` (no-show) — with an audit line
 appended to `notes`. Status-only; never places, and only ever moves a row
 *outside* the confirmed-only exclusion constraint, so it can't raise a 409.

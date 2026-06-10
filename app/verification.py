@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 
 from app.conflicts import station_overlaps
 from app.crosswalk import segment_dockno_params
+from app.shiptypes import SERVICE_CRAFT_SQL
 
 # Reservations an operator put on the board — the placements we verify against AIS.
 PLANNED_STATUSES = ("requested", "tentative", "confirmed")
@@ -160,9 +161,18 @@ _PLANNED_SQL = text(
 )
 
 # Observed berthings with no planned row covering the same vessel+window — a
-# vessel alongside that the office never logged a request for.
+# vessel alongside that the office never logged a request for. Two live-panel
+# filters keep this a *current arrivals* signal rather than an all-time log:
+#   * :current_only — keep only ONGOING berthings (open upper bound). A closed
+#     window means the vessel has left; that visit belongs to History, not next
+#     to live status (the panel was drowning in last week's departures).
+#   * :include_service_craft — harbor tugs/towboats/pilot boats (see
+#     app/shiptypes.py) pause alongside all day working ship moves and nobody
+#     files a berth request for them, so each pause is a permanent "unplanned"
+#     card. Filtered at the query, never at derivation — the rows still exist.
+#     An untyped vessel (NULL ship_type) is always kept: when in doubt, show it.
 _UNPLANNED_SQL = text(
-    """
+    f"""
     SELECT
         o.id AS o_id,
         lower(o.time_range)    AS o_t_start, upper(o.time_range)    AS o_t_end,
@@ -179,6 +189,10 @@ _UNPLANNED_SQL = text(
             AND p.vessel_id = o.vessel_id
             AND p.time_range && o.time_range
       )
+      AND (NOT CAST(:current_only AS boolean) OR upper(o.time_range) IS NULL)
+      AND (CAST(:include_service_craft AS boolean)
+           OR ov.ship_type IS NULL
+           OR ov.ship_type NOT IN ({SERVICE_CRAFT_SQL}))
       AND ((CAST(:t_from AS timestamptz) IS NULL AND CAST(:t_to AS timestamptz) IS NULL)
            OR o.time_range && tstzrange(:t_from, :t_to, '[]'))
     ORDER BY lower(o.time_range) DESC
@@ -193,6 +207,8 @@ def verify(
     t_from: datetime | None = None,
     t_to: datetime | None = None,
     limit: int = 200,
+    current_only: bool = False,
+    include_service_craft: bool = True,
 ) -> dict:
     """Verify operator placements against observed AIS occupancy.
 
@@ -202,6 +218,13 @@ def verify(
     ``unplanned`` lists observed berthings with no covering plan. ``t_from``/
     ``t_to`` (optional) keep only rows whose window overlaps that span, like the
     other endpoints; ``as_of`` is the DB clock the states were judged against.
+
+    Two filters scope the **unplanned** list only (the planned list is driven by
+    operator rows, which are curated by definition): ``current_only`` keeps just
+    ongoing berthings (closed visits belong to History), and
+    ``include_service_craft=False`` drops harbor tugs/towboats/pilot boats (see
+    ``app/shiptypes.py``). Function defaults preserve the unfiltered behaviour;
+    the *endpoint* flips them for the live panel.
     """
     # Judge no_show/awaiting against the DB clock (Central-pinned, see app/db.py),
     # not the app process clock, so it matches the stored timestamptz exactly.
@@ -260,7 +283,14 @@ def verify(
         )
 
     unplanned_rows = session.execute(
-        _UNPLANNED_SQL, {"t_from": t_from, "t_to": t_to, "limit": limit}
+        _UNPLANNED_SQL,
+        {
+            "t_from": t_from,
+            "t_to": t_to,
+            "limit": limit,
+            "current_only": current_only,
+            "include_service_craft": include_service_craft,
+        },
     ).all()
     unplanned = [
         {

@@ -28,6 +28,8 @@ def list_conflicts(
     limit: int = 200,
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = None,
+    current: bool = True,
+    service_craft: bool = False,
     session: Session = Depends(get_session),
 ) -> list[dict]:
     """Conflict pairs — reservations that overlap in BOTH time and station — each
@@ -40,11 +42,21 @@ def list_conflicts(
     ``observed`` -> observed-vs-planned). ``from``/``to`` (ISO datetimes, FastAPI
     rejects malformed with 422) narrow to pairs whose windows both overlap that
     span. Cancelled/completed rows never appear; an unassigned ``requested`` row
-    (empty station range) never conflicts."""
+    (empty station range) never conflicts.
+
+    This is a *live alert* feed by default: ``current=true`` keeps only pairs
+    whose overlap reaches the present/future (asking for an explicit ``from``/
+    ``to`` window turns that off — a historical query means the past on purpose),
+    and ``service_craft=false`` hides pairs where an observed side is a harbor
+    tug/towboat/pilot boat (``app/shiptypes.py``)."""
     # Inverted bounds are a no-op window, not a 500 (mirrors /reservations).
     if from_ is not None and to is not None and from_ > to:
         from_, to = to, from_
-    return find_conflicts(session, t_from=from_, t_to=to, status=status, limit=limit)
+    return find_conflicts(
+        session, t_from=from_, t_to=to, status=status, limit=limit,
+        current_only=current and from_ is None and to is None,
+        include_service_craft=service_craft,
+    )
 
 
 @router.get("/verification")
@@ -52,6 +64,8 @@ def get_verification(
     limit: int = 200,
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = None,
+    current: bool = True,
+    service_craft: bool = False,
     session: Session = Depends(get_session),
 ) -> dict:
     """AIS *verification* of operator placements (NOT placement — AIS can't position
@@ -65,11 +79,22 @@ def get_verification(
     conflict join). Read-only: surfaces findings, never mutates status.
 
     ``from``/``to`` (ISO datetimes; FastAPI 422s on malformed) narrow to rows whose
-    window overlaps that span."""
+    window overlaps that span.
+
+    The **unplanned** list is live-scoped by default: ``current=true`` keeps only
+    ongoing berthings (a closed visit means the vessel left — that's History; an
+    explicit ``from``/``to`` window turns this off), and ``service_craft=false``
+    hides harbor tugs/towboats/pilot boats (``app/shiptypes.py``) — nobody files
+    a berth request for a tug working a ship move. The planned list is operator
+    rows and is never filtered this way."""
     # Inverted bounds are a no-op window, not a 500 (mirrors /reservations).
     if from_ is not None and to is not None and from_ > to:
         from_, to = to, from_
-    return verify(session, t_from=from_, t_to=to, limit=limit)
+    return verify(
+        session, t_from=from_, t_to=to, limit=limit,
+        current_only=current and from_ is None and to is None,
+        include_service_craft=service_craft,
+    )
 
 
 @router.post("/verification/sweep")
@@ -78,6 +103,8 @@ def sweep_verification(
     limit: int = 200,
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = None,
+    current: bool = True,
+    service_craft: bool = False,
     session: Session = Depends(get_session),
 ) -> dict:
     """Auto-archive stale planned rows, then return the fresh verification payload.
@@ -105,6 +132,10 @@ def sweep_verification(
             entity_id=None, detail={"expired": expired},
         )
     session.commit()
-    payload = verify(session, t_from=from_, t_to=to, limit=limit)
+    payload = verify(
+        session, t_from=from_, t_to=to, limit=limit,
+        current_only=current and from_ is None and to is None,
+        include_service_craft=service_craft,
+    )
     payload["expired"] = expired
     return payload

@@ -31,11 +31,12 @@ def client(db_session):
         app.dependency_overrides.pop(get_session, None)
 
 
-def _add_vessel(session, *, mmsi=None, imo=None, name="TESTSHIP"):
+def _add_vessel(session, *, mmsi=None, imo=None, name="TESTSHIP", ship_type=None):
     """A vessel row (needs at least one of mmsi/imo per the CHECK constraint)."""
     return session.execute(
-        text("INSERT INTO vessel (mmsi, imo, name) VALUES (:m, :i, :n) RETURNING id"),
-        {"m": mmsi, "i": imo, "n": name},
+        text("INSERT INTO vessel (mmsi, imo, name, ship_type) "
+             "VALUES (:m, :i, :n, :t) RETURNING id"),
+        {"m": mmsi, "i": imo, "n": name, "t": ship_type},
     ).scalar_one()
 
 
@@ -157,12 +158,37 @@ def test_unplanned_observed_has_no_plan(client, db_session):
 
 
 def test_observed_with_matching_plan_is_not_unplanned(client, db_session):
+    # Ongoing on purpose: a closed visit is excluded by the live default anyway
+    # (see the current-scope test), so plan coverage must be what hides this one.
     v = _add_vessel(db_session, mmsi=636000016, imo=9000016)
     _add_res(db_session, vessel_id=v, lo=None, hi=None,
              t_start=_t(2026, 10), t_end=_t(2026, 14), status="requested")
     obs = _add_res(db_session, vessel_id=v, lo=400, hi=900,
+                   t_start=_t(2026, 11), t_end=None, status="observed", source="ais")
+    assert _unplanned(client.get("/verification").json(), obs) is None
+
+
+def test_closed_visit_hidden_from_unplanned_by_default(client, db_session):
+    # The vessel left (closed window): that visit is History, not a live
+    # "unplanned arrival" — hidden by the current default, back with current=false.
+    v = _add_vessel(db_session, mmsi=636000018, imo=9000018)
+    obs = _add_res(db_session, vessel_id=v, lo=400, hi=900,
                    t_start=_t(2026, 11), t_end=_t(2026, 13), status="observed", source="ais")
     assert _unplanned(client.get("/verification").json(), obs) is None
+    out = client.get("/verification", params={"current": "false"}).json()
+    u = _unplanned(out, obs)
+    assert u is not None and u["ongoing"] is False
+
+
+def test_service_craft_hidden_from_unplanned_by_default(client, db_session):
+    # An ongoing tug (AIS type 52) berthing is harbor work, not an arrival the
+    # office should react to — hidden unless service_craft=1 asks for it.
+    tug = _add_vessel(db_session, mmsi=636000019, name="TESTTUG", ship_type=52)
+    obs = _add_res(db_session, vessel_id=tug, lo=400, hi=900,
+                   t_start=_t(2026, 11), t_end=None, status="observed", source="ais")
+    assert _unplanned(client.get("/verification").json(), obs) is None
+    out = client.get("/verification", params={"service_craft": "true"}).json()
+    assert _unplanned(out, obs) is not None
 
 
 # --- exclusions / filters ---------------------------------------------------
