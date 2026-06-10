@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>POPA Wharf — Berth &amp; Dredging Data Layer</title>
+<title>POPA Wharf — Ops Console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2307090b'/%3E%3Cpath d='M2.5 11L13.5 5' stroke='%2334c4d8' stroke-width='1.6'/%3E%3Ccircle cx='5.2' cy='5.8' r='1.5' fill='%23e0a52e'/%3E%3C/svg%3E" />
 <link
   rel="stylesheet"
   href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -84,7 +85,14 @@
     --bad:    var(--red);
     --warn:   var(--amber);
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  /* Console scrollbars — the OS-default light bars would break the panel surfaces. */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border: 3px solid var(--panel); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--line-2); }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::selection { background: rgba(52,196,216,.28); color: var(--ink); }
+  :focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   html, body { height: 100%; margin: 0; }
   body {
     font: 13px/1.4 var(--font-ui);
@@ -150,15 +158,13 @@
     font-size: 13px; display: flex; align-items: center; justify-content: center;
   }
   #sidebarToggle:hover { color: var(--accent); border-color: var(--accent-dim); }
-  /* Leading tactical tick before the title */
+  /* Product mark (inline SVG) leads the title */
   header h1 {
     font-size: 12px; margin: 0; font-weight: 700;
     text-transform: uppercase; letter-spacing: 2px;
     display: flex; align-items: center; gap: 9px;
   }
-  header h1::before {
-    content: ""; width: 3px; height: 14px; background: var(--accent); flex: none;
-  }
+  header h1 svg { flex: none; }
   header h1 span {
     color: var(--muted); font-weight: 500; letter-spacing: 1px;
     font-family: var(--font-mono); font-size: 11px;
@@ -218,7 +224,10 @@
     border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
   nav.tabs .tab:hover { color: var(--ink); }
-  nav.tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  nav.tabs .tab.active {
+    color: var(--accent); border-bottom-color: var(--accent);
+    background: linear-gradient(180deg, rgba(52,196,216,0), rgba(52,196,216,.07));
+  }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
@@ -292,10 +301,17 @@
     background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--line-2);
     border-radius: 0; padding: 7px 9px; margin-bottom: var(--s1);
   }
+  .card:hover { border-top-color: var(--line-2); border-right-color: var(--line-2); border-bottom-color: var(--line-2); }
   .card .name { font-weight: 600; font-size: 12px; }
   .card .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .card .meta b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-dim); font-weight: 500; }
-  .empty { color: var(--muted); font-style: italic; padding: 6px 2px; font-size: 12px; }
+  /* Empty / no-data states read as a console readout, not apologetic italics. */
+  .empty {
+    color: var(--muted); padding: 12px 8px; margin: 2px 0;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 1.2px;
+    text-transform: uppercase; text-align: center; border: 1px dashed var(--line);
+  }
+  .hint { color: var(--muted); font-size: 11px; line-height: 1.45; }
 
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 4px 7px; border-bottom: 1px solid var(--line); }
@@ -319,6 +335,9 @@
   .leaflet-control-layers-expanded { color: var(--ink); padding: 8px 10px; font-size: 12px; }
   .leaflet-control-attribution { background: rgba(10,15,20,.7) !important; }
   .leaflet-control-attribution, .leaflet-control-attribution a { color: var(--muted) !important; }
+  /* Chart cursor: crosshair over the water (a plotting surface, not a webpage). */
+  .leaflet-grab { cursor: crosshair; }
+  .leaflet-dragging .leaflet-grab { cursor: grabbing; }
   /* Permanent map labels. The tooltip box keeps Leaflet's positioning transform;
      the inner .lbl is counter-rotated so text stays upright when the map rotates. */
   .berth-label, .wh-label, .sta-label, .ft-label, .yk-label {
@@ -413,15 +432,19 @@
     min-width: 0;
   }
   .filter-bar input[type=text] { flex: 1; }
+  /* Status chips: outlined + tinted from the chip's own text colour (set inline
+     per status). Annotation, not decoration — no filled candy pills. */
   .status-badge {
-    display: inline-block; padding: 1px 6px; border-radius: 0;
-    font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .8px; color: #04121f; vertical-align: 1px;
+    display: inline-block; padding: 0 7px; border-radius: 1px;
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600; line-height: 15px;
+    text-transform: uppercase; letter-spacing: 1px; vertical-align: 1px;
+    border: 1px solid color-mix(in srgb, currentColor 50%, transparent);
+    background: color-mix(in srgb, currentColor 12%, transparent);
   }
   .row-actions { display: flex; gap: 4px; margin-top: 7px; flex-wrap: wrap; }
   .btn-sm {
     background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
-    border-radius: var(--r-int); padding: 3px 8px; font-family: var(--font-ui); font-size: 10px;
+    border-radius: var(--r-int); padding: 3px 8px; font-family: var(--font-mono); font-size: 10px;
     text-transform: uppercase; letter-spacing: .8px; cursor: pointer;
   }
   .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
@@ -484,7 +507,11 @@
   .tl-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 0; margin-right: 5px; vertical-align: -1px; }
   .tl-scroll { flex: 1; min-height: 0; overflow: auto; }
   #tlSvg { display: block; }
-  .tl-empty { display: none; color: var(--muted); font-style: italic; padding: 14px; }
+  .tl-empty {
+    display: none; color: var(--muted); padding: 16px;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 1.2px;
+    text-transform: uppercase; text-align: center;
+  }
   .tl-tip {
     position: fixed; z-index: 1000; display: none; max-width: 320px; pointer-events: none;
     background: var(--panel); border: 1px solid var(--line-2); border-left: 2px solid var(--accent); border-radius: 0;
@@ -610,10 +637,11 @@
   }
   #shipHover.open { display: block; }
   #shipHover .empty { padding: 16px; }
-  /* Header band — the dossier's top strip */
+  /* Header band — the dossier's top strip; accent keyline marks it as a record */
   .dossier-head {
     padding: 12px 14px 10px; border-bottom: 1px solid var(--line);
-    border-radius: var(--r) var(--r) 0 0;
+    border-left: 2px solid var(--accent);
+    background: linear-gradient(90deg, rgba(52,196,216,.06), transparent 55%);
   }
   .dossier-title { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.2; }
   .dossier-sub { margin-top: 3px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -625,7 +653,10 @@
   #shipHover .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; }
   #shipHover .kv .k { color: var(--muted); }
   #shipHover .kv .v { color: var(--ink); font-variant-numeric: tabular-nums; }
-  .dossier-none { color: var(--muted); font-size: 11px; padding: 4px 0; font-style: italic; }
+  .dossier-none {
+    color: var(--muted); padding: 4px 0;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+  }
   /* AIS fix with compass */
   .ais-row { display: flex; align-items: center; gap: 12px; }
   .compass { flex: 0 0 40px; }
@@ -687,7 +718,10 @@
     display: flex; align-items: center; gap: 10px;
     padding: 12px 14px; border-bottom: 1px solid var(--line);
   }
-  #histFilterModal .sheet-head h2 { margin: 0; font-size: 15px; flex: 1; }
+  #histFilterModal .sheet-head h2 {
+    margin: 0; flex: 1; font-size: 11px; letter-spacing: 1.6px;
+    border-bottom: 0; padding-bottom: 0;
+  }
   #histFilterModal .sheet-body { padding: 14px; display: grid; gap: 11px; }
   #histFilterModal .fp-row { display: grid; gap: 4px; }
   #histFilterModal .fp-row label {
@@ -710,8 +744,8 @@
   <span class="right" id="classScale">ZOOM —  ·  SCALE —</span>
 </div>
 <header>
-  <button id="sidebarToggle" type="button" title="Collapse / expand the panel" aria-label="Toggle side panel">⇤</button>
-  <h1>Port of Port Arthur <span>Berth &amp; Dredging · VTS Data Layer</span></h1>
+  <button id="sidebarToggle" type="button" title="Collapse / expand the panel" aria-label="Toggle side panel">«</button>
+  <h1><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="0.5" y="0.5" width="15" height="15" fill="none" stroke="#34c4d8" stroke-opacity=".5"/><path d="M2.5 11 L13.5 5" stroke="#34c4d8" stroke-width="1.6"/><circle cx="5.2" cy="5.8" r="1.5" fill="#e0a52e"/></svg>POPA Wharf <span>Ops Console · Berth / Dredge / AIS</span></h1>
   <span id="clock">—</span>
   <div class="badge" id="statusBadge"><span id="statusDot" class="dot"></span><span id="statusText">checking…</span><span id="statusUptime"></span></div>
 </header>
@@ -949,7 +983,7 @@
       newest arrival first. Filter by vessel name, IMO, status, or a date range.
     </p>
     <div class="filter-bar">
-      <button type="button" class="btn-sm primary" id="histFilterBtn">⚲ Filters</button>
+      <button type="button" class="btn-sm primary" id="histFilterBtn">Filters</button>
       <span id="histFilterSummary" class="hint" style="margin:0;flex:1">no filters, showing all</span>
     </div>
     <div id="historyList"><div class="empty">loading…</div></div>
@@ -1004,6 +1038,7 @@
 <footer class="statusbar">
   <span class="k">SYS</span>&nbsp;<span class="v" id="footSys">DATA LAYER NOMINAL</span>
   <span class="sep">//</span><span class="k">REFRESH</span>&nbsp;<span class="v">15s</span>
+  <span class="sep">//</span><span class="k">API</span>&nbsp;<span class="v" id="footApi">—</span>
   <span class="sep">//</span><span class="k">TZ</span>&nbsp;<span class="v">AMERICA/CHICAGO · CT</span>
   <span class="right"><span class="k">CURSOR</span>&nbsp;<span class="v" id="footCoord">LAT —  LON —</span></span>
 </footer>

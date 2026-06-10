@@ -60,7 +60,7 @@ const BOOT_MS = Date.now();
   if (!btn) return;
   btn.addEventListener("click", () => {
     const collapsed = document.body.classList.toggle("sidebar-collapsed");
-    btn.textContent = collapsed ? "⇥" : "⇤";
+    btn.textContent = collapsed ? "»" : "«";
     if (map.invalidateSize) setTimeout(() => map.invalidateSize(), 0);
   });
 })();

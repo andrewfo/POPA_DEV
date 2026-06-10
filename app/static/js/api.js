@@ -21,6 +21,12 @@ export const STATUS_COLORS = {
 };
 // Status -> badge colour (mirrors the occupancy-timeline palette).
 export const RES_STATUS_COLOR = STATUS_COLORS;   // status -> badge colour (chart palette)
+// Chip text needs more luminance than a chart bar: the archive tones (completed/
+// cancelled) are deliberately dark in STATUS_COLORS, so lift them for badge text
+// while everything else keeps the chart palette.
+export const BADGE_COLORS = Object.assign({}, STATUS_COLORS, {
+  completed: "#7e93a4", cancelled: "#62788a",
+});
 
 // Metres -> feet. The canonical store is metres (vessel LOA/beam/draft); feet is
 // display only. One constant so every readout converts identically.

@@ -35,13 +35,17 @@ const STAT_FIELDS = {
   statArrivals: "arrivals_24h",
 };
 export async function loadStats() {
+  const fa = document.getElementById("footApi");
   try {
+    const t = performance.now();
     const s = await api("/stats");
+    if (fa) fa.textContent = Math.round(performance.now() - t) + "MS";
     for (const [id, key] of Object.entries(STAT_FIELDS)) {
       document.getElementById(id).textContent = s[key] ?? 0;
     }
     setStatus(true, "data layer online");
   } catch (e) {
+    if (fa) fa.textContent = "—";
     setStatus(false, "database offline");
     for (const id of Object.keys(STAT_FIELDS)) {
       document.getElementById(id).textContent = "0";
@@ -71,9 +75,9 @@ function conflictCard(c, i) {
   const dhi = Math.round(Math.max(c.overlap.station_lo_dock, c.overlap.station_hi_dock));
   const win = `${fmtCentral(c.overlap.t_start)} → ${fmtCentral(c.overlap.t_end)}`;
   return `
-    <div class="card conflict-card" data-conflict="${i}" style="cursor:pointer">
+    <div class="card conflict-card" data-conflict="${i}" style="cursor:pointer;border-left-color:${PAL.red}">
       <div class="name">${conflictName(c.a)} ⇄ ${conflictName(c.b)}
-        <span class="status-badge" style="background:${PAL.red}">conflict</span></div>
+        <span class="status-badge" style="color:${PAL.red}">conflict</span></div>
       <div class="meta">${esc(CONFLICT_CAT[c.category] || c.category)} · Dock ${dlo}–${dhi}</div>
       <div class="meta">overlap <b>${win}</b></div>
     </div>`;
@@ -144,12 +148,12 @@ function verifyPlannedCard(p, i) {
   const win = `${fmtCentral(p.t_start)} → ${fmtCentral(p.t_end)}`;
   // "berthed elsewhere" only when we have both a planned and an observed range.
   const elsewhere = p.where_planned === false
-    ? ` <span class="status-badge" style="background:${PAL.amber}">berthed elsewhere</span>` : "";
+    ? ` <span class="status-badge" style="color:${PAL.amber}">berthed elsewhere</span>` : "";
   const clickable = p.observed && p.where_planned === false;
   return `
-    <div class="card${clickable ? " verify-card" : ""}" data-verify="${i}"${clickable ? ' style="cursor:pointer"' : ""}>
+    <div class="card${clickable ? " verify-card" : ""}" data-verify="${i}" style="border-left-color:${st.color}${clickable ? ";cursor:pointer" : ""}">
       <div class="name">${name}
-        <span class="status-badge" style="background:${st.color}">${st.label}</span>${elsewhere}</div>
+        <span class="status-badge" style="color:${st.color}">${st.label}</span>${elsewhere}</div>
       <div class="meta">${esc(p.status)}${p.berth_name ? " · " + esc(p.berth_name) : ""} · plan <b>${win}</b></div>
     </div>`;
 }
@@ -158,9 +162,9 @@ function verifyUnplannedCard(u) {
   const name = esc(u.vessel_name || "(unnamed)");
   const since = fmtCentral(u.t_start);
   return `
-    <div class="card">
+    <div class="card" style="border-left-color:${PAL.amber}">
       <div class="name">${name}
-        <span class="status-badge" style="background:${PAL.amber}">unplanned</span></div>
+        <span class="status-badge" style="color:${PAL.amber}">unplanned</span></div>
       <div class="meta">observed${u.berth_name ? " · " + esc(u.berth_name) : ""} · since ${since}${u.ongoing ? " · ongoing" : ""}</div>
     </div>`;
 }
@@ -217,9 +221,9 @@ function alongsideCard(r) {
     : (r.popa_station != null ? "POPA " + fmtSta(r.popa_station) : "berth —");
   const clickable = r.mmsi != null;
   return `
-    <div class="card${clickable ? " along-card" : ""}" data-along-mmsi="${r.mmsi ?? ""}"${clickable ? ' style="cursor:pointer"' : ""}>
+    <div class="card${clickable ? " along-card" : ""}" data-along-mmsi="${r.mmsi ?? ""}" style="border-left-color:${PAL.green}${clickable ? ";cursor:pointer" : ""}">
       <div class="name">${name}
-        <span class="status-badge" style="background:${PAL.green}">moored</span></div>
+        <span class="status-badge" style="color:${PAL.green}">moored</span></div>
       <div class="meta">${where} · since <b>${fmtCentral(r.msg_ts)}</b></div>
     </div>`;
 }

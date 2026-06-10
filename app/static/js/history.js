@@ -1,11 +1,11 @@
 // History tab + ship-detail hover dossier. /history returns the booking log
 // (every status, observed berthings included), newest arrival first.
 import {
-  api, esc, fmtCentral, FT_PER_M, RES_STATUS_COLOR, shipTypeLabel, NAV_STATUS,
+  api, esc, fmtCentral, FT_PER_M, RES_STATUS_COLOR, BADGE_COLORS, shipTypeLabel, NAV_STATUS,
 } from "./api.js";
 
 function histCard(h) {
-  const color = RES_STATUS_COLOR[h.status] || "#888";
+  const color = BADGE_COLORS[h.status] || "#8a99a6";
   const imo = h.vessel_imo ? ` <span style="color:var(--muted);font-weight:400">IMO ${esc(h.vessel_imo)}</span>` : "";
   // Pared down to identity + status + the booking window. Everything else
   // (position, cargo, direction, notes, dimensions, AIS) lives in the dossier
@@ -14,9 +14,9 @@ function histCard(h) {
   const hoverable = h.vessel_id != null;
   const dates = `ETB <b>${fmtCentral(h.t_start)}</b>${h.t_end ? ` → ETD <b>${fmtCentral(h.t_end)}</b>` : ""}`;
   return `
-    <div class="card${hoverable ? " hist-card" : ""}" data-vessel-id="${h.vessel_id ?? ""}"${hoverable ? ' title="Hover for the ship dossier"' : ""}>
+    <div class="card${hoverable ? " hist-card" : ""}" data-vessel-id="${h.vessel_id ?? ""}" style="border-left-color:${color}"${hoverable ? ' title="Hover for the ship dossier"' : ""}>
       <div class="name">${esc(h.vessel_name || "(unnamed)")}${imo}
-        <span class="status-badge" style="background:${color}">${esc(h.status)}</span></div>
+        <span class="status-badge" style="color:${color}">${esc(h.status)}</span></div>
       <div class="meta">${dates}</div>
     </div>`;
 }
@@ -115,10 +115,10 @@ function renderResNotes(notes) {
       const parts = line.split(/\s[—–-]\s/);          // chip text — caveat detail
       const head = parts.shift();
       const detail = parts.join(" — ");
-      return `<div class="note-ai"><span class="ai-chip">✦ ${esc(head)}</span>${detail ? `<span class="ai-detail">${esc(detail)}</span>` : ""}</div>`;
+      return `<div class="note-ai"><span class="ai-chip">${esc(head)}</span>${detail ? `<span class="ai-detail">${esc(detail)}</span>` : ""}</div>`;
     }).join("");
   }
-  if (warn.length) html += `<div class="note-warn">⚠ ${esc(warn.join("; "))}</div>`;
+  if (warn.length) html += `<div class="note-warn">▲ ${esc(warn.join("; "))}</div>`;
   return `<div class="note-block">${html}</div>`;
 }
 

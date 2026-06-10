@@ -3,7 +3,7 @@
 // audit list, and the sidebar tab switcher.
 import {
   api, apiWrite, esc, fmtCentral, formPayload, isoToLocalInput, localInputToIso,
-  centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, RES_STATUS_COLOR,
+  centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, BADGE_COLORS,
 } from "./api.js";
 import { state } from "./state.js";
 import { locateVesselOnMap, loadPositions } from "./map.js";
@@ -136,7 +136,7 @@ function writeError(w) {
   return typeof d === "string" ? d : JSON.stringify(d);
 }
 function warnHtml(warnings) {
-  return (warnings && warnings.length) ? `<span class="warn">⚠ ${esc(warnings.join("; "))}</span>` : "";
+  return (warnings && warnings.length) ? `<span class="warn">▲ ${esc(warnings.join("; "))}</span>` : "";
 }
 
 // --- Reservations (read + inline edit / unconfirm) -------------------------
@@ -175,7 +175,7 @@ function resCard(r) {
     if (p.hh !== "00" || p.mm !== "00") { opts.hour = "2-digit"; opts.minute = "2-digit"; }
     return d.toLocaleString(undefined, opts);
   };
-  const color = RES_STATUS_COLOR[r.status] || "#888";
+  const color = BADGE_COLORS[r.status] || "#8a99a6";
   const imo = r.vessel_imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(r.vessel_imo)}</span>` : "";
   const sta = r.station_unassigned
     ? "berth unassigned"
@@ -190,9 +190,9 @@ function resCard(r) {
   const bowDock = r.station_unassigned ? ""
     : (r.direction === "downstream" ? r.station_lo_dock : r.station_hi_dock);
   return `
-    <div class="card req-card" data-res="${r.id}">
+    <div class="card req-card" data-res="${r.id}" style="border-left-color:${color}">
       <div class="name">${esc(r.vessel_name || "(unnamed)")} ${imo}
-        <span class="status-badge" style="background:${color}">${esc(r.status)}</span></div>
+        <span class="status-badge" style="color:${color}">${esc(r.status)}</span></div>
       <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(r.source)}</div>
       <div class="meta">${esc(sta)}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
       <div class="row-actions">
@@ -475,7 +475,7 @@ function isValidImo(imo) {
             ? "Already on file — duplicate request, nothing added."
             : `Recorded. Reservation #${data.reservation_id ?? "—"} (requested), vessel #${data.vessel_id ?? "—"}.`;
       const warns = (data.warnings && data.warnings.length)
-        ? `<span class="warn">⚠ ${data.warnings.join("; ")}</span>` : "";
+        ? `<span class="warn">▲ ${data.warnings.join("; ")}</span>` : "";
       result.innerHTML = msg + warns;
       if (editing || (!data.duplicate && !data.skipped)) resetForm();
       loadRequests(); loadBerthRequests(); loadVessels(); loadStats();
@@ -602,12 +602,12 @@ function reqCard(r) {
     <div class="card req-card">
       <div class="name">${esc(vessel || "(no vessel name)")}
         ${imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(imo)}</span>` : ""}
-        <span class="status-badge" style="background:var(--panel-2);color:var(--muted)">${esc(r.source)}</span></div>
+        <span class="status-badge" style="color:var(--muted)">${esc(r.source)}</span></div>
       ${lines.length ? `<div class="meta">${lines.join(" · ")}</div>` : ""}
       <div class="meta" style="font-size:13px">received ${esc(received)} · ${resLink}</div>
       ${editable ? `<div class="row-actions"><button class="btn-sm" data-edit-req="${r.id}">Edit</button><button class="btn-sm" data-delete-req="${r.id}">Delete</button></div>` : ""}
       <details style="margin-top:6px">
-        <summary style="cursor:pointer;color:var(--muted);font-size:13px">raw payload</summary>
+        <summary style="cursor:pointer;color:var(--muted);font-family:var(--font-mono);font-size:10px;letter-spacing:1px;text-transform:uppercase">raw payload</summary>
         <pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--muted);margin:6px 0 0">${esc(JSON.stringify(raw, null, 2))}</pre>
       </details>
     </div>`;
