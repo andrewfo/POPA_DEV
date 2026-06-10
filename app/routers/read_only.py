@@ -541,7 +541,13 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
     worker running. Newest fix first. The latest fix must be *recent* (within the
     present window): a departed vessel's last fix — even if it was alongside and
     stopped — ages out, so it never lingers here (same gate as the ``moored``
-    stat and ``vessels_present``)."""
+    stat and ``vessels_present``).
+
+    ``since`` is when the vessel went alongside — the start of its ongoing
+    ``observed`` berthing (the same value the AIS-verification panel shows, so the
+    two agree), NOT the latest-fix time (which is ~now and would misread "since").
+    It falls back to the latest fix only when no observed berthing exists yet
+    (worker hasn't run)."""
     settings = get_settings()
     point = "ST_SetSRID(ST_MakePoint(l.lon, l.lat), 4326)"
     rows = session.execute(
@@ -554,9 +560,19 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
                 WHERE pr.mmsi IS NOT NULL
                 ORDER BY pr.mmsi, pr.msg_ts DESC NULLS LAST, pr.id DESC
             )
-            SELECT l.mmsi, l.lat, l.lon, l.sog, l.msg_ts, v.name AS vessel_name
+            SELECT l.mmsi, l.lat, l.lon, l.sog, l.msg_ts, v.name AS vessel_name,
+                   COALESCE(obs.since, l.msg_ts) AS since
             FROM latest l
             LEFT JOIN vessel v ON v.id = l.vessel_id
+            LEFT JOIN LATERAL (
+                SELECT lower(r.time_range) AS since
+                FROM reservation r
+                WHERE r.vessel_id = l.vessel_id
+                  AND r.status = 'observed'
+                  AND r.time_range @> now()
+                ORDER BY lower(r.time_range) DESC
+                LIMIT 1
+            ) obs ON true
             {nearest_segment_lateral(point)}
             WHERE l.sog IS NOT NULL AND l.sog < :enter_sog
               AND l.msg_ts >= now() - (:window_h * interval '1 hour')
@@ -593,6 +609,9 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
                 "vessel_name": r.vessel_name,
                 "sog": float(r.sog) if r.sog is not None else None,
                 "msg_ts": r.msg_ts.isoformat() if r.msg_ts else None,
+                # When the vessel went alongside (observed-berthing start), else
+                # the latest fix as a fallback — what the card labels "since".
+                "since": r.since.isoformat() if r.since else None,
                 "popa_station": station,
                 "berth_name": berth_for(station),
             }

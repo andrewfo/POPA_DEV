@@ -238,7 +238,7 @@ function alongsideCard(r) {
     <div class="card${clickable ? " along-card" : ""}" data-along-mmsi="${r.mmsi ?? ""}" style="border-left-color:${PAL.green}${clickable ? ";cursor:pointer" : ""}">
       <div class="name">${name}
         <span class="status-badge" style="color:${PAL.green}">moored</span></div>
-      <div class="meta">${where} · since <b>${fmtCentral(r.msg_ts)}</b></div>
+      <div class="meta">${where} · since <b>${fmtCentral(r.since ?? r.msg_ts)}</b></div>
     </div>`;
 }
 
