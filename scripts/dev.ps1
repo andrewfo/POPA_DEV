@@ -8,7 +8,7 @@
       2. runs Alembic migrations and seeds the wharf segment (both idempotent)
       3. launches the FastAPI app (uvicorn)            -> own window "POPA API"
       4. launches the live aisstream.io ingestor        -> own window "POPA AIS"
-      5. (optional) loops occupancy derivation          -> own window "POPA Occupancy"
+      5. loops occupancy derivation                     -> own window "POPA Occupancy"
 
     The API and ingestor are long-lived, so each opens in its own PowerShell
     window where you can watch its logs and Ctrl-C it independently. The DB /
@@ -23,11 +23,12 @@
 .PARAMETER NoAis
     Skip the AIS ingestor even if a key is present.
 
-.PARAMETER Occupancy
-    Also launch a window that re-runs occupancy derivation every -OccEvery seconds.
+.PARAMETER NoOccupancy
+    Skip the occupancy-derivation loop (it runs by default — without it, berthed
+    vessels never become observed reservations, so no vessel outlines appear).
 
 .PARAMETER OccEvery
-    Seconds between occupancy passes (default 60). Implies -Occupancy.
+    Seconds between occupancy passes (default 60).
 
 .PARAMETER Port
     API port (default 8000).
@@ -37,11 +38,11 @@
 
 .EXAMPLE
     .\scripts\dev.ps1
-    Bring up DB + API + AIS (AIS auto-skips if no key).
+    Bring up DB + API + AIS + occupancy (AIS auto-skips if no key).
 
 .EXAMPLE
-    .\scripts\dev.ps1 -Occupancy
-    Same, plus a loop that turns berthed vessels into observed reservations.
+    .\scripts\dev.ps1 -NoOccupancy
+    Same, but skip the occupancy-derivation loop.
 
 .EXAMPLE
     .\scripts\dev.ps1 -Down
@@ -51,7 +52,7 @@
 param(
     [switch]$NoApi,
     [switch]$NoAis,
-    [switch]$Occupancy,
+    [switch]$NoOccupancy,
     [int]$OccEvery = 60,
     [int]$Port = 8000,
     [switch]$Down
@@ -136,7 +137,7 @@ if ($runAis) {
     Write-Step "AIS  -> aisstream.io live feed     (window: POPA AIS)"
     Start-DevWindow 'POPA AIS' "python -m app.ais.run"
 }
-if ($Occupancy -or $PSBoundParameters.ContainsKey('OccEvery')) {
+if (-not $NoOccupancy) {
     Write-Step "Occupancy derivation every ${OccEvery}s  (window: POPA Occupancy)"
     Start-DevWindow 'POPA Occupancy' "while (`$true) { python -m app.occupancy.run; Start-Sleep -Seconds $OccEvery }"
 }

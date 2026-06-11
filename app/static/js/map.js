@@ -129,9 +129,16 @@ const yellowLayer = L.geoJSON(null, {
 const vesselLayer = L.layerGroup().addTo(map);
 // Fill colour = ship-type category (t-<category> class); the pulse ring is only
 // emitted for underway contacts, so a moored dot sits still (see the legend).
-const aisIcon = (category, underway) => L.divIcon({
-  className: "ais-contact t-" + category,
-  html: (underway ? '<span class="ais-pulse"></span>' : "") + '<span class="ais-dot"></span>',
+// Staleness is NOT decided here: /positions/recent only returns contacts whose
+// fix is within berth_stale_close_min of the feed clock (the same recency gate as
+// "moored now"), so a vessel that went silent never reaches this layer to draw —
+// one server-side definition of "still here", not a second cutoff in the client.
+// mode = moored (stopped + alongside POPA: solid, still) | anchored (stopped but
+// off-berth — anchored / holding in the channel: hollow, still) | underway
+// (moving: solid + pulsing ring). Only "underway" emits the pulse.
+const aisIcon = (category, mode) => L.divIcon({
+  className: "ais-contact t-" + category + " m-" + mode,
+  html: (mode === "underway" ? '<span class="ais-pulse"></span>' : "") + '<span class="ais-dot"></span>',
   iconSize: [14, 14], iconAnchor: [7, 7],
 });
 
@@ -178,6 +185,35 @@ L.control.layers(null, {
   "Dredge markers": feetLayer,
 }, { collapsed: true, position: "topright" }).addTo(map);
 
+// View-mode toggle (top-left): which to-scale outlines the map draws. "Current"
+// = observed vessels moored right now (the live picture, ignores the scrubber);
+// "Planned" = confirmed bookings at the timeline cursor (drag the cursor to
+// preview the schedule). Master on/off stays the "Vessel outlines" layer above.
+// Read by renderOutlines (defined further down); persisted across reloads.
+let outlineMode = localStorage.getItem("outlineMode") === "planned" ? "planned" : "current";
+const viewToggle = L.control({ position: "topleft" });
+viewToggle.onAdd = function () {
+  const div = L.DomUtil.create("div", "view-toggle");
+  div.innerHTML =
+    '<button type="button" data-mode="current" title="Vessels moored right now (AIS)">Current</button>' +
+    '<button type="button" data-mode="planned" title="Confirmed bookings at the timeline cursor">Planned</button>';
+  const sync = () => div.querySelectorAll("button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.mode === outlineMode));
+  div.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b || b.dataset.mode === outlineMode) return;
+    outlineMode = b.dataset.mode;
+    localStorage.setItem("outlineMode", outlineMode);
+    sync();
+    if (!map.hasLayer(shipLayer)) shipLayer.addTo(map);   // choosing a view implies you want outlines on
+    renderOutlines(lastTSel, null);
+  });
+  sync();
+  L.DomEvent.disableClickPropagation(div);
+  return div;
+};
+viewToggle.addTo(map);
+
 // Ship-type colour key (bottom-left). Swatches are generated from
 // SHIP_CATEGORIES so they can never drift from the actual dot fills. The title
 // is a toggle: it collapses the body to just the chip so the key doesn't cover
@@ -191,7 +227,9 @@ shipLegend.onAdd = function () {
   div.innerHTML =
     `<button type="button" class="lg-title" aria-expanded="false">Ship type</button>` +
     `<div class="lg-body">${rows}` +
-    `<div class="lg-note">pulsing = underway · still = moored</div></div>`;
+    `<div class="lg-note">pulsing = underway · solid = moored</div>` +
+    `<div class="lg-note">hollow = stopped off-berth</div>` +
+    `<div class="lg-note">silent contacts are hidden</div></div>`;
   const title = div.querySelector(".lg-title");
   title.addEventListener("click", () => {
     const open = div.classList.toggle("collapsed") === false;
@@ -265,13 +303,15 @@ export async function loadPositions() {
     for (const p of ps) {
       if (p.mmsi && seen.has(p.mmsi)) continue; // most-recent per vessel
       if (p.mmsi) seen.add(p.mmsi);
+      // (Stale contacts never arrive here — the server's recency gate drops them.)
       // Moored = stopped (SOG below the berth-enter threshold) AND alongside (in
-      // the berthing zone, per the server's apron/buffer test). A moored dot sits
-      // still; anything else is "underway" and pulses. A vessel stopped
-      // mid-channel (stopped but not alongside) still pulses.
+      // the berthing zone, per the server's apron/buffer test). Stopped but NOT
+      // alongside = anchored/holding off-berth (still, hollow). Moving = underway.
       const stopped = (p.sog ?? 99) < state.mooredSog;
       const moored = stopped && p.alongside;
-      const underway = !moored;
+      // Three visual states: moored (at POPA), anchored (stopped but off-berth —
+      // sits still without pulsing, drawn hollow), underway (moving, pulses).
+      const mode = moored ? "moored" : (stopped ? "anchored" : "underway");
       // Dot fill = ship-type category (also labelled in the popup + legend).
       const cat = shipTypeCategory(p.ship_type);
       const catInfo = SHIP_CATEGORIES[cat];
@@ -286,7 +326,7 @@ export async function loadPositions() {
         `MMSI ${p.mmsi ?? "—"}<br>` +
         `SOG ${p.sog ?? "—"} kn${stateNote}<br>` +
         `${p.msg_ts ? fmtCentral(p.msg_ts) + " CT" : ""}`;
-      const marker = L.marker([p.lat, p.lon], { icon: aisIcon(cat, underway) })
+      const marker = L.marker([p.lat, p.lon], { icon: aisIcon(cat, mode) })
         .bindPopup(info)
         .bindTooltip(info, { direction: "top", offset: [0, -10] })
         .addTo(vesselLayer);
@@ -301,8 +341,13 @@ export async function loadPositions() {
 // driven by the timeline's draggable cursor: the timeline imports renderOutlines
 // and calls it with (tSel, rows); we render whoever is alongside at that instant.
 // The station -> lat/lon step is the client-side inverse of crosswalk.geo_to_station.
-// Only 'observed' (AIS ground truth) and 'confirmed' reservations are drawn.
-const OUTLINE_STATUS = { observed: STATUS_COLORS.observed, confirmed: STATUS_COLORS.confirmed };
+// Two view modes (toggled by the segmented control above the map):
+//   "current" — observed (AIS ground truth) vessels moored RIGHT NOW, drawn
+//               against the wall clock, independent of the timeline scrubber.
+//   "planned" — confirmed bookings at the timeline cursor instant, so dragging
+//               the cursor previews where reserved ships will sit.
+const CURRENT_STATUS = { observed: STATUS_COLORS.observed };
+const PLANNED_STATUS = { confirmed: STATUS_COLORS.confirmed };
 const OUTLINE_DREDGE = PAL.dredge;
 let VESSEL_DIMS = {};                 // "i"+imo / "m"+mmsi -> { loa, beam } (m)
 let lastTSel = null, lastRows = [];
@@ -374,6 +419,21 @@ function timeContains(r, tSel) {
   return s <= tSel && tSel <= e;
 }
 
+// Station span [lo, hi] (POPA ft) for the outline. Normally the reservation's own
+// stern..bow range — but a degenerate range (bow ≈ stern: projection slop, or a
+// moored vessel reported with no length yet) collapses the hull and used to be
+// dropped by the `spanFt < 1` guard, so a real moored ship drew nothing. Fall
+// back to the vessel's LOA (last-ditch a nominal 100 ft) centred on the reported
+// station, so every moored vessel stays drawable.
+function outlineSpan(r) {
+  const lo = Math.min(r.station_lo, r.station_hi), hi = Math.max(r.station_lo, r.station_hi);
+  if (hi - lo >= 1) return [lo, hi];
+  const d = r.vessel_imo != null ? VESSEL_DIMS["i" + r.vessel_imo] : null;
+  const loaFt = (d && d.loa != null && Number(d.loa) > 0) ? Number(d.loa) * FT_PER_M : 100;
+  const mid = (lo + hi) / 2;
+  return [mid - loaFt / 2, mid + loaFt / 2];
+}
+
 function beamFor(r, spanFt) {
   const d = r.vessel_imo != null ? VESSEL_DIMS["i" + r.vessel_imo] : null;
   let beamM = d && d.beam != null ? Number(d.beam) : 0;   // Numeric may arrive as string
@@ -391,19 +451,25 @@ export function renderOutlines(tSel, rows) {
   if (rows) lastRows = rows;
   shipLayer.clearLayers();
   // Off in the layer-toggle box, or nothing to place yet -> draw nothing.
-  if (!map.hasLayer(shipLayer) || tSel == null || !state.centerline) return;
+  if (!map.hasLayer(shipLayer) || !state.centerline) return;
+  const planned = outlineMode === "planned";
+  // Current view ignores the scrubber and reads "now" (what's actually moored);
+  // planned view follows the timeline cursor so you can preview the schedule.
+  const at = planned ? tSel : Date.now();
+  if (at == null) return;
+  const statuses = planned ? PLANNED_STATUS : CURRENT_STATUS;
   for (const r of lastRows) {
-    if (!(r.status in OUTLINE_STATUS)) continue;          // observed + confirmed only
+    if (!(r.status in statuses)) continue;
     if (r.station_unassigned || r.station_lo == null || r.station_hi == null) continue;
-    if (!timeContains(r, tSel)) continue;
-    const lo = Math.min(r.station_lo, r.station_hi), hi = Math.max(r.station_lo, r.station_hi);
+    if (!timeContains(r, at)) continue;
+    const [lo, hi] = outlineSpan(r);
     const spanFt = hi - lo;
     if (spanFt < 1) continue;
     const isDredge = r.type === "dredge";
     const beamM = beamFor(r, spanFt);
     const ring = hullFor(lo, hi, beamM, r.direction !== "downstream", isDredge);
     if (!ring) continue;
-    const color = isDredge ? OUTLINE_DREDGE : OUTLINE_STATUS[r.status];
+    const color = isDredge ? OUTLINE_DREDGE : statuses[r.status];
     L.polygon(ring, {
       color, weight: 2, fillColor: color,
       fillOpacity: r.status === "observed" ? 0.5 : 0.35,

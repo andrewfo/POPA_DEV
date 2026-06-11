@@ -335,6 +335,22 @@
   .leaflet-control-layers-expanded { color: var(--ink); padding: 8px 10px; font-size: 12px; }
   .leaflet-control-attribution { background: rgba(10,15,20,.7) !important; }
   .leaflet-control-attribution, .leaflet-control-attribution a { color: var(--muted) !important; }
+  /* View-mode toggle: a small segmented control selecting which to-scale outlines
+     the map draws — live "Current" occupancy (observed) vs "Planned" (confirmed)
+     bookings driven by the timeline cursor. */
+  .view-toggle {
+    display: flex; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r); overflow: hidden; font-family: var(--font-mono);
+  }
+  .view-toggle button {
+    background: var(--panel); color: var(--muted); border: 0;
+    border-right: 1px solid var(--line); padding: 5px 11px; cursor: pointer;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    font-family: inherit; line-height: 1;
+  }
+  .view-toggle button:last-child { border-right: 0; }
+  .view-toggle button:hover { background: var(--panel-2); color: var(--ink); }
+  .view-toggle button.active { background: var(--accent); color: #04121f; font-weight: 600; }
   /* Chart cursor: crosshair over the water (a plotting surface, not a webpage). */
   .leaflet-grab { cursor: crosshair; }
   .leaflet-dragging .leaflet-grab { cursor: grabbing; }
@@ -564,6 +580,13 @@
   .ais-contact.t-pilot     { --tc: var(--ship-pilot); }
   .ais-contact.t-passenger { --tc: var(--ship-passenger); }
   .ais-contact.t-other     { --tc: var(--ship-other); }
+  /* Stopped but off-berth (anchored / holding in the channel: SOG~0 yet not in
+     the POPA berthing zone). Sits still like a moored contact — no pulse — but
+     drawn HOLLOW (category-coloured ring, no fill) so it reads as neither "moored
+     at our wharf" (solid) nor "underway" (pulsing). */
+  .ais-contact.m-anchored .ais-dot {
+    background: transparent; border-color: var(--tc, var(--ship-other)); border-width: 2px;
+  }
   @keyframes ais-pulse {
     0%   { transform: scale(1);   opacity: .9; }
     70%  { opacity: .15; }

@@ -7,12 +7,12 @@
 #   2. runs Alembic migrations and seeds the wharf segment (both idempotent)
 #   3. launches the FastAPI app (uvicorn)
 #   4. launches the live aisstream.io ingestor
-#   5. (optional) loops occupancy derivation
+#   5. loops occupancy derivation
 #
 # Usage:
-#   ./scripts/dev.sh                  # DB + API + AIS
-#   ./scripts/dev.sh --occupancy      # also run occupancy loop
-#   ./scripts/dev.sh --occ-every 30   # occupancy every 30s (implies --occupancy)
+#   ./scripts/dev.sh                  # DB + API + AIS + occupancy
+#   ./scripts/dev.sh --no-occupancy   # skip the occupancy loop
+#   ./scripts/dev.sh --occ-every 30   # occupancy every 30s
 #   ./scripts/dev.sh --no-api         # skip uvicorn
 #   ./scripts/dev.sh --no-ais         # skip AIS ingestor
 #   ./scripts/dev.sh --port 9000      # API on port 9000
@@ -36,7 +36,7 @@ fi
 # --- defaults ---
 NO_API=false
 NO_AIS=false
-OCCUPANCY=false
+NO_OCCUPANCY=false
 OCC_EVERY=60
 PORT=8000
 DOWN=false
@@ -44,12 +44,12 @@ DOWN=false
 # --- parse args ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --no-api)      NO_API=true;    shift ;;
-    --no-ais)      NO_AIS=true;    shift ;;
-    --occupancy)   OCCUPANCY=true; shift ;;
-    --occ-every)   OCCUPANCY=true; OCC_EVERY="$2"; shift 2 ;;
-    --port)        PORT="$2";      shift 2 ;;
-    --down)        DOWN=true;      shift ;;
+    --no-api)        NO_API=true;        shift ;;
+    --no-ais)        NO_AIS=true;        shift ;;
+    --no-occupancy)  NO_OCCUPANCY=true;  shift ;;
+    --occ-every)     OCC_EVERY="$2";     shift 2 ;;
+    --port)          PORT="$2";          shift 2 ;;
+    --down)          DOWN=true;          shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -134,7 +134,7 @@ if $RUN_AIS; then
   PIDS+=($!)
 fi
 
-if $OCCUPANCY; then
+if ! $NO_OCCUPANCY; then
   step "Occupancy derivation every ${OCC_EVERY}s"
   (while true; do $PYTHON -m app.occupancy.run; sleep "$OCC_EVERY"; done) &
   PIDS+=($!)

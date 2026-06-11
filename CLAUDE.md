@@ -386,6 +386,16 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   (the newest `position_report` anywhere), never the wall clock — a dead feed is
   not departure evidence, the same principle as the sweep's `feed_alive` gate.
   Don't "fix" panel noise by suppressing rows at ingest/derivation.
+  **One "still here" recency gate, shared by every live surface.** The map dots
+  (`/positions/recent`), the `moored` stat (`/stats`), and the "Alongside now"
+  panel (`/occupancy/moored`) all keep a fix only when
+  `msg_ts >= max(msg_ts over position_report) − berth_stale_close_min` — the same
+  threshold, against the same **feed clock**, as the stale-berthing close. Do not
+  give a live surface its own staleness rule (a wall-clock window, or a separate
+  client-side cutoff): that's how the dots once lingered showing departed ships
+  while the panel had already dropped them. `vessel_present_window_h` (24 h) is a
+  *different*, broader metric — it counts `vessels` *present* around the port, not
+  "moored/here right now", and must not gate the live "still here" surfaces.
 - **Auth is whole-app HTTP Basic via a middleware** (`app/auth.py`), not per-route
   dependencies — the middleware is the only thing that also covers the mounted
   static map (`/`, `/static/*`). It is **active only when both `OPERATOR_USER`

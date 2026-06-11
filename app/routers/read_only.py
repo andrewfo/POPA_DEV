@@ -104,8 +104,17 @@ def positions_recent(
     predicate in ``app/occupancy/alongside.py``). The map colours a contact by
     ship-type category and uses ``alongside`` plus a low SOG to show state by
     motion — moored contacts sit still, underway ones pulse — so a vessel stopped
-    mid-channel reads underway, not moored."""
+    mid-channel reads underway, not moored.
+
+    Only contacts whose fix is **current** are returned: ``msg_ts`` must be within
+    ``berth_stale_close_min`` of the feed clock (the newest fix landed anywhere),
+    the *same* recency gate ``/occupancy/moored`` applies. A vessel that left or
+    went AIS-dark stops broadcasting, so its last-known position ages out of the
+    feed instead of lingering as a frozen dot — the map and the "moored now" panel
+    therefore share one definition of "still here" (and a stalled ingestor doesn't
+    blank every contact, since it's measured against the feed clock, not now())."""
     point = "ST_SetSRID(ST_MakePoint(pr.lon, pr.lat), 4326)"
+    settings = get_settings()
     rows = session.execute(
         text(
             f"""
@@ -115,11 +124,17 @@ def positions_recent(
             FROM position_report pr
             LEFT JOIN vessel v ON v.id = pr.vessel_id
             {nearest_segment_lateral(point)}
+            WHERE pr.msg_ts >= (SELECT max(msg_ts) FROM position_report)
+                               - (:stale_min * interval '1 minute')
             ORDER BY pr.msg_ts DESC NULLS LAST, pr.id DESC
             LIMIT :limit
             """
         ),
-        {"limit": limit, "buffer_m": get_settings().berth_buffer_m},
+        {
+            "limit": limit,
+            "buffer_m": settings.berth_buffer_m,
+            "stale_min": settings.berth_stale_close_min,
+        },
     ).all()
     return [
         {
@@ -431,10 +446,14 @@ def stats(session: Session = Depends(get_session)) -> dict:
     # fix with the same ordering /positions/recent uses (msg_ts DESC NULLS LAST,
     # id DESC), and apply the same alongside predicate + the shared
     # berth_enter_sog_kn threshold (also handed to the client via /config/bbox).
-    # The latest fix must also be *recent* (within the present window): a vessel
-    # that left stops broadcasting in the bbox, so its last fix — even if it was
-    # alongside and stopped — ages out and must not linger as "moored now"
-    # (same recency gate as vessels_present below).
+    # The latest fix must also be *current*: a vessel that left stops broadcasting
+    # in the bbox, so its last fix — even if it was alongside and stopped — must
+    # not linger as "moored now". Gate it the way the occupancy worker closes a
+    # berthing: silent longer than berth_stale_close_min, measured against the
+    # FEED CLOCK (newest fix anywhere), not wall time — so a stalled ingestor
+    # doesn't age out every contact, and this agrees with the observed
+    # reservations the verification panel + map outlines are built on. (Tighter,
+    # feed-relative gate than vessels_present's broad 24h wall-clock window.)
     settings = get_settings()
     point = "ST_SetSRID(ST_MakePoint(l.lon, l.lat), 4326)"
     moored = session.execute(
@@ -451,14 +470,15 @@ def stats(session: Session = Depends(get_session)) -> dict:
             FROM latest l
             {nearest_segment_lateral(point)}
             WHERE l.sog IS NOT NULL AND l.sog < :enter_sog
-              AND l.msg_ts >= now() - (:window_h * interval '1 hour')
+              AND l.msg_ts >= (SELECT max(msg_ts) FROM position_report)
+                              - (:stale_min * interval '1 minute')
               AND COALESCE({alongside_sql(point)}, false)
             """
         ),
         {
             "enter_sog": settings.berth_enter_sog_kn,
             "buffer_m": settings.berth_buffer_m,
-            "window_h": settings.vessel_present_window_h,
+            "stale_min": settings.berth_stale_close_min,
         },
     ).scalar_one()
     # Arrivals in the next 24h = non-cancelled reservations whose ETB (the lower
@@ -538,10 +558,13 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
     crosswalk path ``geo_to_station``) and labelled with the berth whose station
     range contains it. This reads **live positions**, not derived ``observed``
     reservations, so "who's alongside" populates without the occupancy-derivation
-    worker running. Newest fix first. The latest fix must be *recent* (within the
-    present window): a departed vessel's last fix — even if it was alongside and
-    stopped — ages out, so it never lingers here (same gate as the ``moored``
-    stat and ``vessels_present``).
+    worker running. Newest fix first. The latest fix must be *current*: a departed
+    vessel's last fix — even if it was alongside and stopped — must not linger
+    here, so it's gated the way the occupancy worker closes a berthing: silent
+    longer than ``berth_stale_close_min`` against the FEED CLOCK (newest fix
+    anywhere), not wall time. This agrees with the observed reservations the
+    verification panel and map outlines use (same threshold + clock), and with
+    the ``moored`` stat.
 
     ``since`` is when the vessel went alongside — the start of its ongoing
     ``observed`` berthing (the same value the AIS-verification panel shows, so the
@@ -575,7 +598,8 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
             ) obs ON true
             {nearest_segment_lateral(point)}
             WHERE l.sog IS NOT NULL AND l.sog < :enter_sog
-              AND l.msg_ts >= now() - (:window_h * interval '1 hour')
+              AND l.msg_ts >= (SELECT max(msg_ts) FROM position_report)
+                              - (:stale_min * interval '1 minute')
               AND COALESCE({alongside_sql(point)}, false)
             ORDER BY l.msg_ts DESC NULLS LAST
             """
@@ -583,7 +607,7 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
         {
             "enter_sog": settings.berth_enter_sog_kn,
             "buffer_m": settings.berth_buffer_m,
-            "window_h": settings.vessel_present_window_h,
+            "stale_min": settings.berth_stale_close_min,
         },
     ).all()
     # Berth catalog loaded once; matching a POPA station to a named berth is a

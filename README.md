@@ -54,10 +54,10 @@ python -m app.seed.wharf_seed
 ## Run
 
 ```bash
-# One-command dev stack (DB + migrate + seed + API + AIS ingestor):
+# One-command dev stack (DB + migrate + seed + API + AIS ingestor + occupancy):
 ./scripts/dev.sh                  # macOS / Linux
 .\scripts\dev.ps1                 # Windows (PowerShell)
-# Add --occupancy / -Occupancy for the occupancy derivation loop.
+# Occupancy derivation runs by default; add --no-occupancy / -NoOccupancy to skip it.
 # Use --down / -Down to stop the DB container.
 
 # Or run each piece individually:
@@ -185,8 +185,9 @@ traffic — is closed at its last fix instead of reading "ongoing" forever.
 See `app/occupancy/*` and `PLAN.md` §2.
 
 The AIS verification panel needs this worker running (it is what turns raw
-positions into `observed` rows) — in dev, start the stack with
-`.\scripts\dev.ps1 -Occupancy` / `./scripts/dev.sh --occupancy`.
+positions into `observed` rows) — in dev it starts by default with the stack
+(`.\scripts\dev.ps1` / `./scripts/dev.sh`); pass `-NoOccupancy` / `--no-occupancy`
+to skip it.
 
 ## Project layout
 
