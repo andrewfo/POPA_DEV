@@ -9,13 +9,17 @@
       3. launches the FastAPI app (uvicorn)            -> own window "POPA API"
       4. launches the live aisstream.io ingestor        -> own window "POPA AIS"
       5. loops occupancy derivation                     -> own window "POPA Occupancy"
+      6. polls the Dataverse AI berth-request intake     -> own window "POPA Intake"
 
-    The API and ingestor are long-lived, so each opens in its own PowerShell
+    The API and workers are long-lived, so each opens in its own PowerShell
     window where you can watch its logs and Ctrl-C it independently. The DB /
     migrate / seed steps run inline here.
 
     The AIS ingestor is skipped automatically if AISSTREAM_API_KEY is empty in
-    .env (get a free key at https://aisstream.io).
+    .env (get a free key at https://aisstream.io). The AI intake worker is
+    skipped automatically unless OPENROUTER_API_KEY and the Dataverse
+    app-registration vars (DATAVERSE_URL / _TENANT_ID / _CLIENT_ID /
+    _CLIENT_SECRET) are all set in .env.
 
 .PARAMETER NoApi
     Skip launching uvicorn.
@@ -26,6 +30,9 @@
 .PARAMETER NoOccupancy
     Skip the occupancy-derivation loop (it runs by default — without it, berthed
     vessels never become observed reservations, so no vessel outlines appear).
+
+.PARAMETER NoIntake
+    Skip the Dataverse AI berth-request intake worker even if it's configured.
 
 .PARAMETER OccEvery
     Seconds between occupancy passes (default 60).
@@ -53,6 +60,7 @@ param(
     [switch]$NoApi,
     [switch]$NoAis,
     [switch]$NoOccupancy,
+    [switch]$NoIntake,
     [int]$OccEvery = 60,
     [int]$Port = 8000,
     [switch]$Down
@@ -111,16 +119,31 @@ python -m alembic upgrade head
 Write-Step "Seeding wharf segment"
 python -m app.seed.wharf_seed
 
-# --- 3. Read AIS key from .env (skip ingestor if empty) ---
-$aisKey = ''
-if (Test-Path .env) {
-    $m = Select-String -Path .env -Pattern '^\s*AISSTREAM_API_KEY\s*=\s*(\S.*)$'
-    if ($m) { $aisKey = $m.Matches[0].Groups[1].Value.Trim() }
+# --- 3. Read .env to decide which optional workers can run ---
+function Get-DotEnv($name) {
+    if (-not (Test-Path .env)) { return '' }
+    $m = Select-String -Path .env -Pattern "^\s*$name\s*=\s*(\S.*)$"
+    if ($m) { return $m.Matches[0].Groups[1].Value.Trim() }
+    return ''
 }
+
+# AIS ingestor: needs a stream key.
+$aisKey = Get-DotEnv 'AISSTREAM_API_KEY'
 $runAis = (-not $NoAis) -and -not [string]::IsNullOrWhiteSpace($aisKey)
 if (-not $NoAis -and [string]::IsNullOrWhiteSpace($aisKey)) {
     Write-Warn2 "AISSTREAM_API_KEY is empty in .env -> skipping the AIS ingestor."
     Write-Warn2 "Get a free key at https://aisstream.io, set it in .env, and re-run."
+}
+
+# AI intake worker: needs OpenRouter + the Dataverse app-registration creds.
+# (The worker itself also validates the status option-set ints; here we just
+# check the connection creds so we don't spawn a window that immediately exits.)
+$intakeVars = @('OPENROUTER_API_KEY', 'DATAVERSE_URL', 'DATAVERSE_TENANT_ID',
+                'DATAVERSE_CLIENT_ID', 'DATAVERSE_CLIENT_SECRET')
+$intakeMissing = @($intakeVars | Where-Object { [string]::IsNullOrWhiteSpace((Get-DotEnv $_)) })
+$runIntake = (-not $NoIntake) -and ($intakeMissing.Count -eq 0)
+if (-not $NoIntake -and $intakeMissing.Count -gt 0) {
+    Write-Warn2 "AI intake worker not configured ($($intakeMissing -join ', ') unset in .env) -> skipping."
 }
 
 # --- 4. Launch long-lived processes, each in its own window ---
@@ -140,6 +163,10 @@ if ($runAis) {
 if (-not $NoOccupancy) {
     Write-Step "Occupancy derivation every ${OccEvery}s  (window: POPA Occupancy)"
     Start-DevWindow 'POPA Occupancy' "while (`$true) { python -m app.occupancy.run; Start-Sleep -Seconds $OccEvery }"
+}
+if ($runIntake) {
+    Write-Step "AI intake -> Dataverse berth-request poll  (window: POPA Intake)"
+    Start-DevWindow 'POPA Intake' "python -m app.intake.dataverse_run"
 }
 
 Write-Host ""

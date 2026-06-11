@@ -8,13 +8,20 @@
 #   3. launches the FastAPI app (uvicorn)
 #   4. launches the live aisstream.io ingestor
 #   5. loops occupancy derivation
+#   6. polls the Dataverse AI berth-request intake worker
+#
+# The AIS ingestor is skipped unless AISSTREAM_API_KEY is set in .env. The AI
+# intake worker is skipped unless OPENROUTER_API_KEY and the Dataverse
+# app-registration vars (DATAVERSE_URL / _TENANT_ID / _CLIENT_ID / _CLIENT_SECRET)
+# are all set in .env.
 #
 # Usage:
-#   ./scripts/dev.sh                  # DB + API + AIS + occupancy
+#   ./scripts/dev.sh                  # DB + API + AIS + occupancy + AI intake
 #   ./scripts/dev.sh --no-occupancy   # skip the occupancy loop
 #   ./scripts/dev.sh --occ-every 30   # occupancy every 30s
 #   ./scripts/dev.sh --no-api         # skip uvicorn
 #   ./scripts/dev.sh --no-ais         # skip AIS ingestor
+#   ./scripts/dev.sh --no-intake      # skip the AI intake worker
 #   ./scripts/dev.sh --port 9000      # API on port 9000
 #   ./scripts/dev.sh --down           # stop the DB container and exit
 
@@ -37,6 +44,7 @@ fi
 NO_API=false
 NO_AIS=false
 NO_OCCUPANCY=false
+NO_INTAKE=false
 OCC_EVERY=60
 PORT=8000
 DOWN=false
@@ -47,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --no-api)        NO_API=true;        shift ;;
     --no-ais)        NO_AIS=true;        shift ;;
     --no-occupancy)  NO_OCCUPANCY=true;  shift ;;
+    --no-intake)     NO_INTAKE=true;     shift ;;
     --occ-every)     OCC_EVERY="$2";     shift 2 ;;
     --port)          PORT="$2";          shift 2 ;;
     --down)          DOWN=true;          shift ;;
@@ -105,12 +114,14 @@ $PYTHON -m alembic upgrade head
 step "Seeding wharf segment"
 $PYTHON -m app.seed.wharf_seed
 
-# --- 3. Read AIS key from .env ---
-AIS_KEY=""
-if [[ -f .env ]]; then
-  AIS_KEY=$(grep -E '^\s*AISSTREAM_API_KEY\s*=' .env | head -1 | sed 's/^[^=]*=\s*//' | xargs) || true
-fi
+# --- 3. Read .env to decide which optional workers can run ---
+dotenv() {  # dotenv VAR -> echoes its value from .env (empty if unset/no file)
+  [[ -f .env ]] || return 0
+  grep -E "^\s*$1\s*=" .env | head -1 | sed 's/^[^=]*=\s*//' | xargs || true
+}
 
+# AIS ingestor: needs a stream key.
+AIS_KEY=$(dotenv AISSTREAM_API_KEY)
 RUN_AIS=false
 if ! $NO_AIS; then
   if [[ -n "$AIS_KEY" ]]; then
@@ -118,6 +129,22 @@ if ! $NO_AIS; then
   else
     warn "AISSTREAM_API_KEY is empty in .env -> skipping the AIS ingestor."
     warn "Get a free key at https://aisstream.io, set it in .env, and re-run."
+  fi
+fi
+
+# AI intake worker: needs OpenRouter + the Dataverse app-registration creds.
+# (The worker also validates the status option-set ints; here we just check the
+# connection creds so we don't background a process that immediately exits.)
+RUN_INTAKE=false
+if ! $NO_INTAKE; then
+  INTAKE_MISSING=""
+  for v in OPENROUTER_API_KEY DATAVERSE_URL DATAVERSE_TENANT_ID DATAVERSE_CLIENT_ID DATAVERSE_CLIENT_SECRET; do
+    [[ -n "$(dotenv "$v")" ]] || INTAKE_MISSING+="$v "
+  done
+  if [[ -z "$INTAKE_MISSING" ]]; then
+    RUN_INTAKE=true
+  else
+    warn "AI intake worker not configured (${INTAKE_MISSING}unset in .env) -> skipping."
   fi
 fi
 
@@ -137,6 +164,12 @@ fi
 if ! $NO_OCCUPANCY; then
   step "Occupancy derivation every ${OCC_EVERY}s"
   (while true; do $PYTHON -m app.occupancy.run; sleep "$OCC_EVERY"; done) &
+  PIDS+=($!)
+fi
+
+if $RUN_INTAKE; then
+  step "AI intake -> Dataverse berth-request poll"
+  $PYTHON -m app.intake.dataverse_run &
   PIDS+=($!)
 fi
 
