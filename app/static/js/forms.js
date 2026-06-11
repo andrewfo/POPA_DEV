@@ -172,14 +172,14 @@ function resCard(r) {
     if (isNaN(d)) return esc(s);
     const p = centralParts(d);
     const opts = { timeZone: CENTRAL_TZ, year: "numeric", month: "short", day: "numeric" };
-    if (p.hh !== "00" || p.mm !== "00") { opts.hour = "2-digit"; opts.minute = "2-digit"; }
+    if (p.hh !== "00" || p.mm !== "00") { opts.hour = "2-digit"; opts.minute = "2-digit"; opts.hour12 = false; }
     return d.toLocaleString(undefined, opts);
   };
   const color = BADGE_COLORS[r.status] || "#8a99a6";
-  const imo = r.vessel_imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(r.vessel_imo)}</span>` : "";
+  const imo = r.vessel_imo ? `<span class="imo">IMO ${esc(r.vessel_imo)}</span>` : "";
   const sta = r.station_unassigned
     ? "berth unassigned"
-    : `Dock ${Math.round(Math.min(r.station_lo_dock, r.station_hi_dock))}–${Math.round(Math.max(r.station_lo_dock, r.station_hi_dock))}`;
+    : `Dock <b>${Math.round(Math.min(r.station_lo_dock, r.station_hi_dock))}–${Math.round(Math.max(r.station_lo_dock, r.station_hi_dock))}</b>`;
   const opt = (cur, v, lbl) => `<option value="${v}"${(cur || "") === v ? " selected" : ""}>${lbl}</option>`;
   const statusSel = ["requested", "confirmed", "completed", "cancelled"].map((s) => opt(r.status, s, s)).join("");
   const typeSel = ["vessel", "dredge", "layberth"].map((t) => opt(r.type, t, t)).join("");
@@ -194,7 +194,7 @@ function resCard(r) {
       <div class="name">${esc(r.vessel_name || "(unnamed)")} ${imo}
         <span class="status-badge" style="color:${color}">${esc(r.status)}</span></div>
       <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(r.source)}</div>
-      <div class="meta">${esc(sta)}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
+      <div class="meta">${sta}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
       <div class="row-actions">
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
         <button class="btn-sm" data-act="edit-request">Edit request</button>
@@ -601,10 +601,10 @@ function reqCard(r) {
   return `
     <div class="card req-card">
       <div class="name">${esc(vessel || "(no vessel name)")}
-        ${imo ? `<span style="color:var(--muted);font-weight:400">IMO ${esc(imo)}</span>` : ""}
+        ${imo ? `<span class="imo">IMO ${esc(imo)}</span>` : ""}
         <span class="status-badge" style="color:var(--muted)">${esc(r.source)}</span></div>
       ${lines.length ? `<div class="meta">${lines.join(" · ")}</div>` : ""}
-      <div class="meta" style="font-size:13px">received ${esc(received)} · ${resLink}</div>
+      <div class="meta">received ${esc(received)} · ${resLink}</div>
       ${editable ? `<div class="row-actions"><button class="btn-sm" data-edit-req="${r.id}">Edit</button><button class="btn-sm" data-delete-req="${r.id}">Delete</button></div>` : ""}
       <details style="margin-top:6px">
         <summary style="cursor:pointer;color:var(--muted);font-family:var(--font-mono);font-size:10px;letter-spacing:1px;text-transform:uppercase">raw payload</summary>

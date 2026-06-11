@@ -92,7 +92,7 @@ function conflictCard(c, i) {
     <div class="card conflict-card" data-conflict="${i}" style="cursor:pointer;border-left-color:${PAL.red}">
       <div class="name">${conflictName(c.a)} ⇄ ${conflictName(c.b)}
         <span class="status-badge" style="color:${PAL.red}">conflict</span></div>
-      <div class="meta">${esc(CONFLICT_CAT[c.category] || c.category)} · Dock ${dlo}–${dhi}</div>
+      <div class="meta">${esc(CONFLICT_CAT[c.category] || c.category)} · Dock <b>${dlo}–${dhi}</b></div>
       <div class="meta">overlap <b>${win}</b></div>
     </div>`;
 }

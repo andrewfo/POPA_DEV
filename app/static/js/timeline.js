@@ -59,7 +59,7 @@ export const loadTimeline = (function () {
   };
   // Axis + tooltip times in Central (the canonical zone).
   const fmtD = (ms) => new Date(ms).toLocaleDateString(undefined, { timeZone: CENTRAL_TZ, month: "short", day: "numeric" });
-  const fmtDT = (s) => s ? new Date(s).toLocaleString(undefined, { timeZone: CENTRAL_TZ, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+  const fmtDT = (s) => s ? new Date(s).toLocaleString(undefined, { timeZone: CENTRAL_TZ, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
 
   // Build berth lanes from state.berthSta (high station on top), plus an
   // Unassigned lane at the top for requests with no berth yet. state.berthSta is
@@ -182,15 +182,19 @@ export const loadTimeline = (function () {
     for (let t = centralDayStart(t0); t <= t1; t += step) {
       if (t < t0) continue;                              // skip the pre-window midnight we step from
       const px = x(t);
-      svg.appendChild(el("line", { x1: px, y1: HEADER_H, x2: px, y2: totalH, class: "tl-grid" }));
-      const tk = el("text", { x: px + 3, y: 15, class: "tl-axis-label" });
       const cp = centralParts(t);
       const midnight = cp.hh === "00" && cp.mm === "00";
+      // Day boundaries draw a step brighter than intra-day ticks (.tl-grid.day).
+      svg.appendChild(el("line", { x1: px, y1: HEADER_H, x2: px, y2: totalH, class: "tl-grid" + (midnight ? " day" : "") }));
+      const tk = el("text", { x: px + 3, y: 15, class: "tl-axis-label" });
       tk.textContent = (!subDay || midnight)
         ? fmtD(t)
-        : new Date(t).toLocaleTimeString(undefined, { timeZone: CENTRAL_TZ, hour: "numeric" });
+        : new Date(t).toLocaleTimeString(undefined, { timeZone: CENTRAL_TZ, hour: "2-digit", minute: "2-digit", hour12: false });
       svg.appendChild(tk);
     }
+
+    // Hairline framing the plot off the lane-label gutter.
+    svg.appendChild(el("line", { x1: LABEL_W - 6, y1: HEADER_H, x2: LABEL_W - 6, y2: totalH, class: "tl-gutter" }));
 
     // "Now" marker — a bright solid red hairline with a labeled tick at the top,
     // re-read from the clock on every render/poll so it tracks the real time. The
@@ -273,7 +277,7 @@ export const loadTimeline = (function () {
       const from = new Date(t0).toISOString(), to = new Date(t1).toISOString();
       rows = await api(`/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
       render();
-      if (updatedEl) updatedEl.textContent = "updated " + new Date().toLocaleTimeString();
+      if (updatedEl) updatedEl.textContent = "updated " + new Date().toLocaleTimeString(undefined, { hour12: false });
     } catch (e) {
       rows = []; render();
       emptyEl.textContent = "unavailable (DB offline)"; emptyEl.style.display = "block";

@@ -218,15 +218,17 @@
     border-bottom: 1px solid var(--line);
   }
   nav.tabs .tab {
-    flex: 1; padding: 7px 5px; border: none; background: none; cursor: pointer;
+    flex: 1; padding: 8px 4px 7px; border: none; background: none; cursor: pointer;
     color: var(--muted); font-family: var(--font-ui); font-size: 10px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 1px;
-    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    border-bottom: 1px solid transparent; margin-bottom: -1px;
+    transition: color .12s ease;
   }
+  nav.tabs .tab + .tab { border-left: 1px solid var(--line); }
   nav.tabs .tab:hover { color: var(--ink); }
   nav.tabs .tab.active {
     color: var(--accent); border-bottom-color: var(--accent);
-    background: linear-gradient(180deg, rgba(52,196,216,0), rgba(52,196,216,.07));
+    background: linear-gradient(180deg, rgba(52,196,216,0), rgba(52,196,216,.05));
   }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
@@ -247,22 +249,25 @@
     border: 1px solid var(--line); border-top-color: var(--topedge);
     margin-bottom: var(--s4);
   }
-  .stat { background: var(--panel); border-radius: 0; padding: 6px 9px 7px; }
+  .stat { background: var(--panel); border-radius: 0; padding: 8px 10px 9px; }
+  /* Numerals are the hero: larger and LIGHTER (a thin large figure reads more
+     refined than a bold small one); the label is a fine tracked-out caption. */
   .stat .n {
     font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-    font-size: 21px; font-weight: 500; line-height: 1; color: var(--ink);
+    font-size: 24px; font-weight: 400; line-height: 1; color: var(--ink);
   }
-  .stat .l { font-size: 9px; text-transform: uppercase; letter-spacing: 1.1px; color: var(--muted); margin-top: 4px; }
+  .stat .l { font-size: 8.5px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); margin-top: 5px; }
 
   /* CONFLICTS — full-width alert strip; goes amber/red on >0 via JS class. */
   .alert-strip {
     display: flex; align-items: center; gap: var(--s3);
-    margin-bottom: var(--s5); padding: 6px 10px;
+    margin-bottom: var(--s5); padding: 7px 10px;
     background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--muted);
     font-family: var(--font-mono);
+    transition: background-color .15s ease, border-color .15s ease;
   }
   .alert-strip .a-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
-  .alert-strip .a-n { font-size: 18px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .alert-strip .a-n { font-size: 20px; font-weight: 400; color: var(--ink); font-variant-numeric: tabular-nums; line-height: 1; }
   .alert-strip .a-l { font-size: 9px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); }
   .alert-strip .a-msg { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
   .alert-strip.alert { border-left-color: var(--red); background: rgba(226,64,58,.10); }
@@ -285,26 +290,58 @@
      rule) plus a right-aligned caret that rotates open; click the heading to
      fold the section. */
   details.section { margin: 0; }
+  /* Section header: a fine vertical accent tick (not a chunky square), a hairline
+     rule that FADES out to the right, and a closed-section label that sits dimmer
+     than an open one — the fold state reads from weight, not just the caret. */
   details.section > summary {
     list-style: none; cursor: pointer; user-select: none;
-    font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px;
-    color: var(--ink-dim); margin: var(--s6) 0 var(--s3);
-    padding-bottom: 4px; border-bottom: 1px solid var(--line);
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.8px;
+    color: var(--muted); margin: var(--s6) 0 var(--s3);
+    padding-bottom: 5px; border-bottom: 0;
+    background: linear-gradient(90deg, var(--line-2), var(--line) 35%, transparent 96%) bottom / 100% 1px no-repeat;
     display: flex; align-items: center; gap: 7px; font-weight: 700;
+    transition: color .12s ease;
   }
+  details.section[open] > summary { color: var(--ink-dim); }
   details.section > summary::-webkit-details-marker { display: none; }
-  details.section > summary::before { content: ""; width: 6px; height: 6px; background: var(--accent); flex: none; }
+  details.section > summary::before { content: ""; width: 2px; height: 10px; background: var(--accent); flex: none; }
   details.section > summary::after { content: "▸"; margin-left: auto; color: var(--muted); font-size: 9px; transition: transform .12s ease; }
   details.section[open] > summary::after { transform: rotate(90deg); }
   details.section > summary:hover { color: var(--ink); }
+  /* Inline "what is this section" glyph — the explainer text that used to sit as
+     an always-visible paragraph now lives in the title tooltip (hover the i).
+     Density: prime sidebar rows go to data, not prose an operator reads once. */
+  summary .info {
+    width: 12px; height: 12px; flex: none; box-sizing: border-box;
+    border: 1px solid var(--line-2); border-radius: 50%;
+    color: var(--muted); font-family: var(--font-mono); font-size: 8px; font-weight: 600;
+    font-style: normal; display: inline-flex; align-items: center; justify-content: center;
+    cursor: help; text-transform: none; letter-spacing: 0; line-height: 1;
+  }
+  summary .info:hover { color: var(--accent); border-color: var(--accent-dim); }
   .card {
     background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--line-2);
-    border-radius: 0; padding: 7px 9px; margin-bottom: var(--s1);
+    border-radius: 0; padding: 8px 10px; margin-bottom: var(--s2);
+    transition: background-color .12s ease, border-color .12s ease;
   }
-  .card:hover { border-top-color: var(--line-2); border-right-color: var(--line-2); border-bottom-color: var(--line-2); }
-  .card .name { font-weight: 600; font-size: 12px; }
+  .card:hover {
+    border-top-color: var(--line-2); border-right-color: var(--line-2); border-bottom-color: var(--line-2);
+    background: color-mix(in srgb, var(--panel-2) 82%, var(--line-2));
+  }
+  /* Card header: name leads, identifiers in mono, the status chip pinned to the
+     right edge so statuses scan as one column down a list of cards. */
+  .card .name {
+    font-weight: 600; font-size: 12px; letter-spacing: .2px;
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 6px;
+  }
+  .card .name .imo {
+    color: var(--muted); font-weight: 400; font-size: 10px;
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  }
+  .card .name .status-badge { margin-left: auto; }
+  .card .name .status-badge ~ .status-badge { margin-left: 0; }
   .card .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
-  .card .meta b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-dim); font-weight: 500; }
+  .card .meta b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 500; }
   /* Empty / no-data states read as a console readout, not apologetic italics. */
   .empty {
     color: var(--muted); padding: 12px 8px; margin: 2px 0;
@@ -350,7 +387,7 @@
   }
   .view-toggle button:last-child { border-right: 0; }
   .view-toggle button:hover { background: var(--panel-2); color: var(--ink); }
-  .view-toggle button.active { background: var(--accent); color: #04121f; font-weight: 600; }
+  .view-toggle button.active { background: var(--accent); color: var(--on-accent); font-weight: 600; }
   /* Chart cursor: crosshair over the water (a plotting surface, not a webpage). */
   .leaflet-grab { cursor: crosshair; }
   .leaflet-dragging .leaflet-grab { cursor: grabbing; }
@@ -432,7 +469,6 @@
   .intake .result.ok { background: rgba(63,174,110,.12); border: 1px solid var(--good); color: var(--good); display: block; }
   .intake .result.err { background: rgba(217,79,67,.12); border: 1px solid var(--bad); color: var(--bad); display: block; }
   .intake .result .warn { color: var(--warn); display: block; margin-top: 4px; font-size: 12px; }
-  .req-card .meta b { color: var(--ink); font-weight: 600; font-family: var(--font-mono); }
 
   /* Edit surface (vessels + reservations) */
   .filter-bar { margin: 0 0 var(--s3); display: flex; align-items: center; gap: 8px; }
@@ -462,6 +498,7 @@
     background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
     border-radius: var(--r-int); padding: 3px 8px; font-family: var(--font-mono); font-size: 10px;
     text-transform: uppercase; letter-spacing: .8px; cursor: pointer;
+    transition: color .12s ease, border-color .12s ease;
   }
   .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
   .btn-sm.danger:hover { border-color: var(--bad); color: var(--bad); }
@@ -502,25 +539,37 @@
     background-image: var(--scanline); box-shadow: inset 0 1px 0 var(--topedge);
     font-size: 11px;
   }
-  .tl-head strong { font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; display: flex; align-items: center; gap: 6px; }
-  .tl-head strong::before { content: ""; width: 5px; height: 5px; background: var(--accent); }
+  .tl-head strong { font-size: 10px; text-transform: uppercase; letter-spacing: 1.8px; display: flex; align-items: center; gap: 7px; }
+  .tl-head strong::before { content: ""; width: 2px; height: 10px; background: var(--accent); }
   .tl-sub { color: var(--muted); font-size: 10px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-  .tl-controls { margin-left: auto; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .tl-controls { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .tl-btn {
     background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
     border-radius: var(--r-int); padding: 3px 8px; font-family: var(--font-mono); font-size: 10px;
     text-transform: uppercase; letter-spacing: .5px; cursor: pointer;
+    transition: color .12s ease, border-color .12s ease, background-color .12s ease;
   }
   .tl-btn:hover { border-color: var(--accent); color: var(--accent); }
   .tl-btn.active { background: var(--accent); color: var(--on-accent); font-weight: 700; border-color: var(--accent); }
   .tl-btn.tl-caret { padding: 2px 8px; }
+  /* Segmented control: related buttons (pan + window presets; play + speed)
+     share one frame with hairline dividers instead of floating as eight
+     separate boxes — quieter chrome, one instrument per group. */
+  .tl-seg { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: var(--r-int); }
+  .tl-seg .tl-btn { border: 0; border-right: 1px solid var(--line); border-radius: 0; }
+  .tl-seg .tl-btn:last-child { border-right: 0; }
+  .tl-seg .tl-btn.active { box-shadow: 0 0 0 1px var(--accent); position: relative; z-index: 1; }
   .tl-mode { color: var(--accent); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
   .tl-chk { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
   .tl-chk input { accent-color: var(--accent); }
   .tl-body { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; }
   #timelineDrawer.tl-collapsed .tl-body { display: none; }
-  .tl-legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 5px 11px; font-size: 11px; color: var(--muted); }
-  .tl-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 0; margin-right: 5px; vertical-align: -1px; }
+  .tl-legend {
+    display: flex; gap: 14px; flex-wrap: wrap; padding: 5px 12px 4px;
+    font-family: var(--font-mono); font-size: 9px; letter-spacing: .9px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .tl-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 0; margin-right: 6px; vertical-align: -1px; }
   .tl-scroll { flex: 1; min-height: 0; overflow: auto; }
   #tlSvg { display: block; }
   .tl-empty {
@@ -536,11 +585,19 @@
   .tl-tip b { color: var(--ink); }
   .tl-tip .k { color: var(--muted); font-family: var(--font-mono); }
   /* SVG element classes */
-  .tl-lane-band { fill: var(--panel-2); opacity: .5; }
-  .tl-lane-band.alt { fill: var(--panel); opacity: .6; }
-  .tl-lane-label { fill: var(--ink-dim); font-family: var(--font-ui); font-weight: 600; font-size: 11px; }
+  .tl-lane-band { fill: var(--panel-2); opacity: .45; }
+  .tl-lane-band.alt { fill: var(--panel); opacity: .55; }
+  /* Lane names read as chart annotations: fine tracked-out mono caps, not UI text. */
+  .tl-lane-label {
+    fill: var(--ink-dim); font-family: var(--font-mono); font-weight: 500;
+    font-size: 9.5px; letter-spacing: 1.1px; text-transform: uppercase;
+  }
   .tl-lane-label.unassigned { fill: var(--warn); }
   .tl-grid { stroke: var(--line); stroke-width: 1; }
+  /* Central-midnight gridlines sit a step brighter, so days read at a glance. */
+  .tl-grid.day { stroke: var(--line-2); }
+  /* Hairline between the lane-label gutter and the plot — frames the chart. */
+  .tl-gutter { stroke: var(--line-2); stroke-width: 1; }
   .tl-axis-label { fill: var(--muted); font-family: var(--font-mono); font-size: 10px; }
   /* "NOW" — bright solid hairline + a labeled tick at the top of the timeline. */
   .tl-now { stroke: var(--red); stroke-width: 1; }
@@ -550,8 +607,10 @@
   .tl-cursor-handle { fill: var(--cyan); stroke: var(--on-accent); stroke-width: 1; cursor: ew-resize; }
   #tlSvg { cursor: ew-resize; }
   #tlSpeed { padding: 2px 4px; font-family: var(--font-mono); }
-  /* Flat tasking bars: square ends (rx 0), 1px border, no gradient. */
-  .tl-bar { rx: 0; cursor: pointer; stroke-width: 1; }
+  /* Flat tasking bars: square ends (rx 0), 1px border, no gradient. A hovered
+     bar lifts in brightness — the pointer affordance for its tooltip. */
+  .tl-bar { rx: 0; cursor: pointer; stroke-width: 1; transition: filter .1s ease; }
+  .tl-bar:hover { filter: brightness(1.25); }
   .tl-bar-label { fill: var(--on-accent); font-family: var(--font-mono); font-weight: 600; font-size: 10px; pointer-events: none; }
 
   /* AIS contacts — a solid dot whose FILL is the vessel's ship-type category
@@ -618,7 +677,7 @@
   .map-legend .lg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; text-transform: uppercase; letter-spacing: .3px; }
   .map-legend .lg-dot {
     width: 11px; height: 11px; border-radius: 50%;
-    border: 1.5px solid #04121f; flex: none;
+    border: 1.5px solid var(--on-accent); flex: none;
   }
   .map-legend .lg-note { color: var(--muted); margin-top: 5px; font-size: 10px; }
   /* Transient "locate" halo: a few cyan pings fired when a vessel row in the
@@ -926,14 +985,8 @@
 
     <!-- ===== Reservations tab ===== -->
     <section class="tab-panel" data-panel="reservations">
-    <p class="hint" style="margin:0 0 10px">
-      Reservations come from <b>berth requests</b>. Promote a requested row below:
-      enter where the <b>bow</b> sits (Dock No.) and the heading; the stern and
-      the schedule fill in from the request automatically.
-    </p>
-
     <details class="section" open>
-      <summary>Reservations</summary>
+      <summary>Reservations <i class="info" title="Reservations come from berth requests. Promote a requested row: enter where the bow sits (Dock No.) and the heading; the stern and the schedule fill in from the request automatically.">i</i></summary>
     <div class="filter-bar">
       <label for="resFilter">Show</label>
       <select id="resFilter">
@@ -957,24 +1010,14 @@
 
     <!-- ===== Conflicts (time × station overlaps) ===== -->
     <details class="section" open>
-      <summary>Conflicts</summary>
-    <div class="hint" style="margin:0 0 8px">
-      Reservations overlapping in both time and station — current and upcoming
-      only (resolved past overlaps live in History). Click one to highlight
-      the contested stretch.
-    </div>
+      <summary>Conflicts <i class="info" title="Reservations overlapping in both time and station — current and upcoming only (resolved past overlaps live in History). Click one to highlight the contested stretch.">i</i></summary>
     <div id="conflicts"><div class="empty">none</div></div>
     </details>
     <!-- ===== /Conflicts ===== -->
 
     <!-- ===== AIS verification (plan vs observed reality) ===== -->
     <details class="section" open>
-      <summary>AIS verification</summary>
-    <div class="hint" style="margin:0 0 8px">
-      Operator placements checked against observed AIS: <b>arrived</b> /
-      <b>no-show</b> / <b>awaiting</b>, plus any <b>unplanned</b> arrival
-      currently alongside. Read-only; AIS never places.
-    </div>
+      <summary>AIS verification <i class="info" title="Operator placements checked against observed AIS: arrived / no-show / awaiting, plus any unplanned arrival currently alongside. Read-only; AIS never places.">i</i></summary>
     <!-- Harbor craft (tugs/towboats/pilots) are filtered out of this panel AND
          the conflicts feed server-side; this one toggle re-fetches both with
          service_craft=1 (wired in panels.js). -->
@@ -987,11 +1030,7 @@
 
     <!-- ===== Alongside now (currently berthed, from live AIS) ===== -->
     <details class="section" open>
-      <summary>Alongside now</summary>
-    <div class="hint" style="margin:0 0 8px">
-      Vessels physically at the wharf right now, from live AIS. Click one to
-      locate it on the chart.
-    </div>
+      <summary>Alongside now <i class="info" title="Vessels physically at the wharf right now, from live AIS. Click one to locate it on the chart.">i</i></summary>
     <div id="alongside"><div class="empty">loading…</div></div>
     </details>
     <!-- ===== /Alongside now ===== -->
@@ -1007,11 +1046,7 @@
     <!-- ===== History tab ===== -->
     <section class="tab-panel" data-panel="history">
     <details class="section" open>
-      <summary>Reservation history</summary>
-    <p class="hint" style="margin:0 0 10px">
-      The log of bookings (every status, AIS-observed berthings included),
-      newest arrival first. Filter by vessel name, IMO, status, or a date range.
-    </p>
+      <summary>Reservation history <i class="info" title="The log of bookings (every status, AIS-observed berthings included), newest arrival first. Filter by vessel name, IMO, status, or a date range.">i</i></summary>
     <div class="filter-bar">
       <button type="button" class="btn-sm primary" id="histFilterBtn">Filters</button>
       <span id="histFilterSummary" class="hint" style="margin:0;flex:1">no filters, showing all</span>
@@ -1037,21 +1072,25 @@
         <span class="tl-sub" id="tlWindowLabel">—</span>
         <span class="tl-sub" id="tlUpdated" title="Last refreshed"></span>
         <div class="tl-controls">
-          <button class="tl-btn" data-pan="-1" title="Pan back">‹</button>
-          <button class="tl-btn" data-preset="3d">±3d</button>
-          <button class="tl-btn" data-preset="week">Week</button>
-          <button class="tl-btn" data-preset="7d">Next 7d</button>
-          <button class="tl-btn" data-preset="30d">Next 30d</button>
-          <button class="tl-btn" data-pan="1" title="Pan forward">›</button>
+          <span class="tl-seg">
+            <button class="tl-btn" data-pan="-1" title="Pan back">‹</button>
+            <button class="tl-btn" data-preset="3d">±3d</button>
+            <button class="tl-btn" data-preset="week">Week</button>
+            <button class="tl-btn" data-preset="7d">Next 7d</button>
+            <button class="tl-btn" data-preset="30d">Next 30d</button>
+            <button class="tl-btn" data-pan="1" title="Pan forward">›</button>
+          </span>
           <button class="tl-btn" id="tlToday" title="Recenter on now">Today</button>
           <label class="tl-chk"><input type="checkbox" id="tlHideCancelled" checked /> hide cancelled</label>
           <span class="tl-sub" id="tlCursorLabel" title="Time cursor — drives the map's vessel outlines">—</span>
-          <button class="tl-btn" id="tlPlay" title="Play / pause — sweep the cursor">▶</button>
-          <select class="tl-btn" id="tlSpeed" title="Playback speed">
-            <option value="1">1h/s</option>
-            <option value="6" selected>6h/s</option>
-            <option value="24">1d/s</option>
-          </select>
+          <span class="tl-seg">
+            <button class="tl-btn" id="tlPlay" title="Play / pause — sweep the cursor">▶</button>
+            <select class="tl-btn" id="tlSpeed" title="Playback speed">
+              <option value="1">1h/s</option>
+              <option value="6" selected>6h/s</option>
+              <option value="24">1d/s</option>
+            </select>
+          </span>
         </div>
       </div>
       <div class="tl-body">

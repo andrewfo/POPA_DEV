@@ -55,6 +55,10 @@ const BOOT_MS = Date.now();
   };
   tick(); setInterval(tick, 1000);
 })();
+// Section-header info glyphs carry their explainer in the title tooltip;
+// clicking one must not toggle the <details> it sits in.
+document.querySelectorAll("summary .info").forEach((i) =>
+  i.addEventListener("click", (e) => e.preventDefault()));
 (function () {
   const btn = document.getElementById("sidebarToggle");
   if (!btn) return;

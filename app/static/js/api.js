@@ -141,13 +141,14 @@ export function localInputToIso(v) {
   if (!v) return null;                  // blank -> caller omits the field
   return v.length === 16 ? v + ":00" : v;   // naive Central wall-clock; server stamps the zone
 }
-// Central-Time datetime, short form.
+// Central-Time datetime, short form. 24-hour clock — every readout on the
+// console matches the header clock (no AM/PM; tighter, sorts at a glance).
 export function fmtCentral(s) {
   if (!s) return "—";
   const d = new Date(s);
   if (isNaN(d)) return esc(s);
   return d.toLocaleString(undefined, {
     timeZone: CENTRAL_TZ, month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
   });
 }

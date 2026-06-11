@@ -6,7 +6,7 @@ import {
 
 function histCard(h) {
   const color = BADGE_COLORS[h.status] || "#8a99a6";
-  const imo = h.vessel_imo ? ` <span style="color:var(--muted);font-weight:400">IMO ${esc(h.vessel_imo)}</span>` : "";
+  const imo = h.vessel_imo ? ` <span class="imo">IMO ${esc(h.vessel_imo)}</span>` : "";
   // Pared down to identity + status + the booking window. Everything else
   // (position, cargo, direction, notes, dimensions, AIS) lives in the dossier
   // that floats on hover (showShipHover -> renderShipDetail). Hover only fires
@@ -73,7 +73,7 @@ function resTimeline(res) {
     const b = r.t_end ? x(+new Date(r.t_end)) : a + 3;
     const w = Math.max(3, b - a);
     const c = RES_STATUS_COLOR[r.status] || "#888";
-    return `<rect x="${a.toFixed(1)}" y="${top}" width="${w.toFixed(1)}" height="${lane}" rx="2" fill="${c}"/>`;
+    return `<rect x="${a.toFixed(1)}" y="${top}" width="${w.toFixed(1)}" height="${lane}" rx="0" fill="${c}"/>`;
   }).join("");
   const lab =
     `<text class="tl-label" x="${padX}" y="${H - 3}" text-anchor="start">${fmtCentral(new Date(min).toISOString())}</text>` +
