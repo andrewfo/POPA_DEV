@@ -54,7 +54,14 @@ class DataverseClient:
         status_field: str,
         timeout: float = 30.0,
     ) -> None:
-        self.url = url.rstrip("/")
+        # Tolerate a scheme-less host in DATAVERSE_URL (e.g.
+        # "org.crm.dynamics.com"): the OAuth scope and the Web API base both
+        # need an absolute https URL, and a bare host yields AADSTS70011
+        # ("scope ... is not valid"). Default to https when no scheme is given.
+        url = url.strip().rstrip("/")
+        if url and "://" not in url:
+            url = f"https://{url}"
+        self.url = url
         self.tenant_id = tenant_id
         self.client_id = client_id
         self.client_secret = client_secret
@@ -83,11 +90,36 @@ class DataverseClient:
             },
             timeout=self._timeout,
         )
-        resp.raise_for_status()
+        # Azure returns the real reason (an AADSTS code + description) in the
+        # JSON body; raise_for_status() drops it, leaving a bare 400. Surface it
+        # so a bad tenant/client-id/secret/scope is diagnosable from the log.
+        self._raise_for_error(resp, "Azure AD token request")
         body = resp.json()
         self._token = body["access_token"]
         self._token_exp = time.time() + float(body.get("expires_in", 3600))
         return self._token
+
+    @staticmethod
+    def _raise_for_error(resp: httpx.Response, what: str) -> None:
+        """Raise with the response body if ``resp`` is an error. Both Azure AD
+        and Dataverse put the actionable reason (AADSTS code / Dataverse error
+        message) in the body, which raise_for_status() discards — leaving an
+        opaque 400/403. Prefer a JSON ``error`` payload, fall back to raw text."""
+        if not resp.is_error:
+            return
+        detail = resp.text
+        try:
+            err = resp.json()
+            if isinstance(err, dict):
+                # Azure: {error, error_description}; Dataverse: {error: {message}}
+                inner = err.get("error")
+                if isinstance(inner, dict):
+                    detail = inner.get("message", detail)
+                elif inner:
+                    detail = f"{inner}: {err.get('error_description', detail)}"
+        except Exception:  # noqa: BLE001 - non-JSON body; fall back to text
+            pass
+        raise RuntimeError(f"{what} failed ({resp.status_code}): {detail}")
 
     def _headers(self) -> dict:
         return {
@@ -110,7 +142,7 @@ class DataverseClient:
             },
             headers=self._headers(),
         )
-        resp.raise_for_status()
+        self._raise_for_error(resp, f"Dataverse read of {self.table}")
         return resp.json().get("value", [])
 
     def mark_triaged(self, row_id: str, status_triaged: int) -> None:
@@ -119,7 +151,7 @@ class DataverseClient:
             json={self.status_field: status_triaged},
             headers={**self._headers(), "Content-Type": "application/json"},
         )
-        resp.raise_for_status()
+        self._raise_for_error(resp, f"Dataverse update of {self.table}")
 
 
 def process_batch(
