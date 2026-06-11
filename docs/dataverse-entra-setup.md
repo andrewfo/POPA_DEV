@@ -55,8 +55,13 @@ Now let that app read/write the Berth Request table in the environment.
 1. **[admin.powerplatform.microsoft.com](https://admin.powerplatform.microsoft.com)**
    → **Environments** → open the environment that holds the Berth Request table.
 2. **Settings → Users + permissions → Security roles → + New role**.
-3. Name it e.g. `Berth Intake Worker`.
-4. On the **Custom Entities** tab, find **Berth Request** and grant:
+3. Name it e.g. `Berth Intake Worker`. The modern role editor also asks for an
+   **Applies to** value — this is just a free-text *description* of who the role
+   is for; it grants nothing and doesn't scope any privilege, the form merely
+   requires it to be non-empty. Put something like
+   `Berth intake worker (service principal / application user)`.
+4. On the **Custom Entities** (modern UI: **Tables**) tab, find **Berth Request**
+   and grant:
    - **Read** and **Write** — set the privilege depth to **Organization** (the
      full circle) so the app sees rows created by anonymous public submissions.
    - (Create/Delete/Append not required — the worker only reads rows and writes

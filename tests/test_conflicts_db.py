@@ -221,6 +221,22 @@ def test_observed_vs_observed_pair_never_conflicts(client, db_session):
     assert _pair(out, a, b) is None
 
 
+def test_same_vessel_pair_never_conflicts(client, db_session):
+    # A ship can't conflict with itself: its AIS-observed berthing overlapping
+    # its own planned reservation is the arrived/where-planned verification
+    # signal, not two things competing for one stretch of wharf. Same vessel_id
+    # on both sides -> dropped, even with the filters widened.
+    v = _add_vessel(db_session, mmsi=367000904, name="STOLT ENDURANCE")
+    obs = _add_reservation(db_session, lo=400, hi=900, t_start=_t(10),
+                           t_end=None, status="observed", vessel_id=v)
+    plan = _add_reservation(db_session, lo=800, hi=1200, t_start=_t(12),
+                            t_end=_t(16), status="confirmed", vessel_id=v)
+    assert _pair(client.get("/conflicts").json(), obs, plan) is None
+    out = client.get("/conflicts", params={
+        "current": "false", "service_craft": "true"}).json()
+    assert _pair(out, obs, plan) is None
+
+
 def test_untyped_observed_vessel_is_kept(client, db_session):
     # NULL ship_type could be a real arrival — when in doubt, show it.
     v = _add_vessel(db_session, mmsi=367000903, name="NOTYPE", ship_type=None)

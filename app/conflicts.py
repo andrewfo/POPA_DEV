@@ -206,6 +206,11 @@ _CONFLICTS_SQL = text(
       -- scheduling decision. Conflicts protect the PLAN, so at least one side
       -- must be a planned row (classify() has no both-observed category either).
       AND NOT (r1.status::text = 'observed' AND r2.status::text = 'observed')
+      -- A ship can't conflict with itself: when both rows are the SAME vessel,
+      -- the overlap is the vessel sitting in its own planned berth (the
+      -- arrived/where-planned verification signal), not two things competing for
+      -- one stretch of wharf. Drop same-vessel pairs.
+      AND NOT (r1.vessel_id IS NOT NULL AND r1.vessel_id = r2.vessel_id)
       AND (CAST(:status AS text) IS NULL
            OR r1.status::text = CAST(:status AS text)
            OR r2.status::text = CAST(:status AS text))
