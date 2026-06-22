@@ -498,8 +498,8 @@ loadDims();
     if (foot) foot.textContent = `LAT ${la}  LON ${lo}`;
   });
   map.on("mouseout", () => { if (foot) foot.textContent = "LAT —  LON —"; });
-  // Live zoom / scale readout in the classification strip.
-  const scaleEl = document.getElementById("classScale");
+  // Live zoom / scale readout, overlaid on the map (bottom-left).
+  const scaleEl = document.getElementById("mapScale");
   if (scaleEl) {
     const upd = () => {
       const z = map.getZoom();

@@ -66,7 +66,7 @@ function fmtAge(s) {
   return `${Math.round(s / 3600)}h ago`;
 }
 export async function loadWorkers() {
-  const el = document.getElementById("footWorkers");
+  const el = document.getElementById("workerChips");
   if (!el) return;
   try {
     const { workers } = await api("/workers");

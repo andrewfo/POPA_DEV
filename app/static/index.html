@@ -99,8 +99,8 @@
     color: var(--ink);
     background: var(--bg);
     display: grid;
-    /* classification strip · status header · workspace · footer status strip */
-    grid-template-rows: auto auto 1fr auto;
+    /* status header · workspace · footer status strip */
+    grid-template-rows: auto 1fr auto;
     height: 100vh;
     -webkit-font-smoothing: antialiased;
   }
@@ -109,18 +109,7 @@
     font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   }
 
-  /* ===== Classification / status strips — chrome real ops software carries ===== */
-  .classbar {
-    display: flex; align-items: center; gap: var(--s4);
-    height: 20px; padding: 0 var(--s4);
-    background: var(--panel); background-image: var(--scanline);
-    border-bottom: 1px solid var(--line);
-    font-family: var(--font-mono); font-size: 10px; letter-spacing: 1.4px;
-    color: var(--muted); text-transform: uppercase; white-space: nowrap; overflow: hidden;
-  }
-  .classbar .cls { color: var(--accent); font-weight: 600; }
-  .classbar .sep { color: var(--line-2); }
-  .classbar .right { margin-left: auto; color: var(--ink-dim); letter-spacing: .8px; }
+  /* ===== Footer status strip — chrome real ops software carries ===== */
   footer.statusbar {
     display: flex; align-items: center; gap: var(--s4);
     height: 22px; padding: 0 var(--s4);
@@ -133,23 +122,30 @@
   footer.statusbar .v { color: var(--ink-dim); }
   footer.statusbar .sep { color: var(--line-2); }
   footer.statusbar .right { margin-left: auto; }
-  /* Per-worker liveness chips: a state dot + abbreviated name. Health drives the
-     dot colour (ok=green, stale=amber, error=red, offline=muted). Full label +
-     last-beat age + last-batch detail ride in the title tooltip. */
-  footer.statusbar .wk {
-    display: inline-flex; align-items: center; gap: 4px;
-    margin-right: 7px; color: var(--ink-dim); cursor: default;
+  /* Per-worker liveness chips (header, beside the data-layer badge): a state dot
+     + abbreviated name. Health drives the dot colour (ok=green, stale=amber,
+     error=red, offline=muted). Full label + last-beat age + last-batch detail
+     ride in the title tooltip. The .workers container mirrors the .badge frame. */
+  header .workers {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 3px 10px; border: 1px solid var(--line);
+    background: var(--panel-2); border-left: 2px solid var(--muted);
+    font-family: var(--font-mono);
   }
-  footer.statusbar .wk:last-child { margin-right: 0; }
-  footer.statusbar .wk::before {
+  header .workers:empty { display: none; }
+  .wk {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; letter-spacing: .5px; color: var(--ink-dim); cursor: default;
+  }
+  .wk::before {
     content: ""; width: 6px; height: 6px; border-radius: 50%;
     background: var(--muted); flex: none;
   }
-  footer.statusbar .wk.ok::before    { background: var(--good); box-shadow: 0 0 0 1px rgba(54,181,106,.5); }
-  footer.statusbar .wk.stale::before { background: var(--amber); }
-  footer.statusbar .wk.error::before { background: var(--bad); box-shadow: 0 0 0 1px rgba(226,64,58,.5); }
-  footer.statusbar .wk.offline { color: var(--muted); }
-  footer.statusbar .wk.offline::before { background: var(--line-2); }
+  .wk.ok::before    { background: var(--good); box-shadow: 0 0 0 1px rgba(54,181,106,.5); }
+  .wk.stale::before { background: var(--amber); }
+  .wk.error::before { background: var(--bad); box-shadow: 0 0 0 1px rgba(226,64,58,.5); }
+  .wk.offline { color: var(--muted); }
+  .wk.offline::before { background: var(--line-2); }
 
   /* HUD corner brackets — applied to key panels via .hud (top-left + bottom-right,
      the two pseudo-elements allow). A defense-console framing cue, not a full box. */
@@ -254,7 +250,17 @@
      --drawerH is the drawer's expanded height (drag-resizable, persisted). */
   #stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr var(--drawerH, 300px); }
   #stage.drawer-collapsed { grid-template-rows: 1fr 34px; }
-  #map { min-height: 0; height: 100%; background: #000000; }
+  #map { min-height: 0; height: 100%; background: #000000; position: relative; }
+  /* Live zoom / scale readout, overlaid on the map (was the classification strip,
+     now removed). Bottom-left, clear of Leaflet's zoom control (top-left) and
+     attribution (bottom-right). */
+  .map-overlay {
+    position: absolute; left: 8px; bottom: 8px; z-index: 1000; pointer-events: none;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: .5px;
+    text-transform: uppercase; color: var(--ink-dim);
+    background: rgba(6,9,12,.72); border: 1px solid var(--line);
+    padding: 2px 7px; backdrop-filter: blur(2px);
+  }
   /* Custom-tinted basemap: heavily desaturate + dim the aerial imagery toward a
      monochrome chart so the signal colours and chrome read clearly on top. */
   .basemap-tinted { filter: saturate(.32) brightness(.56) contrast(1.12) hue-rotate(-6deg); }
@@ -836,16 +842,11 @@
 </style>
 </head>
 <body>
-<div class="classbar">
-  <span class="cls">// UNCLASSIFIED //</span>
-  <span class="sep">//</span><span>VTS-OPS</span>
-  <span class="sep">//</span><span>PORT OF PORT ARTHUR · SABINE-NECHES WATERWAY</span>
-  <span class="right" id="classScale">ZOOM —  ·  SCALE —</span>
-</div>
 <header>
   <button id="sidebarToggle" type="button" title="Collapse / expand the panel" aria-label="Toggle side panel">«</button>
   <h1><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="0.5" y="0.5" width="15" height="15" fill="none" stroke="#e8b730" stroke-opacity=".5"/><path d="M2.5 11 L13.5 5" stroke="#e8b730" stroke-width="1.6"/><circle cx="5.2" cy="5.8" r="1.5" fill="#e0a52e"/></svg>POPA Wharf <span>Ops Console · Berth / Dredge / AIS</span></h1>
   <span id="clock">—</span>
+  <div class="workers" id="workerChips" title="Background worker status"></div>
   <div class="badge" id="statusBadge"><span id="statusDot" class="dot"></span><span id="statusText">checking…</span><span id="statusUptime"></span></div>
 </header>
 
@@ -1077,7 +1078,7 @@
   <div id="sidebarResize" title="Drag to resize sidebar"></div>
 
   <div id="stage">
-    <div id="map"></div>
+    <div id="map"><div id="mapScale" class="map-overlay">ZOOM —  ·  SCALE —</div></div>
 
     <!-- ===== Berth occupancy timeline (Gantt drawer under the map) ===== -->
     <section id="timelineDrawer" class="tl-collapsed">
@@ -1123,7 +1124,6 @@
 
 <footer class="statusbar">
   <span class="k">SYS</span>&nbsp;<span class="v" id="footSys">DATA LAYER NOMINAL</span>
-  <span class="sep">//</span><span class="k">WORKERS</span>&nbsp;<span id="footWorkers">—</span>
   <span class="sep">//</span><span class="k">REFRESH</span>&nbsp;<span class="v">15s</span>
   <span class="sep">//</span><span class="k">API</span>&nbsp;<span class="v" id="footApi">—</span>
   <span class="sep">//</span><span class="k">TZ</span>&nbsp;<span class="v">AMERICA/CHICAGO · CT</span>
