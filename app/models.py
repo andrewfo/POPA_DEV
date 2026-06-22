@@ -317,5 +317,24 @@ class AuditLog(Base):
     )
 
 
+class WorkerHeartbeat(Base):
+    """Per-worker liveness (migration 0011). One row per background worker
+    ('ais', 'occupancy', 'intake-dataverse'), upserted each cycle — never
+    appended, so the table stays tiny. ``GET /workers`` reads it back and derives
+    each worker's health from how stale ``beat_at`` is against the worker's
+    nominal cadence (see app/workers.py). This is liveness telemetry the console
+    renders as a dot per worker; it is NOT the audit trail (that's audit_log).
+    """
+
+    __tablename__ = "worker_heartbeat"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    detail: Mapped[dict | None] = mapped_column(JSONB)
+    beat_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 Index("ix_position_report_mmsi_ts", PositionReport.mmsi, PositionReport.msg_ts)
 Index("ix_reservation_status", Reservation.status)

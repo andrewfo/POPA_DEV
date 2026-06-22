@@ -19,6 +19,7 @@ from app.crosswalk import format_station
 from app.db import SessionLocal
 from app.occupancy.derive import derive_observed
 from app.verification import expire_stale
+from app.workers import beat
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -60,11 +61,21 @@ def main() -> None:
             session, grace_minutes=get_settings().verification_grace_minutes
         )
         session.commit()
+    except Exception as exc:  # noqa: BLE001 - record the failed cycle before bailing
+        session.rollback()
+        beat("occupancy", "error", {"error": str(exc)})
+        raise
     finally:
         session.close()
 
     inserted = sum(1 for r in results if r.inserted)
     updated = len(results) - inserted
+    beat(
+        "occupancy",
+        "ok",
+        {"derived": len(results), "new": inserted,
+         "updated": updated, "expired": len(expired)},
+    )
     logger.info(
         "derived %d observed reservation(s): %d new, %d updated; "
         "auto-archived %d stale planned row(s)",

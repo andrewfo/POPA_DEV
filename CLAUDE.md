@@ -102,6 +102,13 @@ from day one with no manual intake.
   username (NULL when auth is open); `detail` carries the pre-edit/pre-delete
   raw, the changed-field list, or the swept reservation ids.
 - `position_report` — landed raw AIS positions (source-agnostic)
+- `worker_heartbeat` — per-worker liveness telemetry (migration 0011): one row
+  per background worker (`ais`/`occupancy`/`intake-dataverse`), **upserted** each
+  cycle (never appended, so it stays tiny), carrying `status` (`ok`/`error`) +
+  JSONB `detail` + `beat_at`. Read by `GET /workers`, which derives each worker's
+  health from how stale its beat is vs the worker's nominal cadence
+  (`app/workers.py`). Telemetry, not an audit trail — liveness is a heartbeat,
+  never inferred from data freshness (the low-volume workers idle legitimately).
 
 Enforce no-overlap at the DB, not in app code:
 
@@ -312,6 +319,9 @@ app/
   auth.py              # HTTP Basic gate (whole-app middleware); active only when OPERATOR_USER+PASSWORD set;
                        #   sets request.state.operator (the authenticated user) for the audit_log
   audit.py             # record_audit: append-only audit_log writes (who/what), via do_write's audit= hook
+  workers.py           # per-worker liveness: beat() (self-contained heartbeat upsert, own session,
+                       #   commits independently, swallows errors) + KNOWN_WORKERS registry + classify();
+                       #   ais/occupancy/intake workers beat each cycle, GET /workers reads them back
   routers/             # HTTP surface split by concern: common.py (do_write + actor), read_only.py,
                        #   intake.py, edit.py, analysis.py — wired onto the app by main.py
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
@@ -342,7 +352,8 @@ alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intak
                        #   0007 min mooring-gap buffer on the overlap constraint ·
                        #   0008 database default TimeZone = America/Chicago ·
                        #   0009 'ai' source (AI-channel provenance) ·
-                       #   0010 intake_event soft-delete (deleted_at) + audit_log table
+                       #   0010 intake_event soft-delete (deleted_at) + audit_log table ·
+                       #   0011 worker_heartbeat (per-worker liveness telemetry)
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation, conflict overlap predicates; db-marked (auto-skip):
                        #   geo→station, occupancy derive, intake, reservations, edit (vessel patch /

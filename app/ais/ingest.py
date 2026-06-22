@@ -28,9 +28,15 @@ class Ingestor:
         session: Session,
         commit_every: int = 50,
         commit_interval_s: float = 10.0,
+        on_commit=None,
     ) -> None:
         self.session = session
         self.commit_every = commit_every
+        # Optional callback fired after each real commit (passed self), so a
+        # caller can stamp a liveness heartbeat on the same cadence the feed
+        # actually lands data — without coupling this source-agnostic class to
+        # the worker layer. See app/ais/run.py.
+        self.on_commit = on_commit
         # Also flush when this many seconds have elapsed since the last commit,
         # even if the batch isn't full. Snug bounding boxes (e.g. a single wharf)
         # see only a trickle of messages, so a count-only threshold could leave
@@ -121,6 +127,10 @@ class Ingestor:
         if self._pending:
             self.session.commit()
             self._pending = 0
+            # Heartbeat ties to a real commit (data actually landed), and runs
+            # AFTER the commit so the ingestor's transaction is closed first.
+            if self.on_commit is not None:
+                self.on_commit(self)
         self._last_commit = time.monotonic()
 
     async def run(self, source: AISSource) -> None:

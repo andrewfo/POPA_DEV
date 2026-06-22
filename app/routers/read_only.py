@@ -22,8 +22,63 @@ from app.crosswalk import (
 from app.db import get_session
 from app.models import Vessel, WharfSegment
 from app.occupancy.alongside import alongside_sql, nearest_segment_lateral
+from app.workers import KNOWN_WORKERS, classify
 
 router = APIRouter()
+
+
+@router.get("/workers")
+def workers(session: Session = Depends(get_session)) -> dict:
+    """Per-worker liveness for the console footer. One entry per known worker
+    (the live AIS ingestor, the occupancy + verification-sweep batch, the
+    optional AI/Dataverse intake poller), even one that has never beat (shown
+    ``offline``). Each worker upserts a ``worker_heartbeat`` row every cycle;
+    here we read it back and derive ``health`` from how stale the last beat is
+    against the worker's nominal cadence. Age is measured against the DB clock
+    (now() - beat_at), not the request host's, so it's skew-free."""
+    rows = {
+        r.name: r
+        for r in session.execute(
+            text(
+                "SELECT name, status, detail, beat_at, "
+                "EXTRACT(EPOCH FROM (now() - beat_at)) AS age_s "
+                "FROM worker_heartbeat"
+            )
+        ).all()
+    }
+
+    def entry(name: str, label: str, cadence: int) -> dict:
+        r = rows.pop(name, None)
+        if r is None:
+            return {
+                "name": name, "label": label, "status": None, "health": "offline",
+                "beat_at": None, "age_seconds": None,
+                "cadence_seconds": cadence, "detail": None,
+            }
+        age = float(r.age_s)
+        return {
+            "name": name,
+            "label": label,
+            "status": r.status,
+            "health": classify(r.status, age, cadence),
+            "beat_at": r.beat_at.isoformat(),
+            "age_seconds": round(age),
+            "cadence_seconds": cadence,
+            "detail": r.detail,
+        }
+
+    out = [entry(n, label, cad) for n, (label, cad) in KNOWN_WORKERS.items()]
+    # Any heartbeat from a worker not in the registry (forward-compat): list it
+    # too, judged against a generic cadence so it's never silently dropped.
+    for name, r in rows.items():
+        age = float(r.age_s)
+        out.append({
+            "name": name, "label": name, "status": r.status,
+            "health": classify(r.status, age, 60),
+            "beat_at": r.beat_at.isoformat(), "age_seconds": round(age),
+            "cadence_seconds": 60, "detail": r.detail,
+        })
+    return {"workers": out}
 
 
 @router.get("/config/bbox")

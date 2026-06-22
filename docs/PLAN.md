@@ -334,6 +334,19 @@ Not tied to a single step — pick up as the system matures.
   Consider monthly partitions by `msg_ts` and a downsampling/archival job.
 
 ### 5.4 Observability & ops
+- ~~**Per-worker liveness in the console.**~~ **Done (2026-06-22)** — the single
+  "data layer" dot only proved the API/DB answered, saying nothing about the
+  background workers (they run as separate processes/containers). Each worker now
+  upserts a `worker_heartbeat` row every cycle (migration `0011`, `app/workers.py`
+  `beat()`); `GET /workers` reads them back and derives each worker's health
+  (`ok`/`stale`/`error`/`offline`) from how stale its last beat is against its
+  nominal cadence (`classify`, unit-tested in `tests/test_workers.py`). The footer
+  renders a dot per worker (AIS ingest / occupancy + sweep / AI intake). Liveness
+  is from a heartbeat, **not** inferred from data freshness — the low-volume
+  workers (occupancy, AI intake) legitimately idle for long stretches, so absence
+  of new rows isn't death. This partly covers the "stale feed = silent failure"
+  bullet below for the AIS worker (its beat ties to a real commit), though a
+  dedicated last-message-age healthcheck is still worth adding.
 - Structured logging config, request IDs, basic Prometheus-style counters.
 - ~~A `docker-compose` profile that runs API + ingestion + occupancy worker
   together for a realistic local stack.~~ **Done** — `scripts/dev.sh` (macOS/Linux)
@@ -366,6 +379,8 @@ Not tied to a single step — pick up as the system matures.
 - ✅ `berth` catalog + `reservation.berth_id` (migration `0006`) — named POPA
   station ranges; assigning a berth fills `station_range` (the canonical range
   stays the conflict primitive, never `berth_id`).
+- ✅ `worker_heartbeat` (migration `0011`) — per-worker liveness telemetry (one
+  upserted row per worker; never grows). Not a domain table; see §5.4.
 - `controlling_depth` table (§3.3).
 - Wharf apron polygon / `wharf_area` (§2.1).
 - `reservation.derived_key` + unique index for idempotent observed rows (§2.5).

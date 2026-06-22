@@ -5,7 +5,7 @@
 import { CENTRAL_TZ } from "./api.js";
 import { map, loadBbox, loadReferenceGeo, loadWharfGeometry, loadPositions } from "./map.js";
 import { loadTimeline } from "./timeline.js";
-import { loadStats, loadConflicts, loadVerification, loadAlongside } from "./panels.js";
+import { loadStats, loadConflicts, loadVerification, loadAlongside, loadWorkers } from "./panels.js";
 import { loadVessels, loadRequests, loadBerthRequests } from "./forms.js";
 
 // --- Resizable left sidebar ------------------------------------------------
@@ -81,4 +81,5 @@ loadPositions();
 loadConflicts();
 loadVerification();
 loadAlongside();
-setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); loadVerification(); loadAlongside(); }, 15000);
+loadWorkers();
+setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); loadVerification(); loadAlongside(); loadWorkers(); }, 15000);

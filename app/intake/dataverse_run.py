@@ -30,6 +30,7 @@ from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.intake.llm import ParseResult, openrouter_complete, parse_request
 from app.intake.manual import record_manual_request
+from app.workers import beat
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -400,8 +401,10 @@ def main(argv=None) -> None:
             summary = _one_batch(recorded_ids)
             if summary["fetched"]:
                 logger.info("batch: %s", summary)
-        except Exception:  # noqa: BLE001 - keep the long-running worker alive
+            beat("intake-dataverse", "ok", summary)
+        except Exception as exc:  # noqa: BLE001 - keep the long-running worker alive
             logger.exception("poll failed; retrying next interval")
+            beat("intake-dataverse", "error", {"error": str(exc)})
         time.sleep(poll)
 
 

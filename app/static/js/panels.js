@@ -53,6 +53,36 @@ export async function loadStats() {
   }
 }
 
+// --- Worker liveness (footer chips) ----------------------------------------
+// One chip per background worker (AIS ingest / occupancy + sweep / AI intake),
+// coloured by the health the server derives from each worker's last heartbeat
+// (GET /workers). Abbreviated name on the chip; full label + age + last-batch
+// detail in the tooltip.
+const WK_ABBR = { ais: "AIS", occupancy: "OCC", "intake-dataverse": "AI" };
+function fmtAge(s) {
+  if (s == null) return "no heartbeat";
+  if (s < 90) return `${Math.round(s)}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  return `${Math.round(s / 3600)}h ago`;
+}
+export async function loadWorkers() {
+  const el = document.getElementById("footWorkers");
+  if (!el) return;
+  try {
+    const { workers } = await api("/workers");
+    el.innerHTML = workers.map((w) => {
+      const ab = WK_ABBR[w.name] || w.name.slice(0, 3).toUpperCase();
+      const det = w.detail
+        ? " · " + Object.entries(w.detail).map(([k, v]) => `${k}=${v}`).join(" ")
+        : "";
+      const title = `${w.label}: ${w.health.toUpperCase()} (${fmtAge(w.age_seconds)})${det}`;
+      return `<span class="wk ${esc(w.health)}" title="${esc(title)}">${esc(ab)}</span>`;
+    }).join("");
+  } catch (e) {
+    el.textContent = "—";
+  }
+}
+
 // --- Conflicts (time × station overlaps) -----------------------------------
 // A dedicated alert layer for the contested stretch of wharf (red = the
 // stylesheet's reserved alert colour). CONFLICTS holds the last fetch so a card

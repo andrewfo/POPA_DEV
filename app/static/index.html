@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>POPA Wharf — Ops Console</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2307090b'/%3E%3Cpath d='M2.5 11L13.5 5' stroke='%2334c4d8' stroke-width='1.6'/%3E%3Ccircle cx='5.2' cy='5.8' r='1.5' fill='%23e0a52e'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23000000'/%3E%3Cpath d='M2.5 11L13.5 5' stroke='%23e8b730' stroke-width='1.6'/%3E%3Ccircle cx='5.2' cy='5.8' r='1.5' fill='%23e0a52e'/%3E%3C/svg%3E" />
 <link
   rel="stylesheet"
   href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -26,7 +26,7 @@
 
     /* ===== Palette — military C2 console / gunmetal monochrome (near-black base,
        3 steps of desaturated slate). ONE chrome accent; status keeps R/A/G. ===== */
-    --bg:      #07090b;   /* near-black base */
+    --bg:      #000000;   /* true black base */
     --panel:   #0c1014;   /* gunmetal panel */
     --panel-2: #12181d;   /* inset control / lighter slate */
     --line:    #20272d;   /* hairline divider */
@@ -37,12 +37,12 @@
     --ink-dim: #97a3ab;
     --muted:   #5c686f;   /* labels, secondary text */
 
-    /* ===== THE single chrome accent — cold tactical cyan. Interactive / active
+    /* ===== THE single chrome accent — warm tactical gold. Interactive / active
        chrome ONLY. Reserved away from status so red/amber/green stay meaningful.
        Literal value (no nested var()) so the JS cssVar() reader resolves it. ===== */
-    --accent:     #34c4d8;
-    --accent-dim: #1c7d8c;
-    --on-accent:  #04161a;   /* near-black ink on an accent fill */
+    --accent:     #e8b730;
+    --accent-dim: #8f6e1a;
+    --on-accent:  #1a1204;   /* near-black ink on an accent fill */
 
     /* structural map geometry (NOT chrome) — desaturated steel; the old consumer
        blue is retired from all interactive chrome and lives here for lines only */
@@ -50,7 +50,7 @@
     --green:   #36b56a;   /* starboard   — good · observed · moored */
     --amber:   #e0a52e;   /* caution     — requested · live contact · warnings */
     --red:     #e2403a;   /* port red    — ALERT only: now-line · conflict */
-    --cyan:    #34c4d8;   /* playhead cursor (a tool) = the accent; keep literal */
+    --cyan:    #e8b730;   /* playhead cursor (a tool) = the accent; keep literal */
     --ais-tug: #ffe000;   /* yellow — AIS contact tint for tugs/towing (ship type 31/32/52) */
 
     /* ship-type categories — AIS dot fill, one per SHIP_CATEGORIES key (JS).
@@ -91,7 +91,7 @@
   ::-webkit-scrollbar-thumb { background: var(--line); border: 3px solid var(--panel); }
   ::-webkit-scrollbar-thumb:hover { background: var(--line-2); }
   ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
-  ::selection { background: rgba(52,196,216,.28); color: var(--ink); }
+  ::selection { background: rgba(232,183,48,.28); color: var(--ink); }
   :focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   html, body { height: 100%; margin: 0; }
   body {
@@ -133,6 +133,23 @@
   footer.statusbar .v { color: var(--ink-dim); }
   footer.statusbar .sep { color: var(--line-2); }
   footer.statusbar .right { margin-left: auto; }
+  /* Per-worker liveness chips: a state dot + abbreviated name. Health drives the
+     dot colour (ok=green, stale=amber, error=red, offline=muted). Full label +
+     last-beat age + last-batch detail ride in the title tooltip. */
+  footer.statusbar .wk {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-right: 7px; color: var(--ink-dim); cursor: default;
+  }
+  footer.statusbar .wk:last-child { margin-right: 0; }
+  footer.statusbar .wk::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted); flex: none;
+  }
+  footer.statusbar .wk.ok::before    { background: var(--good); box-shadow: 0 0 0 1px rgba(54,181,106,.5); }
+  footer.statusbar .wk.stale::before { background: var(--amber); }
+  footer.statusbar .wk.error::before { background: var(--bad); box-shadow: 0 0 0 1px rgba(226,64,58,.5); }
+  footer.statusbar .wk.offline { color: var(--muted); }
+  footer.statusbar .wk.offline::before { background: var(--line-2); }
 
   /* HUD corner brackets — applied to key panels via .hud (top-left + bottom-right,
      the two pseudo-elements allow). A defense-console framing cue, not a full box. */
@@ -228,7 +245,7 @@
   nav.tabs .tab:hover { color: var(--ink); }
   nav.tabs .tab.active {
     color: var(--accent); border-bottom-color: var(--accent);
-    background: linear-gradient(180deg, rgba(52,196,216,0), rgba(52,196,216,.05));
+    background: linear-gradient(180deg, rgba(232,183,48,0), rgba(232,183,48,.05));
   }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
@@ -237,7 +254,7 @@
      --drawerH is the drawer's expanded height (drag-resizable, persisted). */
   #stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr var(--drawerH, 300px); }
   #stage.drawer-collapsed { grid-template-rows: 1fr 34px; }
-  #map { min-height: 0; height: 100%; background: #05080a; }
+  #map { min-height: 0; height: 100%; background: #000000; }
   /* Custom-tinted basemap: heavily desaturate + dim the aerial imagery toward a
      monochrome chart so the signal colours and chrome read clearly on top. */
   .basemap-tinted { filter: saturate(.32) brightness(.56) contrast(1.12) hue-rotate(-6deg); }
@@ -532,7 +549,7 @@
   #tlResize {
     position: absolute; top: -3px; left: 0; right: 0; height: 7px; cursor: row-resize; z-index: 5;
   }
-  #tlResize:hover { background: rgba(52,196,216,.35); }
+  #tlResize:hover { background: rgba(232,183,48,.35); }
   .tl-head {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--panel-2);
@@ -723,7 +740,7 @@
   .dossier-head {
     padding: 12px 14px 10px; border-bottom: 1px solid var(--line);
     border-left: 2px solid var(--accent);
-    background: linear-gradient(90deg, rgba(52,196,216,.06), transparent 55%);
+    background: linear-gradient(90deg, rgba(232,183,48,.06), transparent 55%);
   }
   .dossier-title { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.2; }
   .dossier-sub { margin-top: 3px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -778,7 +795,7 @@
   .note-ai .ai-chip {
     font-size: 9px; font-weight: 700; letter-spacing: .3px; white-space: nowrap;
     padding: 1px 8px; border-radius: 999px;
-    background: rgba(52,196,216,.14); color: var(--accent); border: 1px solid var(--accent-dim);
+    background: rgba(232,183,48,.14); color: var(--accent); border: 1px solid var(--accent-dim);
   }
   .note-ai .ai-detail { font-size: 10px; color: var(--muted); }
   .note-warn { font-size: 10px; color: var(--amber); }
@@ -827,7 +844,7 @@
 </div>
 <header>
   <button id="sidebarToggle" type="button" title="Collapse / expand the panel" aria-label="Toggle side panel">«</button>
-  <h1><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="0.5" y="0.5" width="15" height="15" fill="none" stroke="#34c4d8" stroke-opacity=".5"/><path d="M2.5 11 L13.5 5" stroke="#34c4d8" stroke-width="1.6"/><circle cx="5.2" cy="5.8" r="1.5" fill="#e0a52e"/></svg>POPA Wharf <span>Ops Console · Berth / Dredge / AIS</span></h1>
+  <h1><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="0.5" y="0.5" width="15" height="15" fill="none" stroke="#e8b730" stroke-opacity=".5"/><path d="M2.5 11 L13.5 5" stroke="#e8b730" stroke-width="1.6"/><circle cx="5.2" cy="5.8" r="1.5" fill="#e0a52e"/></svg>POPA Wharf <span>Ops Console · Berth / Dredge / AIS</span></h1>
   <span id="clock">—</span>
   <div class="badge" id="statusBadge"><span id="statusDot" class="dot"></span><span id="statusText">checking…</span><span id="statusUptime"></span></div>
 </header>
@@ -1106,6 +1123,7 @@
 
 <footer class="statusbar">
   <span class="k">SYS</span>&nbsp;<span class="v" id="footSys">DATA LAYER NOMINAL</span>
+  <span class="sep">//</span><span class="k">WORKERS</span>&nbsp;<span id="footWorkers">—</span>
   <span class="sep">//</span><span class="k">REFRESH</span>&nbsp;<span class="v">15s</span>
   <span class="sep">//</span><span class="k">API</span>&nbsp;<span class="v" id="footApi">—</span>
   <span class="sep">//</span><span class="k">TZ</span>&nbsp;<span class="v">AMERICA/CHICAGO · CT</span>
