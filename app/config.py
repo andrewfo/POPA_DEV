@@ -155,6 +155,25 @@ class Settings(BaseSettings):
     # as soon as the window ends).
     verification_grace_minutes: int = 720
 
+    # --- Draft-vs-controlling-depth gate (step 6, depth surveys) ---
+    # A reservation may only be CONFIRMED if the vessel's draft (plus this
+    # under-keel clearance) clears the shallowest controlling depth over its
+    # station range, per the latest active depth survey (app/depth/). Tide is NOT
+    # modelled — clearance is a flat margin, not a tide-adjusted one. The gate
+    # blocks (422) unless the operator passes depth_override; with no covering
+    # survey it warns rather than blocks.
+    depth_clearance_ft: float = 2.0
+    # Station bin width for reducing a survey's soundings to a controlling-depth
+    # profile (feet). The shallowest sounding per bin within the berthing zone is
+    # the bin's controlling depth.
+    depth_bin_ft: float = 25.0
+    # Berthing-zone clip for the reduction: keep soundings whose perpendicular
+    # offset from the quay-face centerline is within [toe, max] feet. The toe
+    # band drops riprap/wall-toe shallows that would otherwise poison every bin's
+    # min; the max caps how far into the channel a sounding counts.
+    depth_toe_offset_ft: float = 8.0
+    depth_max_offset_ft: float = 150.0
+
     # --- Sidebar "Vessels" stat ---
     # The headline "Vessels" count is vessels *present* — those with an AIS fix
     # within this many hours — not every vessel row ever ingested (which only

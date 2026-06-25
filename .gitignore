@@ -17,3 +17,9 @@ env/
 # ArcGIS transient lock files from shapefile exports
 *.sr.lock
 *.lock
+
+# Raw hydrographic survey artifacts (large; ingested via POST /depth/surveys or
+# python -m app.depth.ingest, then only the reduced profile lives in the DB).
+data/surveys/*.XYZ
+data/surveys/*.xyz
+data/surveys/*.zip

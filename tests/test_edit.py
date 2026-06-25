@@ -1,7 +1,7 @@
 """Manual edit surface tests — ship data + scheduling (app/edit.py + endpoints).
 
-Pure range/validation helpers (``_station_range``, ``_time_range``,
-``confirm_warnings``, the partial-update field selection) always run. The
+Pure range/validation helpers (``_station_range``, ``_time_range``, the
+partial-update field selection) always run. The
 endpoint behaviour — vessel patch, reservation create/edit/cancel/delete, and
 the confirmed-overlap 409 — is DB-marked and auto-skips without a migrated
 PostGIS (via the ``db_session`` fixture), using the same rolled-back-transaction
@@ -23,7 +23,6 @@ from app.edit import (
     _station_range,
     _station_range_for,
     _time_range,
-    confirm_warnings,
 )
 from app.main import app
 
@@ -103,12 +102,6 @@ def test_time_range_open_ended_ok():
 def test_time_range_etd_before_etb_rejected():
     with pytest.raises(ValueError):
         _time_range(dt.datetime(2026, 7, 5, tzinfo=UTC), dt.datetime(2026, 7, 1, tzinfo=UTC))
-
-
-def test_confirm_warnings_only_on_confirmed():
-    assert confirm_warnings("confirmed")  # non-empty (depth gate)
-    assert confirm_warnings("tentative") == []
-    assert confirm_warnings(None) == []
 
 
 def test_vessel_update_selects_only_provided_fields():
@@ -410,7 +403,9 @@ def test_confirm_returns_depth_warning(client):
         "station_lo": 1900, "station_hi": 1500, "status": "confirmed",
     })
     assert created.status_code == 201
-    assert created.json()["warnings"]  # depth-gate warning surfaced
+    # No vessel/draft and no depth survey -> the gate can't evaluate, so it warns
+    # (rather than blocks). The blocking path is covered in tests/test_depth.py.
+    assert created.json()["warnings"]
 
 
 def test_confirmed_overlap_rejected_409(client):

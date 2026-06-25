@@ -63,10 +63,12 @@ def post_reservation(
     ``confirmed`` engages the no-overlap exclusion constraint (-> 409 on
     collision)."""
     def _audit(result: dict) -> dict:
+        detail = {"type": req.type, "status": req.status, "source": req.source}
+        if req.depth_override and result.get("warnings"):
+            detail["depth_override"] = result["warnings"]
         return dict(
             actor=actor(request), action="create", entity="reservation",
-            entity_id=result.get("id"),
-            detail={"type": req.type, "status": req.status, "source": req.source},
+            entity_id=result.get("id"), detail=detail,
         )
 
     return do_write(
@@ -88,10 +90,12 @@ def edit_reservation(
     def _audit(result: dict | None) -> dict | None:
         if result is None:  # no such reservation -> 404
             return None
+        detail = {"changed": sorted(upd.model_dump(exclude_unset=True))}
+        if upd.depth_override and result.get("warnings"):
+            detail["depth_override"] = result["warnings"]
         return dict(
             actor=actor(request), action="edit", entity="reservation",
-            entity_id=res_id,
-            detail={"changed": sorted(upd.model_dump(exclude_unset=True))},
+            entity_id=res_id, detail=detail,
         )
 
     result = do_write(

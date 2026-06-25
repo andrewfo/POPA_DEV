@@ -9,7 +9,8 @@ contract) and [`README.md`](./README.md) (setup/run). When the two disagree,
 
 ## 1. Where we are today
 
-**Steps 1–6 are complete, and step 7's AIS verification layer now exists.** The
+**Steps 1–6 are complete (including step 6's draft-vs-controlling-depth gate),
+and step 7's AIS verification layer now exists.** The
 repo is a conflict-safe data layer seeded from live AIS, with a
 **conflict-detection service** (the time × station overlap primitive surfaced as
 a query/API + a thin map surface), an **AIS verification service**
@@ -27,7 +28,7 @@ Docker image + `docker-compose.prod.yml` (db + one-shot migrate/seed + api + ais
 | 3 | Measured wharf centerline (real, derived from ArcGIS berths) | ✅ | `data/gis/build_centerline.py` → `app/seed/wharf_seed.py` |
 | 4 | AIS ingestion (aisstream.io → DB) | ✅ | `app/ais/*` |
 | 5 | Occupancy derivation | ✅ | `app/occupancy/*`, migration `0002`, `tests/test_occupancy_*` |
-| 6 | Conflict-detection service | ✅ | `app/conflicts.py`, `GET /conflicts` (`app/routers/analysis.py`), `tests/test_conflicts*.py`, conflicts panel in `app/static/index.html` |
+| 6 | Conflict-detection service (+ draft-vs-depth gate) | ✅ | `app/conflicts.py`, `GET /conflicts` (`app/routers/analysis.py`), `tests/test_conflicts*.py`; **draft gate** `app/depth/*` + `app/edit._depth_gate` + `app/routers/depth.py` (migration `0012`), `tests/test_depth.py` |
 | 7 | Request intake + AIS verification; legacy backfill | 🟡 capture + AI-assisted intake + AIS verification + auto status-mutation built; legacy backfill TODO | `app/intake/*` (incl. `llm.py` + `dataverse_run.py`), `app/verification.py`, `GET /verification`, `POST /verification/sweep`, `tests/test_verification*.py`/`test_intake_*`, migrations `0003`/`0004` |
 
 **Also built ahead of the plan** (deviations from "no UI in phase 1" / "intake
@@ -178,16 +179,27 @@ given a thin map surface in `app/static/index.html`.
   `stationToLatLon` projection). Refreshed on the 15 s poll and after
   schedule/status writes.
 
-### 3.3 Draft vs controlling depth — DEFERRED (carried to §5.6 / a later step)
+### 3.3 Draft vs controlling depth — ✅ BUILT (2026-06)
 - `CLAUDE.md` requires: **draft must be validated against controlling depth for
-  the station/time window before a reservation can be confirmed.** Not built this
-  step — it needs a **controlling-depth source** (a `controlling_depth` table
-  keyed by station range + effective time window; depths change with dredging and
-  shoaling) seeded from a hydrographic / Corps condition survey, which we don't
-  have. Confirm path keeps today's warned-not-enforced behavior
-  (`app/edit.confirm_warnings`). When the data lands: add the check in the confirm
-  path and a `GET /conflicts` "depth" category
-  (`vessel.draft > controlling_depth(station_range, time_range)` → block/flag).
+  the station/time window before a reservation can be confirmed.** Now enforced.
+  The **controlling-depth source** is a versioned hydrographic survey
+  (`depth_survey` + `depth_segment`, migration `0012`): an operator uploads a
+  port condition-survey `.XYZ` (Texas South Central State Plane ftUS, EPSG:2278)
+  via `POST /depth/surveys` (or `python -m app.depth.ingest`), which PostGIS
+  reduces — project each sounding onto the centerline → POPA station, clip to the
+  berthing zone, bin, keep the **shallowest** = controlling depth (`app/depth/`).
+- Confirm path: `app/edit._depth_gate` (→ `app/depth/gate.controlling_depth_over`
+  + `depth_shortfall`) checks `vessel.draft + DEPTH_CLEARANCE_FT` against the
+  shallowest controlling depth over the reservation's station range, per the
+  **latest active** survey. Too deep → **422 block**, unless `depth_override`
+  downgrades it to a warning (logged in the audit detail). No covering survey /
+  unknown draft / unassigned berth → warns rather than blocks (never invents
+  depth). Tide is **not** modelled — clearance is a flat margin.
+- UI: a "Depth surveys" panel (upload + list + active status,
+  `app/static/js/depth.js`) and an "Override depth check" checkbox on the
+  placement form. `GET /depth/surveys` / `GET /depth/profile` read it back.
+- **Not** wired as a `GET /conflicts` category — the depth check is a confirm-time
+  gate (block before write), not an after-the-fact overlap surface.
 
 ### 3.4 Tests ✅
 - Overlap matrix (time-only / station-only / both / neither → correct
@@ -196,7 +208,9 @@ given a thin map surface in `app/static/index.html`.
   station never conflicts, the intersection rectangle, and `classify` — pure in
   `test_conflicts.py`; the same matrix through `GET /conflicts` against real
   PostGIS in `test_conflicts_db.py` (incl. dredge-vs-vessel using the identical
-  path). Depth tests wait on §3.3's data source.
+  path). Depth gate is tested separately in `tests/test_depth.py` (see §3.3):
+  pure (`.XYZ` parse, `depth_shortfall`) + db-marked (PostGIS reduction,
+  `controlling_depth_over`, confirm 422 / override / clears / no-survey-warning).
 
 ---
 
@@ -381,7 +395,9 @@ Not tied to a single step — pick up as the system matures.
   stays the conflict primitive, never `berth_id`).
 - ✅ `worker_heartbeat` (migration `0011`) — per-worker liveness telemetry (one
   upserted row per worker; never grows). Not a domain table; see §5.4.
-- `controlling_depth` table (§3.3).
+- ✅ `depth_survey` + `depth_segment` (migration `0012`) — the controlling-depth
+  data layer for the draft gate; versioned hydrographic surveys reduced to a
+  per-station controlling-depth profile (§3.3).
 - Wharf apron polygon / `wharf_area` (§2.1).
 - `reservation.derived_key` + unique index for idempotent observed rows (§2.5).
 - Keep `app/models.py` enum tuples and the migration in lockstep. The exclusion
@@ -439,8 +455,11 @@ Leaflet **UI** and berth-request intake **capture**. See §1.)
    `app/intake/llm.py` + `dataverse_run.py` (OpenRouter / Gemini Flash, pull /
    outbound, proposes-never-places); needs IT app-registration + an OpenRouter key
    to run live.
-5. **Controlling-depth** table + draft validation in the confirm path (the
-   deferred half of step 6, §3.3).
+5. ~~**Controlling-depth** table + draft validation in the confirm path (the
+   deferred half of step 6, §3.3).~~ **Done (2026-06)** — `depth_survey`/
+   `depth_segment` (migration `0012`), `.XYZ` upload + PostGIS reduction
+   (`app/depth/*`), and the confirm gate (`app/edit._depth_gate`, blocks 422 with
+   override). See §3.3.
 6. **CI** with a PostGIS service container; AIS reconnect/metrics hardening.
    (Production deployment packaging is **done** — see §5.4; the prod image makes a
    CI build/integration job straightforward.)

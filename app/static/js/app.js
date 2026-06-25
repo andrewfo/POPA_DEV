@@ -7,6 +7,7 @@ import { map, loadBbox, loadReferenceGeo, loadWharfGeometry, loadPositions } fro
 import { loadTimeline } from "./timeline.js";
 import { loadStats, loadConflicts, loadVerification, loadAlongside, loadWorkers } from "./panels.js";
 import { loadVessels, loadRequests, loadBerthRequests } from "./forms.js";
+import { loadDepthSurveys } from "./depth.js";
 
 // --- Resizable left sidebar ------------------------------------------------
 // Drag the divider between the sidebar and the map. Width (--sidebarW on <main>)
@@ -82,4 +83,5 @@ loadConflicts();
 loadVerification();
 loadAlongside();
 loadWorkers();
+loadDepthSurveys();
 setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); loadVerification(); loadAlongside(); loadWorkers(); }, 15000);

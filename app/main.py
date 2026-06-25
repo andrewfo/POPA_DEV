@@ -24,6 +24,7 @@ from app import __version__
 from app.auth import BasicAuthMiddleware
 from app.routers import (
     analysis_router,
+    depth_router,
     edit_router,
     intake_router,
     read_only_router,
@@ -71,3 +72,4 @@ app.include_router(read_only_router)
 app.include_router(intake_router)
 app.include_router(edit_router)
 app.include_router(analysis_router)
+app.include_router(depth_router)

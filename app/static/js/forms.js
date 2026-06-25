@@ -233,6 +233,8 @@ function resCard(r) {
           </div>
           <div class="check"><input type="checkbox" name="unassigned" ${r.station_unassigned ? "checked" : ""} /><label style="margin:0">Berth unassigned</label></div>
         </fieldset>
+        <div class="check"><input type="checkbox" name="depth_override" /><label style="margin:0">Override depth check</label></div>
+        <div class="hint" style="margin:-2px 0 6px">Confirming validates the vessel's draft against the latest depth survey. Tick to confirm anyway when too deep (logged as a warning).</div>
         <div class="grid2">
           <div><label>Priority</label><input type="number" name="priority" value="${r.priority ?? ""}" /></div>
           <div></div>
@@ -335,6 +337,7 @@ function wireResCards(container) {
       // the bow, the heading, and the vessel's LOA.
       const payload = formPayload(form, ["bow_dock", "priority"]);
       payload.unassigned = form.elements.unassigned.checked;
+      payload.depth_override = form.elements.depth_override.checked;
       // Placing needs both bow + heading. If the heading isn't set, leave the
       // station range untouched (this is a plain status/cargo edit) rather than
       // sending a half-placement the server would reject.

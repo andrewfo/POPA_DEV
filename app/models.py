@@ -17,7 +17,9 @@ import datetime as dt
 from geoalchemy2 import Geometry
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -334,6 +336,60 @@ class WorkerHeartbeat(Base):
     beat_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class DepthSurvey(Base):
+    """One hydrographic condition survey (migration 0012). Surveys are
+    VERSIONED, never overwritten — depths change constantly, so each upload is a
+    new dated row and the draft gate reads the *latest active* survey covering a
+    station range. The raw soundings aren't stored (a survey is ~400k points);
+    only the reduced per-station profile (``DepthSegment``) lives in the DB.
+    See app/depth/ingest.py for the reduction.
+    """
+
+    __tablename__ = "depth_survey"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    surveyed_at: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    source_file: Mapped[str | None] = mapped_column(Text)
+    # Planar CRS the uploaded soundings were in (PostGIS transforms to 4326).
+    # EPSG:2278 = Texas South Central State Plane ftUS (POPA's survey frame).
+    srid: Mapped[int] = mapped_column(Integer, nullable=False, default=2278)
+    datum: Mapped[str | None] = mapped_column(Text)  # vertical datum, e.g. "MLLW"
+    point_count: Mapped[int | None] = mapped_column(Integer)  # soundings binned
+    station_min: Mapped[float | None] = mapped_column(Numeric(12, 4))  # POPA ft
+    station_max: Mapped[float | None] = mapped_column(Numeric(12, 4))  # POPA ft
+    min_depth_ft: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    bin_ft: Mapped[float | None] = mapped_column(Numeric(8, 2))
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    segments: Mapped[list["DepthSegment"]] = relationship(
+        back_populates="survey", cascade="all, delete-orphan"
+    )
+
+
+class DepthSegment(Base):
+    """A station bin of a survey, carrying the controlling (shallowest) depth in
+    that bin within the berthing zone (migration 0012). ``popa_range`` is a
+    half-open POPA ``numrange`` [lo, hi) in feet; the GiST index on it drives the
+    draft gate's ``&&`` overlap against a reservation's ``station_range``.
+    """
+
+    __tablename__ = "depth_segment"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    survey_id: Mapped[int] = mapped_column(
+        ForeignKey("depth_survey.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    station_range: Mapped[object] = mapped_column("popa_range", NUMRANGE, nullable=False)
+    controlling_depth_ft: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
+    point_count: Mapped[int | None] = mapped_column(Integer)
+
+    survey: Mapped[DepthSurvey] = relationship(back_populates="segments")
 
 
 Index("ix_position_report_mmsi_ts", PositionReport.mmsi, PositionReport.msg_ts)

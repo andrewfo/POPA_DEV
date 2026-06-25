@@ -26,10 +26,13 @@ the canonical store remains POPA. Dock No. is reversed relative to POPA, so the
 **stern** end (the larger Dock No.) maps to the lower POPA bound — enter stern in
 ``station_lo`` and bow in ``station_hi`` (an inverted pair is rejected).
 
-The range/validation helpers (``_station_range``, ``_time_range``,
-``confirm_warnings``) are pure and unit-tested without a DB; the ``*_vessel`` /
-``*_reservation`` functions touch the session and do NOT commit — the endpoint
-owns the transaction boundary.
+The range/validation helpers (``_station_range``, ``_time_range``) are pure and
+unit-tested without a DB. Confirming a reservation runs the
+draft-vs-controlling-depth gate (``_depth_gate`` -> ``app/depth/gate.py``): it
+blocks (422) when the vessel's draft + clearance exceeds the shallowest
+controlling depth over the station range, unless ``depth_override`` downgrades it
+to a warning. The ``*_vessel`` / ``*_reservation`` functions touch the session
+and do NOT commit — the endpoint owns the transaction boundary.
 """
 from __future__ import annotations
 
@@ -40,7 +43,9 @@ from pydantic import BaseModel
 from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
-from app.crosswalk import segment_dockno_params
+from app.config import get_settings
+from app.crosswalk import format_station, segment_dockno_params
+from app.depth.gate import controlling_depth_over, depth_shortfall
 from app.tz import assume_central
 from app.models import (
     DIRECTIONS,
@@ -54,15 +59,6 @@ from app.models import (
 # Used to turn a vessel length into a station span when placing a reservation
 # from the bow alone. Same constant as app/occupancy/project.FEET_PER_M.
 FEET_PER_M = 3.280839895
-
-# Validation before a reservation may be confirmed (CLAUDE.md): draft must be
-# checked against controlling depth for the station/time window. No
-# controlling-depth data layer exists yet, so we cannot enforce it — surface the
-# gap as a warning instead of silently skipping it or inventing depth data.
-_DEPTH_GATE_WARNING = (
-    "controlling-depth data layer not available — draft was NOT validated "
-    "against controlling depth for this station/time window before confirming"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +101,10 @@ class ReservationCreate(BaseModel):
     priority: int | None = None
     cargo: str | None = None
     notes: str | None = None
+    # Override the draft-vs-controlling-depth gate when confirming: instead of
+    # blocking (422), record the shortfall as a warning + audit note. Ignored
+    # unless status == 'confirmed'.
+    depth_override: bool = False
 
 
 class ReservationUpdate(BaseModel):
@@ -142,6 +142,9 @@ class ReservationUpdate(BaseModel):
     priority: int | None = None
     cargo: str | None = None
     notes: str | None = None
+    # Override the draft-vs-controlling-depth gate when confirming (see
+    # ReservationCreate.depth_override). Ignored unless status == 'confirmed'.
+    depth_override: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +248,51 @@ def _validate_enum(value: str | None, allowed: tuple[str, ...], label: str) -> N
         raise ValueError(f"invalid {label} {value!r}; expected one of {allowed}")
 
 
-def confirm_warnings(status: str | None) -> list[str]:
-    """Warnings to surface when moving a reservation to ``confirmed`` (the
-    draft-vs-controlling-depth gate that cannot be enforced yet)."""
-    return [_DEPTH_GATE_WARNING] if status == "confirmed" else []
+def _depth_gate(
+    session: Session,
+    sr: StationRange,
+    vessel_id: int | None,
+    override: bool,
+) -> list[str]:
+    """The draft-vs-controlling-depth check, run when a reservation is moved to
+    ``confirmed`` (CLAUDE.md: draft must clear controlling depth before confirm).
+
+    Blocks by raising ``ValueError`` (-> 422) when the vessel's draft + the
+    configured under-keel clearance exceeds the shallowest controlling depth over
+    the station range, per the latest active depth survey. ``override=True``
+    downgrades that block to a ``[depth override]`` warning (logged in the audit
+    detail by the caller). When the check can't be evaluated — no berth assigned,
+    unknown draft, or no survey covering the range — it warns rather than blocks
+    (we never invent depth data). Returns the warnings to surface; an empty list
+    means the berth cleared."""
+    if sr.empty:
+        return ["no berth assigned — draft not validated against controlling depth"]
+    draft_m = _vessel_draft_m(session, vessel_id)
+    if draft_m is None:
+        return ["vessel draft unknown — not validated against controlling depth"]
+
+    controlling_ft, surveyed_at = controlling_depth_over(session, sr.lo, sr.hi)
+    if controlling_ft is None:
+        return [
+            "no controlling-depth survey covers this station range — "
+            "draft not validated"
+        ]
+
+    clearance = get_settings().depth_clearance_ft
+    deficit = depth_shortfall(controlling_ft, draft_m, clearance)
+    if deficit is None:
+        return []  # clears
+
+    draft_ft = draft_m * FEET_PER_M
+    msg = (
+        f"draft {draft_ft:.1f} ft + {clearance:.1f} ft clearance exceeds "
+        f"controlling depth {controlling_ft:.1f} ft over "
+        f"{format_station(sr.lo)}..{format_station(sr.hi)} "
+        f"(survey {surveyed_at:%Y-%m-%d}, short {deficit:.1f} ft)"
+    )
+    if not override:
+        raise ValueError(msg)
+    return [f"[depth override] {msg}"]
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +354,18 @@ def _vessel_loa_ft(session: Session, vessel_id: int | None) -> float:
     return float(loa_m) * FEET_PER_M if loa_m is not None else 0.0
 
 
+def _vessel_draft_m(session: Session, vessel_id: int | None) -> float | None:
+    """The vessel's draft in **metres** (the canonical store), or ``None`` when
+    the vessel or its draft is unknown — the depth gate treats that as "can't
+    evaluate" (a warning, not a block)."""
+    if vessel_id is None:
+        return None
+    draft = session.execute(
+        select(Vessel.draft).where(Vessel.id == vessel_id)
+    ).scalar_one_or_none()
+    return float(draft) if draft is not None else None
+
+
 
 def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict | None:
     """Overwrite the provided columns of a vessel. Returns a summary dict, or
@@ -345,6 +401,15 @@ def create_reservation(session: Session, req: ReservationCreate) -> dict:
     sr = _station_range_for(berth_bounds, lo, hi, unassigned=False)
     tr = _time_range(req.etb, req.etd)
 
+    # Draft gate: only confirming a reservation validates draft vs controlling
+    # depth (blocks via ValueError -> 422 unless overridden). Run before the
+    # INSERT so a block short-circuits cleanly.
+    warnings = (
+        _depth_gate(session, sr, req.vessel_id, req.depth_override)
+        if req.status == "confirmed"
+        else []
+    )
+
     params: dict = {
         "vessel_id": req.vessel_id,
         "berth_id": req.berth_id,
@@ -376,7 +441,7 @@ def create_reservation(session: Session, req: ReservationCreate) -> dict:
         ),
         params,
     ).scalar_one()
-    return {"id": int(rid), "warnings": confirm_warnings(req.status)}
+    return {"id": int(rid), "warnings": warnings}
 
 
 def update_reservation(
@@ -467,6 +532,15 @@ def update_reservation(
         else:
             sr = StationRange(empty=False, lo=float(cur.s_lo), hi=float(cur.s_hi))
 
+    # Draft gate: confirming validates draft vs controlling depth over the
+    # resolved range (blocks -> 422 unless overridden). The override flag rides on
+    # the edit body and is ignored unless the row is being confirmed.
+    warnings = (
+        _depth_gate(session, sr, vessel_id, bool(changes.get("depth_override")))
+        if status == "confirmed"
+        else []
+    )
+
     params: dict = {
         "id": res_id,
         "type": type_,
@@ -499,7 +573,7 @@ def update_reservation(
         ),
         params,
     )
-    return {"id": res_id, "warnings": confirm_warnings(status)}
+    return {"id": res_id, "warnings": warnings}
 
 
 def delete_reservation(session: Session, res_id: int) -> bool:

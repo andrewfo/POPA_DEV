@@ -80,6 +80,9 @@ uvicorn app.main:app --reload
 #   GET  /berths          -> named berth catalog (POPA station ranges) to assign from
 #   POST /intake/berth-request  -> manual berth request (phone/email); also a form on /
 #   PATCH /reservations/{id}    -> edit; assign a berth via {"berth_id": N} (fills station_range)
+#   GET  /depth/surveys   -> uploaded depth surveys (latest active backs the draft gate)
+#   GET  /depth/profile   -> per-station controlling-depth profile
+#   POST /depth/surveys   -> upload a hydrographic .XYZ (raw body); also a panel on /
 
 # AIS ingestion (live aisstream.io websocket -> DB). Long-running; reconnects.
 python -m app.ais.run
@@ -188,6 +191,27 @@ The AIS verification panel needs this worker running (it is what turns raw
 positions into `observed` rows) — in dev it starts by default with the stack
 (`.\scripts\dev.ps1` / `./scripts/dev.sh`); pass `-NoOccupancy` / `--no-occupancy`
 to skip it.
+
+## Controlling-depth & the draft gate (step 6) — built
+
+Confirming a reservation validates the vessel's draft (+ `DEPTH_CLEARANCE_FT`,
+default 2 ft) against the shallowest controlling depth over its station range, per
+the latest active depth survey — too deep ⇒ **422**, unless an operator ticks
+"Override depth check" (logged as a warning). With no covering survey it warns
+rather than blocks; tide is not modelled.
+
+Depths change constantly, so each survey is versioned. Load one by uploading a
+hydrographic `.XYZ` (Texas South Central State Plane ftUS, EPSG:2278) from the
+**Depth surveys** panel on the map, or via the CLI:
+
+```bash
+python -m app.depth.ingest data/surveys/<file>.XYZ [--date MM/DD/YYYY] [--datum MLLW]
+```
+
+The reduction (project each sounding → POPA station, clip to the berthing zone,
+bin, keep the shallowest = controlling depth) runs in PostGIS; only the reduced
+profile is stored. Tune the bin width / berthing-zone clip via the `DEPTH_*`
+settings (see `.env.example`). See `app/depth/*` and `PLAN.md` §3.3.
 
 ## Project layout
 

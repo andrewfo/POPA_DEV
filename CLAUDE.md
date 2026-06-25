@@ -109,6 +109,15 @@ from day one with no manual intake.
   health from how stale its beat is vs the worker's nominal cadence
   (`app/workers.py`). Telemetry, not an audit trail — liveness is a heartbeat,
   never inferred from data freshness (the low-volume workers idle legitimately).
+- `depth_survey` / `depth_segment` — the controlling-depth data layer (migration
+  0012) backing the draft gate. A hydrographic `.XYZ` condition survey is reduced
+  in PostGIS (project each sounding onto the centerline → POPA station, clip to
+  the berthing zone, bin, keep the **shallowest** = controlling depth) to one
+  `depth_survey` row + per-station `depth_segment` rows (`popa_range numrange`,
+  `controlling_depth_ft`). Surveys are **versioned** (depths change constantly —
+  each upload is a new dated row; the gate reads the latest `active` one), and the
+  raw soundings are NOT kept, only the reduced profile. Uploaded via
+  `POST /depth/surveys` (or `python -m app.depth.ingest`); see `app/depth/*`.
 
 Enforce no-overlap at the DB, not in app code:
 
@@ -170,10 +179,13 @@ status / flag a no-show), berth where planned, and depart (auto-complete); did a
 automation. **Placement stays the operator's job** (and a future scheduling
 optimizer's, which works from requests + berth availability, **not** from AIS).
 Also unbuilt: the legacy-spreadsheet backfill *commit*
-(its parser exists, the review pipeline does not). Confirming still cannot run
-the **draft-vs-controlling-depth** gate (no controlling-depth data layer yet);
-the edit surface returns a warning saying the check was skipped rather than
-blocking. The no-overlap (time × station) guarantee is enforced by the
+(its parser exists, the review pipeline does not). The
+**draft-vs-controlling-depth** gate is now **built** (`app/depth/*`, migration
+0012): confirming a reservation validates the vessel's draft (+ a configurable
+under-keel clearance) against the shallowest controlling depth over its station
+range, per the latest active depth survey, and **blocks (422)** unless an operator
+override downgrades it to a warning; with no covering survey it warns rather than
+blocks. The no-overlap (time × station) guarantee is enforced by the
 `confirmed`-only DB exclusion constraint — a confirmed edit that collides
 surfaces as a 409.
 
@@ -207,7 +219,8 @@ surfaces as a 409.
    with Postgres `&&`/`*` (raw ranges, not the mooring buffer), returning each
    pair's overlap rectangle (POPA + Dock). A thin map surface lists conflicts and
    highlights the contested stretch. The **draft-vs-controlling-depth** half is
-   deferred (no depth data layer yet; confirm stays warned-not-enforced).
+   now built (`app/depth/*`, migration 0012, `GET /depth/surveys` upload + the
+   confirm gate in `app/edit._depth_gate`) — see the build-order note below.
 7. 🟡 Request intake — **capture built** ahead of order (`app/intake/*`):
    **manual phone/email/operator entry** is the primary intake channel
    (`POST /intake/berth-request` + a form on the map page); the automated
@@ -282,8 +295,10 @@ cheap LLM (OpenRouter / Gemini Flash) normalizes each row into a
 `BerthRequestForm`, recorded through the same `record_manual_request` pipeline —
 it **proposes, never places**. What remains on step 7: the legacy-spreadsheet
 backfill *commit*. Step 7 intake *capture* plus a manual *edit* surface landed
-early at the user's request; step 6's draft-vs-controlling-depth gate is deferred
-(no depth data layer yet).
+early at the user's request; step 6's **draft-vs-controlling-depth gate is now
+built** (`app/depth/*`, migration 0012) — confirming validates draft + clearance
+against the latest active depth survey's controlling depth and blocks (422) unless
+overridden; surveys are uploaded as `.XYZ` via `POST /depth/surveys`.
 
 **Audit hardening (migrations 0009–0010):** three review findings were closed —
 (1) the AI channel got its **own `source='ai'` provenance** (was the borrowed
@@ -323,7 +338,7 @@ app/
                        #   commits independently, swallows errors) + KNOWN_WORKERS registry + classify();
                        #   ais/occupancy/intake workers beat each cycle, GET /workers reads them back
   routers/             # HTTP surface split by concern: common.py (do_write + actor), read_only.py,
-                       #   intake.py, edit.py, analysis.py — wired onto the app by main.py
+                       #   intake.py, edit.py, analysis.py, depth.py — wired onto the app by main.py
   static/              # Leaflet UI (index.html, map + occupancy timeline + edit forms) + GeoJSON (gis/)
   seed/wharf_seed.py   # seeds wharf_segment (real centerline + apron) + berth catalog (from data/gis/)
   ais/
@@ -343,9 +358,18 @@ app/
                        #   dataverse_run.py  # worker: poll Power Pages/Dataverse table
                        #                     #   (outbound, client-creds) -> llm -> the
                        #                     #   same record_manual_request pipeline
+  depth/               # step 6 draft gate: controlling-depth data layer (migration 0012)
+                       #   parse.py   # tolerant .XYZ sounding reader + filename-date parse
+                       #   ingest.py  # project (PostGIS ST_Transform+InterpolatePoint) -> clip
+                       #              #   to berthing zone -> bin by POPA station -> shallowest
+                       #              #   per bin; versioned survey; CLI: python -m app.depth.ingest
+                       #   gate.py    # depth_shortfall (pure) + controlling_depth_over (DB lookup);
+                       #              #   used by app/edit._depth_gate on confirm
 data/gis/              # build_centerline.py / to_geojson.py: real centerline + apron from
                        #   berth shapefiles (stationing) + quayface.* survey (quay geometry)
                        #   -> static GeoJSON + seed JSON
+data/surveys/          # raw hydrographic .XYZ condition surveys (git-ignored; only the
+                       #   reduced profile lives in the DB). README documents the format/load
 alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intake dedupe ·
                        #   0004 'email' source · 0005 wharf_segment.apron ·
                        #   0006 berth catalog + reservation.berth_id ·
@@ -353,11 +377,13 @@ alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intak
                        #   0008 database default TimeZone = America/Chicago ·
                        #   0009 'ai' source (AI-channel provenance) ·
                        #   0010 intake_event soft-delete (deleted_at) + audit_log table ·
-                       #   0011 worker_heartbeat (per-worker liveness telemetry)
+                       #   0011 worker_heartbeat (per-worker liveness telemetry) ·
+                       #   0012 depth_survey + depth_segment (controlling-depth data layer)
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation, conflict overlap predicates; db-marked (auto-skip):
                        #   geo→station, occupancy derive, intake, reservations, edit (vessel patch /
-                       #   reservation CRUD / 409), conflicts (GET /conflicts overlap matrix)
+                       #   reservation CRUD / 409), conflicts (GET /conflicts overlap matrix),
+                       #   depth (.XYZ parse + shortfall pure; PostGIS reduction + gate 422/override)
 scripts/
   dev.sh               # one-command local dev stack (macOS/Linux): DB + migrate + seed + API + AIS
   dev.ps1              # same, for Windows (PowerShell)
