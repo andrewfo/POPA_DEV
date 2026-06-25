@@ -255,7 +255,8 @@
      now removed). Bottom-left, clear of Leaflet's zoom control (top-left) and
      attribution (bottom-right). */
   .map-overlay {
-    position: absolute; left: 8px; bottom: 8px; z-index: 1000; pointer-events: none;
+    position: absolute; left: 50%; top: 8px; transform: translateX(-50%);
+    z-index: 1000; pointer-events: none;
     font-family: var(--font-mono); font-size: 10px; letter-spacing: .5px;
     text-transform: uppercase; color: var(--ink-dim);
     background: rgba(6,9,12,.72); border: 1px solid var(--line);

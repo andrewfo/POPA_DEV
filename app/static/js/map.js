@@ -502,8 +502,10 @@ loadDims();
 // A coloured band along the berthing zone (water side of the quay), one cell per
 // /depth/profile bin, on a shallow->deep ramp. The reduction (controlling =
 // shallowest sounding per station bin) lives in PostGIS; this only draws it.
-const DEPTH_NEAR_M = 3;          // band starts just off the quay face
-const DEPTH_FAR_M = 55;          // ...and reaches ~55 m into the berth pocket
+const DEPTH_NEAR_M = 0;          // band starts at the quay face
+const DEPTH_FAR_M = 78;          // ...and reaches the channel-side edge of the
+                                 // berth water rectangles (~250 ft out, per the
+                                 // port's berthing polygons)
 
 // Shallow (warm/red) -> deep (cool/teal) ramp, matched by the CSS gradient on the
 // depth legend below. t in [0,1] (0 = shallowest cell, 1 = deepest).
