@@ -12,6 +12,19 @@ function refreshDepthOverlay() {
 
 const fmtDepth = (d) => (d == null ? "—" : `${Number(d).toFixed(1)} ft`);
 const fmtDate = (s) => (s ? s : "—");
+// created_at is an absolute instant; render it in Central wall-clock (the
+// system canon) so "last updated" reads as when the survey was uploaded.
+const fmtUpdated = (s) => {
+  if (!s) return "—";
+  const d = new Date(s);
+  return Number.isNaN(d.getTime())
+    ? s
+    : d.toLocaleString("en-US", {
+        timeZone: "America/Chicago",
+        year: "numeric", month: "short", day: "numeric",
+        hour: "numeric", minute: "2-digit",
+      });
+};
 
 export async function loadDepthSurveys() {
   const status = document.getElementById("depthStatus");
@@ -24,6 +37,7 @@ export async function loadDepthSurveys() {
       ? `Active survey <b>${esc(fmtDate(active.surveyed_at))}</b> · controlling min `
         + `<b>${fmtDepth(active.min_depth_ft)}</b> · POPA `
         + `${fmtSta(active.station_min)}–${fmtSta(active.station_max)}`
+        + `<br><span style="color:var(--muted)">Last updated ${esc(fmtUpdated(active.created_at))}</span>`
       : "No depth survey loaded — the draft gate warns rather than blocks.";
     list.innerHTML = rows.length
       ? rows.map(surveyRow).join("")
