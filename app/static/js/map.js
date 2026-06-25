@@ -171,6 +171,13 @@ export function locateVesselOnMap(mmsi) {
 // honours its on/off state via map.hasLayer(shipLayer).
 export const shipLayer = L.layerGroup().addTo(map);
 
+// Controlling-depth overlay. A read of /depth/profile (the latest active depth
+// survey's per-station bins) drawn as a coloured band on the WATER side of the
+// quay, so the picture the draft gate confirms against is visible on the map.
+// Off by default (toggled in the layer box); rendered on overlayadd and after an
+// upload/delete. Defined here so it can join the layer-toggle box below.
+export const depthLayer = L.layerGroup();
+
 // Show/hide toggles for the map layers. Each layer (and its child label markers)
 // is added to the map above, so unchecking removes the ticks/labels/berths
 // together. Collapsed to a small layers icon (top-right) so it doesn't cover the
@@ -181,6 +188,7 @@ L.control.layers(null, {
   "Ship dots (AIS)": vesselLayer,
   "Vessel outlines": shipLayer,
   "Berths": berthLayer,
+  "Controlling depth": depthLayer,
   "Dock markers (yellow)": yellowLayer,
   "Dredge markers": feetLayer,
 }, { collapsed: true, position: "topright" }).addTo(map);
@@ -489,6 +497,120 @@ export function renderOutlines(tSel, rows) {
 map.on("overlayadd", (e) => { if (e.layer === shipLayer) renderOutlines(lastTSel, null); });
 loadDims();
 // ===== /VESSEL OUTLINES ========================================================
+
+// ===== CONTROLLING-DEPTH OVERLAY ===============================================
+// A coloured band along the berthing zone (water side of the quay), one cell per
+// /depth/profile bin, on a shallow->deep ramp. The reduction (controlling =
+// shallowest sounding per station bin) lives in PostGIS; this only draws it.
+const DEPTH_NEAR_M = 3;          // band starts just off the quay face
+const DEPTH_FAR_M = 55;          // ...and reaches ~55 m into the berth pocket
+
+// Shallow (warm/red) -> deep (cool/teal) ramp, matched by the CSS gradient on the
+// depth legend below. t in [0,1] (0 = shallowest cell, 1 = deepest).
+const DEPTH_RAMP = [
+  [0.0, [198, 40, 40]],    // red — shallowest, where draft is most constrained
+  [0.5, [232, 183, 48]],   // amber
+  [1.0, [38, 166, 154]],   // teal — deepest
+];
+function depthColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  let lo = DEPTH_RAMP[0], hi = DEPTH_RAMP[DEPTH_RAMP.length - 1];
+  for (let i = 0; i < DEPTH_RAMP.length - 1; i++) {
+    if (t >= DEPTH_RAMP[i][0] && t <= DEPTH_RAMP[i + 1][0]) { lo = DEPTH_RAMP[i]; hi = DEPTH_RAMP[i + 1]; break; }
+  }
+  const f = hi[0] > lo[0] ? (t - lo[0]) / (hi[0] - lo[0]) : 0;
+  const c = lo[1].map((v, k) => Math.round(v + (hi[1][k] - v) * f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// One band [[lat,lon]...] spanning [staLo, staHi] along the quay, pushed to the
+// water side between nearM and farM off the face (same water-side normal as the
+// vessel hulls).
+function depthBand(staLo, staHi, nearM, farM) {
+  const A = stationToLatLon(staLo), B = stationToLatLon(staHi);
+  if (!A || !B) return null;
+  const cLat = (A.lat + B.lat) / 2;
+  const mPerLat = 111320, mPerLon = 111320 * Math.cos(cLat * Math.PI / 180);
+  let fe = (B.lon - A.lon) * mPerLon, fn = (B.lat - A.lat) * mPerLat;
+  const len = Math.hypot(fe, fn);
+  if (len < 0.5) return null;
+  fe /= len; fn /= len;
+  const re = fn, rn = -fe;                              // water-side normal
+  return [[0, nearM], [len, nearM], [len, farM], [0, farM]].map(([al, cr]) => {
+    const de = al * fe + cr * re, dn = al * fn + cr * rn;
+    return [A.lat + dn / mPerLat, A.lon + de / mPerLon];
+  });
+}
+
+// Legend (bottom-right): the depth ramp + the active survey's shallow/deep
+// endpoints. Hidden until the depth layer is toggled on.
+const depthLegend = L.control({ position: "bottomright" });
+depthLegend.onAdd = function () {
+  const div = L.DomUtil.create("div", "map-legend depth-legend");
+  div.style.display = "none";
+  this._div = div;
+  L.DomEvent.disableClickPropagation(div);
+  return div;
+};
+depthLegend.addTo(map);
+function updateDepthLegend(range, surveyId) {
+  const div = depthLegend._div;
+  if (!div) return;
+  if (!range) {
+    div.innerHTML = '<div class="lg-title">Controlling depth</div>'
+      + '<div class="lg-note">no active survey</div>';
+    return;
+  }
+  div.innerHTML = '<div class="lg-title">Controlling depth (ft)</div>'
+    + '<div class="depth-bar"></div>'
+    + `<div class="depth-scale"><span>${range.min.toFixed(1)} shallow</span>`
+    + `<span>${range.max.toFixed(1)} deep</span></div>`
+    + (surveyId != null ? `<div class="lg-note">survey #${surveyId}</div>` : "");
+}
+
+// Fetch the active profile and (re)draw the bands. Colours are scaled across the
+// survey's own min..max controlling depth (the meaningful spread), with the
+// endpoints shown on the legend. Exported so depth.js can refresh after an
+// upload/delete.
+export async function loadDepthOverlay() {
+  try {
+    const prof = await api("/depth/profile");
+    depthLayer.clearLayers();
+    const bins = (prof && prof.bins) || [];
+    if (!bins.length || !state.centerline) { updateDepthLegend(null); return; }
+    const depths = bins.map((b) => b.controlling_depth_ft);
+    const min = Math.min(...depths), max = Math.max(...depths);
+    const span = max - min || 1;
+    for (const b of bins) {
+      const ring = depthBand(b.popa_lo, b.popa_hi, DEPTH_NEAR_M, DEPTH_FAR_M);
+      if (!ring) continue;
+      const color = depthColor((b.controlling_depth_ft - min) / span);
+      L.polygon(ring, { color, weight: 0.4, opacity: 0.5, fillColor: color, fillOpacity: 0.5 })
+        .bindPopup(
+          `<b>Controlling ${b.controlling_depth_ft.toFixed(1)} ft</b>` +
+          `<br>POPA ${fmtSta(b.popa_lo)}–${fmtSta(b.popa_hi)}` +
+          `<br>Dock ${fmtSta(b.dock_lo)}–${fmtSta(b.dock_hi)}` +
+          `<br>${b.point_count ?? "—"} soundings`
+        )
+        .bindTooltip(`${b.controlling_depth_ft.toFixed(1)} ft`, { direction: "top" })
+        .addTo(depthLayer);
+    }
+    updateDepthLegend({ min, max }, prof.survey_id);
+  } catch (e) {
+    depthLayer.clearLayers();
+    updateDepthLegend(null);
+  }
+}
+
+// Render on toggle-on (the layer is emptied while hidden); show/hide the legend
+// with it.
+map.on("overlayadd", (e) => {
+  if (e.layer === depthLayer) { depthLegend._div.style.display = ""; loadDepthOverlay(); }
+});
+map.on("overlayremove", (e) => {
+  if (e.layer === depthLayer) depthLegend._div.style.display = "none";
+});
+// ===== /CONTROLLING-DEPTH OVERLAY ==============================================
 
 // --- Map coordinate / scale read-out ---------------------------------------
 (function () {

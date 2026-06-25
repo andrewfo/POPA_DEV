@@ -703,6 +703,18 @@
     border: 1.5px solid var(--on-accent); flex: none;
   }
   .map-legend .lg-note { color: var(--muted); margin-top: 5px; font-size: 10px; }
+  /* Depth overlay legend: a static (non-collapsible) panel with the shallow->deep
+     ramp bar; the title carries no toggle caret. Ramp matches DEPTH_RAMP in map.js. */
+  .depth-legend .lg-title { cursor: default; }
+  .depth-legend .lg-title::after { content: ""; }
+  .depth-legend .depth-bar {
+    height: 9px; width: 120px; border: 1px solid var(--line);
+    background: linear-gradient(to right, rgb(198,40,40), rgb(232,183,48), rgb(38,166,154));
+  }
+  .depth-legend .depth-scale {
+    display: flex; justify-content: space-between; gap: 8px;
+    color: var(--muted); margin-top: 3px; font-size: 9px; white-space: nowrap;
+  }
   /* Transient "locate" halo: a few cyan pings fired when a vessel row in the
      sidebar is clicked, to find its contact on the chart. Cyan = a tool, not a
      status (matches the timeline playhead). */
@@ -1058,6 +1070,29 @@
     <div id="vessels"><div class="empty">loading…</div></div>
     <div id="vesselEditor"></div>
     </details>
+
+    <!-- ===== Depth surveys (controlling-depth data layer for the draft gate) ===== -->
+    <details class="section" id="depthPanel">
+      <summary>Depth surveys <i class="info" title="Hydrographic .XYZ condition surveys. The latest active survey gates reservation confirmation (vessel draft vs controlling depth). Upload a new survey whenever depths change.">i</i></summary>
+    <div id="depthStatus" class="hint" style="margin:0 0 8px">loading…</div>
+    <form id="depthUploadForm" autocomplete="off">
+      <label>Survey file (.XYZ)</label>
+      <input type="file" id="depthFile" accept=".xyz,.XYZ" required />
+      <div class="grid2">
+        <div><label>Survey date</label><input type="date" id="depthDate" /></div>
+        <div><label>Datum</label><input type="text" id="depthDatum" placeholder="MLLW" /></div>
+      </div>
+      <div class="grid2">
+        <div><label>CRS (EPSG)</label><input type="number" id="depthSrid" value="2278" /></div>
+        <div></div>
+      </div>
+      <div class="hint" style="margin:0 0 6px">Date is read from the filename (MMDDYYYY) if left blank. Soundings are Texas South Central State Plane ftUS (EPSG:2278) by default.</div>
+      <button type="submit" class="btn-sm primary" id="depthUploadBtn">Upload survey</button>
+      <div class="result" id="depthResult"></div>
+    </form>
+    <div id="depthList"><div class="empty">none</div></div>
+    </details>
+    <!-- ===== /Depth surveys ===== -->
     </section>
     <!-- ===== /Overview tab ===== -->
 
