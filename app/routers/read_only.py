@@ -488,10 +488,28 @@ def stats(session: Session = Depends(get_session)) -> dict:
     effectively stopped — the same test the map's green dots use). "Vessels" is
     vessels *present* (an AIS fix within the present-window), not every vessel
     row ever ingested — a vessel row is never removed when a ship leaves."""
-    # Reservation breakdown by status in one grouped scan (counts every status,
-    # so new ones show up without another query).
+    # The sidebar tiles count the *live* book of operator-managed work:
+    # requested/tentative/confirmed reservations that are current or upcoming.
+    # Deliberately scoped two ways, matching the conflicts/verification panels:
+    #   - status: only the planning statuses. `observed` rows are AIS ground
+    #     truth (they belong to the occupancy/History surfaces; counting them let
+    #     derived berthings dwarf the handful of real bookings), `completed` is
+    #     done, `cancelled` is dropped.
+    #   - time: only rows whose window hasn't fully elapsed. A confirmed booking
+    #     whose ETD is in the past is history — e.g. a kept no-show the sweep
+    #     flags but won't auto-cancel — not "confirmed right now", so it drops off
+    #     the tile the same way it's absent from the Reservations tab's current
+    #     view. (Empty/unbounded windows are kept — they have no past edge.)
     res_rows = session.execute(
-        text("SELECT status::text AS status, count(*) AS n FROM reservation GROUP BY status")
+        text(
+            """
+            SELECT status::text AS status, count(*) AS n
+            FROM reservation
+            WHERE status IN ('requested', 'tentative', 'confirmed')
+              AND (upper(time_range) IS NULL OR upper(time_range) >= now())
+            GROUP BY status
+            """
+        )
     ).all()
     by_status = {r.status: r.n for r in res_rows}
     # Moored *now* = contacts whose latest AIS fix is alongside (in the berthing
@@ -574,8 +592,9 @@ def stats(session: Session = Depends(get_session)) -> dict:
         "berth_requests": session.execute(
             text("SELECT count(*) FROM intake_event WHERE deleted_at IS NULL")
         ).scalar_one(),
-        # Reservations excluding cancelled — the "live" book of work.
-        "reservations": sum(n for s, n in by_status.items() if s != "cancelled"),
+        # The live book of work (see the scan above): requested/tentative/
+        # confirmed, current or upcoming only.
+        "reservations": sum(by_status.values()),
         "moored": moored,
         "confirmed": by_status.get("confirmed", 0),
         "requested": by_status.get("requested", 0),
