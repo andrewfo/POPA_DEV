@@ -751,9 +751,11 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
     box-shadow: 0 14px 44px rgba(0,0,0,.5);
     font-size: 13px;
-    pointer-events: none;  /* a hover preview — never steals the pointer */
+    pointer-events: none;  /* inert until open, so it never steals the pointer */
   }
-  #shipHover.open { display: block; }
+  /* When open it accepts the pointer so the operator can move onto it and scroll;
+     its own mouseenter/leave keep it up (see history.js). */
+  #shipHover.open { display: block; pointer-events: auto; }
   #shipHover .empty { padding: 16px; }
   /* Header band — the dossier's top strip; accent keyline marks it as a record */
   .dossier-head {

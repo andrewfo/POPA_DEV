@@ -238,12 +238,25 @@ export async function showShipHover(card, vesselId) {
   }
 }
 
-// Small delay on hide so skating across rows doesn't flicker the panel.
+// Small delay on hide so skating from a card onto the panel (or across rows)
+// doesn't flicker it shut. The grace window is what lets the pointer cross the
+// gap to the box, whose own listeners (below) then hold it open.
 export function hideShipHover() {
   const box = document.getElementById("shipHover");
   if (!box) return;
-  shipHoverTimer = setTimeout(() => box.classList.remove("open"), 80);
+  shipHoverTimer = setTimeout(() => box.classList.remove("open"), 160);
 }
+
+// Keep the dossier open while the pointer is on the box itself, so the operator
+// can move onto it and scroll a long record. Entering cancels the pending hide;
+// leaving the box closes it. Wired once — the box is a singleton shared by every
+// hover surface (History, Alongside).
+(function wireHoverBox() {
+  const box = document.getElementById("shipHover");
+  if (!box) return;
+  box.addEventListener("mouseenter", () => clearTimeout(shipHoverTimer));
+  box.addEventListener("mouseleave", hideShipHover);
+})();
 
 // One-line digest of the active filters, shown beside the Filters button so the
 // operator sees what's applied without opening the modal.
