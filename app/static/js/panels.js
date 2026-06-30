@@ -1,6 +1,7 @@
 // Sidebar panels: status / stats, conflicts, AIS verification, and "alongside now".
 import { api, apiWrite, esc, fmtCentral, fmtSta, PAL } from "./api.js";
 import { map, stationToLatLon, locateVesselOnMap } from "./map.js";
+import { showShipHover, hideShipHover } from "./history.js";
 
 // --- Status / stats --------------------------------------------------------
 export function setStatus(ok, text) {
@@ -258,14 +259,18 @@ export async function loadVerification() {
 // Who is physically at the wharf right now, from live AIS: /occupancy/moored is
 // the per-vessel form of the "Moored now" stat (latest fix alongside + slow),
 // each projected to a berth server-side. Reads live positions, so it populates
-// without the occupancy-derivation worker. Click a row to locate its AIS contact.
+// without the occupancy-derivation worker. Click a row to locate its AIS contact;
+// hover for the full ship dossier (the same floating panel History uses — vessel
+// record + dimensions + latest AIS fix + booking log), shown when the contact has
+// been upserted into the vessel table (vessel_id present).
 function alongsideCard(r) {
   const name = esc(r.vessel_name || "(unnamed)");
   const where = r.berth_name ? esc(r.berth_name)
     : (r.popa_station != null ? "POPA " + fmtSta(r.popa_station) : "berth —");
   const clickable = r.mmsi != null;
+  const hoverable = r.vessel_id != null;
   return `
-    <div class="card${clickable ? " along-card" : ""}" data-along-mmsi="${r.mmsi ?? ""}" style="border-left-color:${PAL.green}${clickable ? ";cursor:pointer" : ""}">
+    <div class="card${clickable ? " along-card" : ""}${hoverable ? " hist-card" : ""}" data-along-mmsi="${r.mmsi ?? ""}" data-vessel-id="${r.vessel_id ?? ""}" style="border-left-color:${PAL.green}${clickable ? ";cursor:pointer" : ""}"${hoverable ? ' title="Hover for the ship dossier"' : ""}>
       <div class="name">${name}
         <span class="status-badge" style="color:${PAL.green}">moored</span></div>
       <div class="meta">${where} · since <b>${fmtCentral(r.since ?? r.msg_ts)}</b></div>
@@ -285,6 +290,14 @@ export async function loadAlongside() {
         const mmsi = Number(card.dataset.alongMmsi);
         if (mmsi) locateVesselOnMap(mmsi);
       });
+    });
+    // Hover a moored card -> the same floating ship dossier History uses
+    // (vessel record + dimensions + latest AIS fix + booking log).
+    el.querySelectorAll(".hist-card").forEach((card) => {
+      const vid = Number(card.dataset.vesselId);
+      if (!vid) return;
+      card.addEventListener("mouseenter", () => showShipHover(card, vid));
+      card.addEventListener("mouseleave", hideShipHover);
     });
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';

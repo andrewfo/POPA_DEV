@@ -213,7 +213,7 @@ function positionShipHover(card) {
   box.style.top = top + "px";
 }
 
-async function showShipHover(card, vesselId) {
+export async function showShipHover(card, vesselId) {
   if (!vesselId) return;
   clearTimeout(shipHoverTimer);
   const box = document.getElementById("shipHover");
@@ -239,7 +239,7 @@ async function showShipHover(card, vesselId) {
 }
 
 // Small delay on hide so skating across rows doesn't flicker the panel.
-function hideShipHover() {
+export function hideShipHover() {
   const box = document.getElementById("shipHover");
   if (!box) return;
   shipHoverTimer = setTimeout(() => box.classList.remove("open"), 80);

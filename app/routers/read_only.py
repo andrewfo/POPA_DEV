@@ -657,10 +657,12 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
                 WHERE pr.mmsi IS NOT NULL
                 ORDER BY pr.mmsi, pr.msg_ts DESC NULLS LAST, pr.id DESC
             )
-            SELECT l.mmsi, l.lat, l.lon, l.sog, l.msg_ts, v.name AS vessel_name,
+            SELECT l.mmsi, l.lat, l.lon, l.sog, l.msg_ts,
+                   v.id AS vessel_id, v.name AS vessel_name,
                    COALESCE(obs.since, l.msg_ts) AS since
             FROM latest l
             LEFT JOIN vessel v ON v.id = l.vessel_id
+                              OR (l.vessel_id IS NULL AND v.mmsi = l.mmsi)
             LEFT JOIN LATERAL (
                 SELECT lower(r.time_range) AS since
                 FROM reservation r
@@ -704,6 +706,9 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
         out.append(
             {
                 "mmsi": r.mmsi,
+                # vessel_id drives the hover dossier (GET /vessels/{id}); null for
+                # an AIS contact not yet upserted into the vessel table.
+                "vessel_id": r.vessel_id,
                 "vessel_name": r.vessel_name,
                 "sog": float(r.sog) if r.sog is not None else None,
                 "msg_ts": r.msg_ts.isoformat() if r.msg_ts else None,

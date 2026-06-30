@@ -821,6 +821,9 @@
   /* History rows are hover-to-preview; show the affordance. */
   #historyList .hist-card { cursor: default; }
   #historyList .hist-card:hover { border-color: var(--accent); }
+  /* Alongside rows share the hover-to-dossier affordance (they're also
+     click-to-locate, so the pointer cursor from .along-card stays). */
+  #alongside .hist-card:hover { border-color: var(--accent); }
   /* ===== History filters modal ===== */
   #histFilterModal {
     position: fixed; inset: 0; z-index: 4100; display: none;
