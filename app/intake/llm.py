@@ -19,11 +19,11 @@ Design notes:
   prompt and asked for a JSON object). It is deliberately **tolerant** — a bad
   IMO or an ambiguous ``"X or Y"`` / ``"TBA"`` becomes ``null`` + a parse note,
   never a hard failure that loses the request.
-- :func:`to_form` maps the extraction onto ``BerthRequestForm``. Lengths are
-  already in **feet** (the prompt asks the model to convert metres → feet), which
-  matches the form's feet contract; ``record_manual_request`` does the feet →
-  metres store. A checksum-invalid IMO is dropped (with a note) rather than
-  raising.
+- :func:`to_form` maps the extraction onto ``BerthRequestForm``. The submission
+  is always in **feet/lbs** (US units), so the prompt tells the model to copy
+  measurements through unchanged — no unit conversion — which matches the form's
+  feet contract; ``record_manual_request`` does the feet → metres store. A
+  checksum-invalid IMO is dropped (with a note) rather than raising.
 - The network call is isolated behind a ``complete`` callable, so the prompt and
   mapping logic are unit-testable with a fake LLM (no key, no network). The live
   caller is :func:`openrouter_complete`, a thin ``httpx`` POST (no new
@@ -66,7 +66,7 @@ class LlmExtraction(BaseModel):
 
     vessel: str | None = None
     imo: int | None = None
-    # Dimensions in FEET (the prompt instructs metres -> feet conversion).
+    # Dimensions in FEET (the form is feet/lbs; the prompt forbids unit conversion).
     length_ft: float | None = None
     beam_ft: float | None = None
     draft_ft: float | None = None
@@ -132,9 +132,11 @@ ambiguous):
 - vessel: ship name (string)
 - imo: IMO number as an integer ONLY if a 7-digit IMO is explicitly present; \
 never invent or guess one
-- length_ft, beam_ft, draft_ft: vessel dimensions in FEET. If the source value \
-is clearly in metres, convert to feet (multiply by 3.28084) and say so in \
-parse_notes
+- length_ft, beam_ft, draft_ft: vessel dimensions in FEET. The submission ALWAYS \
+provides measurements in US units (feet and pounds), so copy the numeric values \
+through unchanged — do NOT convert units, and do NOT mention any unit conversion \
+in parse_notes. Ignore any unit hint in a field name (e.g. a trailing "m" as in \
+"beamm"/"draftm"): those values are already feet, not metres
 - etb: requested arrival as an ISO-8601 string (date "YYYY-MM-DD" or datetime \
 "YYYY-MM-DDTHH:MM"); etd: requested departure, same format
 - inbound_cargo, outbound_cargo: short cargo descriptions; inbound_tons, \
@@ -304,14 +306,37 @@ def _parse_iso(value: str | None) -> dt.datetime | None:
             return None
 
 
+def _scrub_unit_claims(parse_notes: str | None) -> str | None:
+    """Drop any parse-note clause that claims a metre↔feet unit conversion.
+
+    The berth-request form ALWAYS submits measurements in feet (the prompt forbids
+    conversion), so a note asserting the source was in metres is provably false. It
+    is a stubborn narration tic of the cheap model: it keeps the numeric value as
+    feet (correct) yet still says it "converted from metres" — and prompt-level
+    suppression does not reliably stop it. Stripping the clause deterministically
+    keeps the false claim out of the operator-facing ``reservation.notes``. Clauses
+    are the model's ``;``-separated fragments; any fragment mentioning metres/meters
+    is removed (the form has no metres, so such a fragment is always wrong)."""
+    if not parse_notes:
+        return parse_notes
+    kept = [
+        c.strip()
+        for c in parse_notes.split(";")
+        if "metre" not in c.lower() and "meter" not in c.lower()
+    ]
+    return "; ".join(p for p in kept if p) or None
+
+
 def to_form(ext: LlmExtraction, *, source: str) -> tuple[BerthRequestForm, list[str]]:
     """Map an extraction onto a ``BerthRequestForm``. Pure. A checksum-invalid IMO
     is dropped (with a note) rather than raising — the operator can supply the
-    right IMO on reconciliation. Dimensions pass through as feet (already
-    converted by the model)."""
+    right IMO on reconciliation. Dimensions pass through as feet (the form is
+    feet/lbs; the model is told not to convert units), and any false
+    metre-conversion claim the model still narrates is scrubbed from the notes."""
     notes: list[str] = []
-    if ext.parse_notes:
-        notes.append(f"LLM: {ext.parse_notes}")
+    parse_notes = _scrub_unit_claims(ext.parse_notes)
+    if parse_notes:
+        notes.append(f"LLM: {parse_notes}")
 
     imo = ext.imo
     if imo is not None and not valid_imo(imo):

@@ -149,6 +149,30 @@ def test_to_form_surfaces_model_parse_notes():
     assert any("TBA" in n for n in notes)
 
 
+def test_to_form_scrubs_false_metre_conversion_clause():
+    # The form is always feet, so the model's stubborn "converted from metres"
+    # narration is provably false and must be stripped — but sibling clauses stay.
+    ext = LlmExtraction(
+        vessel="X",
+        length_ft=600.0,
+        parse_notes="IMO was a string; length was given in metres, converted to feet; ETD was TBA",
+    )
+    form, notes = to_form(ext, source="email")
+    joined = " ".join(notes)
+    assert "metre" not in joined.lower()
+    assert "converted to feet" not in joined.lower()
+    # the legitimate clauses survive, and the feet value is untouched
+    assert "IMO was a string" in joined
+    assert "TBA" in joined
+    assert form.length_ft == 600.0
+
+
+def test_to_form_drops_note_that_is_only_a_metre_claim():
+    ext = LlmExtraction(vessel="X", parse_notes="dimensions given in meters, converted to feet")
+    _, notes = to_form(ext, source="email")
+    assert notes == []
+
+
 def test_to_form_keeps_utc_instant_aware():
     ext = LlmExtraction(vessel="X", etb="2026-06-16T13:00:00Z")
     form, _ = to_form(ext, source="email")
