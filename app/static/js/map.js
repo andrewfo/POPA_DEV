@@ -581,17 +581,25 @@ function updateDepthLegend(range, surveyId, labelled) {
 
 const M_PER_FT = 0.3048;
 
+// Bed-elevation numbers live in their own layer (separate from the coloured
+// cells) so they can be thinned on zoom without redrawing the field. depthCells
+// caches each cell's label anchor + depth for that re-thinning.
+const depthLabelLayer = L.layerGroup();
+let depthCells = [];
+
 // Fetch the active profile and (re)draw the overlay. When the survey carries a
 // 2-D cross-section grid (depth_cell, migration 0013) we paint the full field —
-// cells marching out into the channel, each labelled with its bed elevation as a
-// NEGATIVE number (feet below datum). Older surveys with no cells fall back to
-// the flat per-station controlling bands. Colours are scaled across the drawn
-// set's own min..max depth (the meaningful spread). Exported so depth.js can
-// refresh after an upload/delete.
+// cells marching out into the channel, each with its bed elevation as a NEGATIVE
+// number (feet below datum). Older surveys with no cells fall back to the flat
+// per-station controlling bands. Colours are scaled across the drawn set's own
+// min..max depth (the meaningful spread). Exported so depth.js can refresh after
+// an upload/delete.
 export async function loadDepthOverlay() {
   try {
     const prof = await api("/depth/profile");
     depthLayer.clearLayers();
+    depthLabelLayer.clearLayers();
+    depthCells = [];
     const bins = (prof && prof.bins) || [];
     const cells = (prof && prof.cells) || [];
     if (!state.centerline || (!bins.length && !cells.length)) {
@@ -602,14 +610,17 @@ export async function loadDepthOverlay() {
     else renderDepthBands(bins, prof.survey_id);
   } catch (e) {
     depthLayer.clearLayers();
+    depthLabelLayer.clearLayers();
+    depthCells = [];
     updateDepthLegend(null);
   }
 }
 
 // The 2-D cross-section field: one cell per (station bin × offset-from-quay bin).
 // Cells at larger offset sit further into the channel (where the bed deepens), so
-// each station reads as a cross-section perpendicular to the quay. Each cell is
-// labelled with its elevation = -depth (negative = below datum).
+// each station reads as a cross-section perpendicular to the quay. The colour is
+// the depth; the number (placed separately, see renderDepthLabels) is its
+// elevation = -depth (negative = below datum).
 function renderDepthField(cells, surveyId) {
   const depths = cells.map((c) => c.controlling_depth_ft);
   const min = Math.min(...depths), max = Math.max(...depths);
@@ -631,12 +642,44 @@ function renderDepthField(cells, surveyId) {
         `<br>${c.off_lo_ft.toFixed(0)}–${c.off_hi_ft.toFixed(0)} ft off quay` +
         `<br>${c.point_count ?? "—"} soundings`
       )
-      .bindTooltip(elev.toFixed(0), {
-        permanent: true, direction: "center", className: "depth-elev",
-      })
       .addTo(depthLayer);
+    const lat = (ring[0][0] + ring[1][0] + ring[2][0] + ring[3][0]) / 4;
+    const lon = (ring[0][1] + ring[1][1] + ring[2][1] + ring[3][1]) / 4;
+    depthCells.push({ latlng: L.latLng(lat, lon), depth: c.controlling_depth_ft, elev });
   }
+  renderDepthLabels();
   updateDepthLegend({ min, max }, surveyId, true);
+}
+
+// Thin the bed-elevation numbers so they never crowd into an unreadable grid:
+// place greedily with a minimum pixel gap, SHALLOWEST cells first (the
+// navigationally critical numbers win the scarce space). Re-run on zoom — more
+// numbers surface as you zoom in, fewer as you zoom out — reading the current
+// zoom straight out of the projected pixel spacing, so there are no zoom-level
+// thresholds to tune.
+const DEPTH_LABEL_MIN_PX = 32;
+function renderDepthLabels() {
+  depthLabelLayer.clearLayers();
+  if (!depthCells.length || !map.hasLayer(depthLayer)) return;
+  const placed = [];
+  const ordered = depthCells.slice().sort((a, b) => a.depth - b.depth); // shallow first
+  for (const c of ordered) {
+    const pt = map.latLngToLayerPoint(c.latlng);
+    let clear = true;
+    for (const p of placed) {
+      if (Math.abs(p.x - pt.x) < DEPTH_LABEL_MIN_PX &&
+          Math.abs(p.y - pt.y) < DEPTH_LABEL_MIN_PX) { clear = false; break; }
+    }
+    if (!clear) continue;
+    placed.push(pt);
+    L.marker(c.latlng, {
+      interactive: false, keyboard: false,
+      icon: L.divIcon({
+        className: "depth-elev-label", html: String(Math.round(c.elev)),
+        iconSize: [30, 12], iconAnchor: [15, 6],
+      }),
+    }).addTo(depthLabelLayer);
+  }
 }
 
 // Legacy flat bands: one controlling depth per station (no cross-section data).
@@ -662,13 +705,21 @@ function renderDepthBands(bins, surveyId) {
 }
 
 // Render on toggle-on (the layer is emptied while hidden); show/hide the legend
-// with it.
+// and the (separate) label layer with it, and re-thin the labels on every zoom.
 map.on("overlayadd", (e) => {
-  if (e.layer === depthLayer) { depthLegend._div.style.display = ""; loadDepthOverlay(); }
+  if (e.layer === depthLayer) {
+    depthLegend._div.style.display = "";
+    depthLabelLayer.addTo(map);
+    loadDepthOverlay();
+  }
 });
 map.on("overlayremove", (e) => {
-  if (e.layer === depthLayer) depthLegend._div.style.display = "none";
+  if (e.layer === depthLayer) {
+    depthLegend._div.style.display = "none";
+    map.removeLayer(depthLabelLayer);
+  }
 });
+map.on("zoomend", () => { if (map.hasLayer(depthLayer)) renderDepthLabels(); });
 // ===== /CONTROLLING-DEPTH OVERLAY ==============================================
 
 // ===== FEASIBILITY OVERLAY =====================================================
