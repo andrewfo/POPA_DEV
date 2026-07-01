@@ -6,8 +6,9 @@ import { showShipHover, hideShipHover } from "./history.js";
 // --- Status / stats --------------------------------------------------------
 export function setStatus(ok, text) {
   const dot = document.getElementById("statusDot");
-  dot.className = "dot " + (ok ? "ok" : "down");
-  document.getElementById("statusText").textContent = (text || "").toUpperCase();
+  if (dot) dot.className = "dot " + (ok ? "ok" : "down");
+  const txt = document.getElementById("statusText");
+  if (txt) txt.textContent = (text || "").toUpperCase();
   const badge = document.getElementById("statusBadge");
   if (badge) badge.className = "badge " + (ok ? "ok" : "down");
   const fs = document.getElementById("footSys");
@@ -59,7 +60,7 @@ export async function loadStats() {
 // coloured by the health the server derives from each worker's last heartbeat
 // (GET /workers). Abbreviated name on the chip; full label + age + last-batch
 // detail in the tooltip.
-const WK_ABBR = { ais: "AIS", occupancy: "OCC", "intake-dataverse": "AI" };
+const WK_ABBR = { ais: "AIS", occupancy: "OCC", "intake-dataverse": "INT" };
 function fmtAge(s) {
   if (s == null) return "no heartbeat";
   if (s < 90) return `${Math.round(s)}s ago`;
