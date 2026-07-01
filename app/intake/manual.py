@@ -578,6 +578,28 @@ def _override_note(diffs: list[tuple[str, float, float]]) -> str:
     return f"[AIS override] entered {parts}; AIS values kept (authoritative)."
 
 
+def _apply_ais_overrides(session: Session, req: NormalizedRequest) -> bool:
+    """Record any AIS override this request carries, and report whether its IMO
+    resolves to an **AIS-tracked** vessel (has MMSI).
+
+    An AIS-tracked ship's dimensions are authoritative, so an entered draft/LOA/
+    beam that differs is dropped — the vessel row is NULL-filled, **never**
+    overwritten, on BOTH the create and edit paths, so AIS overrides are 100%
+    persistent (an edit no longer clobbers them). Make that apparent, not silent:
+    warn the operator now AND stamp the discrepancy onto the reservation's notes,
+    so it shows on the request card and in History (the entered value also stays
+    verbatim in ``intake_event.raw``).
+
+    Returns True iff the IMO is on file for an AIS-tracked vessel; the caller
+    passes ``overwrite=not <this>`` to ``_upsert_vessel`` so AIS dims survive."""
+    name, diffs = _ais_overrides(session, req)
+    if diffs:
+        req.warnings.extend(_override_warnings(name, diffs))
+        note = _override_note(diffs)
+        req.notes = f"{req.notes}\n{note}" if req.notes else note
+    return name is not None
+
+
 def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     """Land a manual berth request: ``intake_event`` (raw, deduped) + a
     ``requested`` reservation (+ vessel upsert), all in one transaction. Does
@@ -612,15 +634,9 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     #    leaves no orphan audit row.
     overwrite_vessel = _resolve_imo_vessel(session, req)
     # An AIS-tracked ship's dimensions are authoritative, so an entered draft/LOA/
-    # beam that differs is dropped. Make that apparent, not silent: warn the
-    # operator now AND stamp the discrepancy onto the reservation's notes, so it
-    # shows on the request card and in History (the entered value also stays
-    # verbatim in intake_event.raw).
-    _ov_name, _ov_diffs = _ais_overrides(session, req)
-    if _ov_diffs:
-        req.warnings.extend(_override_warnings(_ov_name, _ov_diffs))
-        _ov_note = _override_note(_ov_diffs)
-        req.notes = f"{req.notes}\n{_ov_note}" if req.notes else _ov_note
+    # beam that differs is dropped. Record that (warn + durable note) so it isn't
+    # silent (the "I set 20 ft but it shows 30 ft" case).
+    _apply_ais_overrides(session, req)
 
     # 1. Land the raw request. ON CONFLICT DO NOTHING on the content hash makes a
     #    duplicate submission a no-op; if nothing lands, don't create a second
@@ -815,12 +831,18 @@ def update_manual_request(
         .values(source=req.source, raw=req.raw, dedupe_key=key)
     )
 
-    # An explicit operator edit is authoritative: a value the operator supplies
-    # (e.g. a corrected name or LOA) overwrites the vessel row, so the change
-    # propagates to the reservation view — unlike the NULL-fill-only create path.
-    vessel_id = _upsert_vessel(session, req, overwrite=True)
-    # An authoritative LOA edit must re-derive any already-placed footprint, so
-    # the map stops drawing the length captured at placement time.
+    # An explicit operator edit is authoritative for a MANUAL vessel: a supplied
+    # name/LOA/dims overwrites the row so the change reaches the reservation view.
+    # But an AIS-tracked ship (has MMSI) keeps its dimensions authoritative even
+    # through an edit — AIS overrides are 100% persistent — so we NULL-fill it and
+    # record the override, exactly as the create path does. (Overwriting here only
+    # dropped the AIS value until the next ShipStaticData reverted it — a silent,
+    # transient loss; now the AIS dims stand.)
+    ais_tracked = _apply_ais_overrides(session, req)
+    vessel_id = _upsert_vessel(session, req, overwrite=not ais_tracked)
+    # A corrected LOA (manual vessel) must re-derive any already-placed footprint,
+    # so the map stops drawing the length captured at placement time. For an
+    # AIS-tracked vessel the LOA is unchanged, so this is a harmless no-op.
     _reproject_placements(session, vessel_id)
     reservation_id = existing.reservation_id
 

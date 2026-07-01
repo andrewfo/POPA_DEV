@@ -283,6 +283,35 @@ def test_edit_overwrites_raw_and_reprojects_reservation(db_session):
     assert float(v.draft) == round(33.0 / FEET_PER_M, 2)
 
 
+def test_edit_preserves_ais_vessel_dims_and_records_override(db_session):
+    # AIS overrides are 100% persistent — an EDIT (not just a create) must keep an
+    # AIS-tracked ship's dimensions authoritative, instead of clobbering them.
+    # Seed the AIS ship (MMSI + a real 9.1 m draft), request it, then edit with a
+    # different draft.
+    db_session.execute(text(
+        "INSERT INTO vessel (mmsi, imo, name, draft) "
+        "VALUES (565440222, 9995557, 'AIS EDIT SHIP', 9.1)"
+    ))
+    out = record_manual_request(
+        db_session, _form(vessel="AIS EDIT SHIP", imo=9995557, draft_ft=20.0),
+    )
+    edited = update_manual_request(
+        db_session,
+        out["intake_event_id"],
+        _form(vessel="AIS EDIT SHIP", imo=9995557, draft_ft=25.0,
+              inbound_cargo="grain"),
+    )
+    # The stored draft is still the AIS value — the edit did NOT overwrite it.
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9995557)).scalar_one()
+    assert float(v.draft) == 9.1
+    # And the override is recorded on the edit, not silently swallowed.
+    assert any("not applied" in w and "AIS-tracked" in w for w in edited["warnings"])
+    res = db_session.execute(
+        select(Reservation).where(Reservation.id == out["reservation_id"])
+    ).scalar_one()
+    assert "[AIS override]" in res.notes
+
+
 def test_ais_tracked_vessel_warns_that_entered_draft_is_overridden(db_session):
     # An AIS-tracked ship (has MMSI) owns its dimensions: a request keeps AIS's
     # draft, so an operator's entered draft is dropped — and we say so. Seed the

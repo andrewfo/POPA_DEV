@@ -554,7 +554,9 @@ function isValidImo(imo) {
   // Pre-fill the form from a raw manual-request payload and switch to edit mode.
   // Raw keys mirror the form's field names (set by BerthRequestForm.model_dump),
   // so we can drive inputs directly; datetime-local wants "YYYY-MM-DDTHH:MM".
-  editBerthRequest = function (id, raw) {
+  // `vessel` (when present) carries the linked vessel's *effective* dimensions in
+  // feet; for an AIS-tracked ship those override the typed entry (see below).
+  editBerthRequest = function (id, raw, vessel) {
     resetForm();
     for (const el of form.elements) {
       if (!el.name || !(el.name in raw)) continue;
@@ -563,11 +565,27 @@ function isValidImo(imo) {
       else if (el.type === "datetime-local") el.value = v ? String(v).slice(0, 16) : "";
       else el.value = v == null ? "" : v;
     }
+    // For an AIS-tracked vessel, AIS dimensions are authoritative and persist
+    // through the edit — the entry's typed dims were never applied. Show the
+    // effective AIS value (only where AIS actually has one), not the original
+    // entry, so the form reflects what's really in force. A dim AIS lacks keeps
+    // the operator's typed value (that one does apply).
+    let aisNote = "";
+    if (vessel && vessel.ais_tracked) {
+      const shown = [];
+      for (const [name, ft] of [["length_ft", vessel.loa_ft], ["beam_ft", vessel.beam_ft], ["draft_ft", vessel.draft_ft]]) {
+        const el = form.elements[name];
+        if (ft == null || !el) continue;
+        el.value = ft;
+        shown.push(`${name.replace("_ft", "")} ${ft} ft`);
+      }
+      if (shown.length) aisNote = ` AIS-authoritative dimensions shown (${shown.join(", ")}); edits to these won't apply — correct them at the AIS source.`;
+    }
     setMode(id);
     document.getElementById("intakePanel").open = true;
     form.scrollIntoView({ behavior: "smooth", block: "nearest" });
     result.className = "result";
-    result.textContent = `Editing berth request #${id}.`;
+    result.textContent = `Editing berth request #${id}.` + aisNote;
   };
 
   form.addEventListener("submit", async (e) => {
@@ -698,7 +716,7 @@ export async function loadBerthRequests() {
     if (editBtn) {
       const id = Number(editBtn.dataset.editReq);
       const row = _berthRequestRows.find((r) => r.id === id);
-      if (row) editBerthRequest(id, row.raw || {});
+      if (row) editBerthRequest(id, row.raw || {}, row.vessel || null);
       return;
     }
     const delBtn = e.target.closest("[data-delete-req]");

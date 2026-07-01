@@ -498,13 +498,23 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   duplicate. It is restricted to manual channels (`phone|email|operator`); any
   legacy online-form row stays immutable, and the edit leaves the reservation's
   berth/`station_range`, direction, and `status` alone (the request governs
-  vessel/time/cargo only, with one exception below). Unlike the **create** path
-  for an **AIS-tracked vessel** (one with an MMSI — there the create only
-  NULL-fills, keeping AIS dims authoritative), an **edit is authoritative for the
-  vessel record**: a provided name/LOA/beam/draft overwrites
+  vessel/time/cargo only, with one exception below). An **edit is authoritative
+  for a MANUAL vessel** (no MMSI): a provided name/LOA/beam/draft overwrites
   (`_upsert_vessel(..., overwrite=True)`, `COALESCE(new, existing)`) so a
   correction reaches the reservations view — but a field left blank never wipes a
-  stored dimension. **One IMO = one ship is enforced on the create path**
+  stored dimension. For an **AIS-tracked vessel** (has MMSI) an edit is **NOT**
+  authoritative over dimensions: exactly like the create path it only NULL-fills
+  (`overwrite=False`), so **AIS overrides are 100% persistent** — an edit can no
+  longer clobber a live AIS dimension (it only lost the AIS value until the next
+  `ShipStaticData` reverted it — a silent, transient loss). Both paths run the one
+  `_apply_ais_overrides` helper, which decides AIS-tracked-ness and records the
+  override (warning + durable `[AIS override]` note). Correspondingly, the
+  berth-request **edit form prefills the effective AIS dimensions**, not the
+  operator's original typed entry: `GET /intake/berth-requests` now returns each
+  request's linked vessel dims in feet + an `ais_tracked` flag
+  (`_vessel_dims`), and the edit UI shows those (with a "won't apply — correct at
+  the AIS source" hint) so the form reflects what actually governs. **One IMO =
+  one ship is enforced on the create path**
   (`_resolve_imo_vessel`): a new request whose IMO is already on file under a
   *different* ship name is **refused** (`ValueError` → 422, pre-landing so no
   orphan audit row) rather than silently merging and renaming the existing ship
@@ -512,13 +522,13 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   When the IMO resolves to the **same** ship (stored name matches, or either
   side is unnamed), a **manual-only vessel** (no MMSI) is overwritten so a
   re-submitted corrected LOA/dims takes effect, while an **AIS-tracked vessel**
-  (has MMSI) still only NULL-fills (its dimensions stay authoritative — the AIS
-  ingestor keeps overwriting them by MMSI on every `ShipStaticData`). Because that
-  silently drops an operator's typed dimension, `record_manual_request`
-  **surfaces a warning** (`_ais_override_warnings`) naming the entered value vs the
-  authoritative AIS one (in feet) when a request's draft/LOA/beam differs from an
-  MMSI-keyed vessel's stored value — so "I set 20 ft but it shows 30 ft" isn't a
-  silent surprise. Whenever
+  (has MMSI) still only NULL-fills on **both create and edit** (its dimensions
+  stay authoritative — the AIS ingestor keeps overwriting them by MMSI on every
+  `ShipStaticData`). Because that silently drops an operator's typed dimension,
+  both paths **surface a warning** (`_apply_ais_overrides` → `_override_warnings`)
+  naming the entered value vs the authoritative AIS one (in feet) when a request's
+  draft/LOA/beam differs from an MMSI-keyed vessel's stored value — so "I set 20 ft
+  but it shows 30 ft" isn't a silent surprise. Whenever
   a request's LOA reaches the vessel (create or edit), `_reproject_placements`
   re-derives any **bow-placed, planned** reservation's `station_range` from the
   new LOA holding the bow fixed (berth-assigned, unplaced, un-oriented, and

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.intake.manual import (
+    FEET_PER_M,
     BerthRequestForm,
     delete_manual_request,
     record_manual_request,
@@ -127,9 +128,12 @@ def list_berth_requests(
             """
             SELECT e.id, e.source, e.received_at, e.processed,
                    e.reservation_id, e.raw, e.deleted_at,
-                   r.status AS reservation_status
+                   r.status AS reservation_status,
+                   v.id AS vessel_id, v.mmsi AS vessel_mmsi,
+                   v.loa AS vessel_loa, v.beam AS vessel_beam, v.draft AS vessel_draft
             FROM intake_event e
             LEFT JOIN reservation r ON r.id = e.reservation_id
+            LEFT JOIN vessel v ON v.id = r.vessel_id
             WHERE (:include_deleted OR e.deleted_at IS NULL)
             ORDER BY e.received_at DESC
             LIMIT :limit
@@ -147,6 +151,30 @@ def list_berth_requests(
             "reservation_status": r.reservation_status,
             "raw": r.raw,
             "deleted_at": r.deleted_at.isoformat() if r.deleted_at else None,
+            # The linked vessel's *effective* (stored) dimensions, in feet. For an
+            # AIS-tracked ship (has MMSI) these are the AIS-authoritative values —
+            # what actually governs, not the operator's original typed entry that
+            # AIS overrode — so the edit form can prefill reality rather than the
+            # dropped entry. NULL when the request never projected a vessel.
+            "vessel": _vessel_dims(r),
         }
         for r in rows
     ]
+
+
+def _vessel_dims(r) -> dict | None:
+    """The linked vessel's stored dimensions as feet + whether it's AIS-tracked,
+    for the berth-request edit prefill. Store is metres; convert to feet here so
+    the UI (which works in feet) needs no conversion."""
+    if r.vessel_id is None:
+        return None
+
+    def to_ft(m) -> float | None:
+        return round(float(m) * FEET_PER_M, 1) if m is not None else None
+
+    return {
+        "ais_tracked": r.vessel_mmsi is not None,
+        "loa_ft": to_ft(r.vessel_loa),
+        "beam_ft": to_ft(r.vessel_beam),
+        "draft_ft": to_ft(r.vessel_draft),
+    }
