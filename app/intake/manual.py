@@ -519,6 +519,46 @@ def _resolve_imo_vessel(session: Session, req: NormalizedRequest) -> bool:
     return existing.mmsi is None
 
 
+def _ais_override_warnings(session: Session, req: NormalizedRequest) -> list[str]:
+    """Flag manually-entered dimensions that WON'T stick because the IMO resolves
+    to an **AIS-tracked** vessel (one with an MMSI).
+
+    AIS is authoritative for such a ship's dimensions: the create only NULL-fills
+    (``_resolve_imo_vessel`` -> ``overwrite=False``), and the AIS ingestor keeps
+    overwriting them on every ``ShipStaticData`` (``COALESCE(new, existing)``). So
+    a draft/LOA/beam an operator types that differs from the stored AIS value is
+    silently ignored — surface that instead of leaving them to discover it (this is
+    the "I set 20 ft but it shows 30 ft" case). Values are compared in metres (the
+    store) and reported in feet (what the form takes)."""
+    if req.imo is None:
+        return []
+    row = session.execute(
+        select(Vessel.name, Vessel.mmsi, Vessel.loa, Vessel.beam, Vessel.draft)
+        .where(Vessel.imo == req.imo)
+        .limit(1)
+    ).first()
+    if row is None or row.mmsi is None:
+        return []  # a new IMO or a manual-only ship — the entered value applies
+    name = row.name or f"IMO {req.imo}"
+    warnings: list[str] = []
+    for label, provided_m, stored in (
+        ("Draft", req.draft_m, row.draft),
+        ("LOA", req.loa_m, row.loa),
+        ("Beam", req.beam_m, row.beam),
+    ):
+        if provided_m is None or stored is None:
+            continue
+        if abs(float(provided_m) - float(stored)) < 0.05:
+            continue  # they entered ~the AIS value; nothing was overridden
+        warnings.append(
+            f"{label} {float(provided_m) * FEET_PER_M:.1f} ft not applied — "
+            f"{name} is AIS-tracked, so AIS stays authoritative for its dimensions "
+            f"({float(stored) * FEET_PER_M:.1f} ft). Correct it at the AIS source, "
+            f"not here — the live feed overwrites manual dimensions."
+        )
+    return warnings
+
+
 def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     """Land a manual berth request: ``intake_event`` (raw, deduped) + a
     ``requested`` reservation (+ vessel upsert), all in one transaction. Does
@@ -552,6 +592,9 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     #    ours to overwrite. Raised here, pre-landing, so a rejected request
     #    leaves no orphan audit row.
     overwrite_vessel = _resolve_imo_vessel(session, req)
+    # Tell the operator up front if any entered dimension won't stick because the
+    # ship is AIS-tracked (AIS dimensions are authoritative — see the helper).
+    req.warnings.extend(_ais_override_warnings(session, req))
 
     # 1. Land the raw request. ON CONFLICT DO NOTHING on the content hash makes a
     #    duplicate submission a no-op; if nothing lands, don't create a second

@@ -283,6 +283,35 @@ def test_edit_overwrites_raw_and_reprojects_reservation(db_session):
     assert float(v.draft) == round(33.0 / FEET_PER_M, 2)
 
 
+def test_ais_tracked_vessel_warns_that_entered_draft_is_overridden(db_session):
+    # An AIS-tracked ship (has MMSI) owns its dimensions: a request keeps AIS's
+    # draft, so an operator's entered draft is dropped — and we say so. Seed the
+    # AIS ship first (MMSI + a real 9.1 m draft), then request it with 20 ft.
+    db_session.execute(text(
+        "INSERT INTO vessel (mmsi, imo, name, draft) "
+        "VALUES (565440111, 9990002, 'AIS SHIP', 9.1)"
+    ))
+    out = record_manual_request(
+        db_session,
+        _form(vessel="AIS SHIP", imo=9990002, draft_ft=20.0, beam_ft=None),
+    )
+    warns = " ".join(out["warnings"])
+    assert "not applied" in warns and "AIS-tracked" in warns
+    assert "20.0 ft" in warns and "29.9 ft" in warns   # entered vs authoritative
+    # And the stored draft is unchanged (NULL-fill kept the AIS value).
+    v = db_session.execute(select(Vessel).where(Vessel.imo == 9990002)).scalar_one()
+    assert float(v.draft) == 9.1
+
+
+def test_manual_only_vessel_does_not_warn_about_override(db_session):
+    # A ship with no MMSI is the operator's to define — the entered draft applies,
+    # so no override warning.
+    out = record_manual_request(
+        db_session, _form(imo=9990014, draft_ft=20.0),
+    )
+    assert not any("not applied" in w for w in out["warnings"])
+
+
 def test_edit_propagates_vessel_name_and_loa(db_session):
     # Bug #2: changing the name / LOA on a berth request must reach the vessel
     # row (and therefore the reservations view), even though a vessel already
