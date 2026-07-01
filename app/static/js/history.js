@@ -1,7 +1,7 @@
 // History tab + ship-detail hover dossier. /history returns the booking log
 // (every status, observed berthings included), newest arrival first.
 import {
-  api, esc, fmtCentral, FT_PER_M, RES_STATUS_COLOR, BADGE_COLORS, shipTypeLabel, NAV_STATUS,
+  api, esc, fmtCentral, FT_PER_M, RES_STATUS_COLOR, BADGE_COLORS, shipTypeLabel, isTugType, NAV_STATUS,
 } from "./api.js";
 
 function histCard(h) {
@@ -166,6 +166,16 @@ function renderShipDetail(v) {
     kvRow("Beam", mFt(v.beam)),
     kvRow("Draft", mFt(v.draft)),
   ].join("");
+  // Towing vessels program their AIS dimensions to describe the whole pushed/
+  // pulled tow (tug + barge string), not the tug hull — so the LOA here (and the
+  // to-scale outline drawn from it) can read hundreds of feet for a ~150 ft tug.
+  // That's faithful to what AIS transmits, not a conversion error; flag it so an
+  // operator reading the dossier doesn't mistake the tow envelope for the hull.
+  const tugNote = isTugType(v.ship_type)
+    ? `<div class="dossier-note">Towing vessel — the AIS LOA describes the full tug + tow
+       (barge string), so it may read far longer than the tug hull itself. The outline
+       reflects the transmitted tow envelope, not a measurement error.</div>`
+    : "";
   const p = v.latest_position;
   // Always show the AIS section so its absence reads as "no contact" rather than
   // a missing panel — a manual / non-AIS-tracked ship simply has no fix on record.
@@ -186,7 +196,7 @@ function renderShipDetail(v) {
       ${sub ? `<div class="dossier-sub">${sub}</div>` : ""}
     </div>
     <div class="dossier-body">
-      ${dims ? `<h3>Dimensions</h3><div class="kv">${dims}</div>` : ""}
+      ${dims ? `<h3>Dimensions</h3><div class="kv">${dims}</div>${tugNote}` : ""}
       ${ident ? `<h3>Identity</h3><div class="kv">${ident}</div>` : ""}
       ${aisSection}
       <h3>Reservations (${res.length})</h3>
