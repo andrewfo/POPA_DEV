@@ -36,10 +36,11 @@ def _t(day, hour=0):
 
 def _seed_wharf(session) -> tuple[float, float]:
     """Pin a single wharf segment spanning POPA [0, 4000] (Dock No. = 3365 - POPA,
-    the canonical default). Returns the extent. Also neutralizes any dev-seeded
-    depth survey so depth state is whatever the test seeds (or none) — all inside
-    the rolled-back transaction."""
+    the canonical default). Returns the extent. Also clears any dev-seeded berth
+    catalog and neutralizes dev-seeded depth surveys, so berth/depth state is
+    whatever the test seeds (or none) — all inside the rolled-back transaction."""
     session.execute(text("DELETE FROM wharf_segment"))
+    session.execute(text("DELETE FROM berth"))
     session.execute(text("UPDATE depth_survey SET active = false"))
     session.execute(
         text(
@@ -155,12 +156,23 @@ def test_observed_is_advisory_not_blocking(client, db_session):
     assert any(o["reservation_id"] == obs for o in payload["observed"])
 
 
-def test_requested_placement_is_ignored(client, db_session):
-    # A (rare) requested row carrying a station range is not a firm plan; it must
-    # not remove space.
+def test_placed_requested_row_blocks(client, db_session):
+    # A requested row that carries a placement (e.g. one an operator unconfirmed —
+    # it keeps its range) is a real intended spot; a candidate must not be offered
+    # on top of it.
     _seed_wharf(db_session)
     rid = _subject(db_session)
     _reservation(db_session, lo=1000, hi=1200, t_start=_t(10), t_end=_t(14),
+                 status="requested")
+    payload = client.get(f"/feasibility?reservation_id={rid}").json()
+    assert all(not _overlaps(b, 925, 1275) for b in payload["bands"])
+
+
+def test_unplaced_request_does_not_block(client, db_session):
+    # An unassigned request (empty station range) has nothing to avoid.
+    _seed_wharf(db_session)
+    rid = _subject(db_session)
+    _reservation(db_session, lo=None, hi=None, t_start=_t(10), t_end=_t(14),
                  status="requested")
     payload = client.get(f"/feasibility?reservation_id={rid}").json()
     assert _covers(payload, 1100)
@@ -216,6 +228,16 @@ def test_no_survey_reports_unknown_depth(client, db_session):
     assert all(b["depth"]["status"] == "unknown" for b in payload["bands"])
 
 
+def test_payload_surfaces_draft_and_required_depth(client, db_session):
+    # So the UI can explain WHY a berth reads "shallow": draft (ft) + the required
+    # under-keel depth (draft + clearance). Draft is metres-canonical.
+    _seed_wharf(db_session)
+    rid = _subject(db_session, draft_m=6.096)   # ~20.0 ft
+    payload = client.get(f"/feasibility?reservation_id={rid}").json()
+    assert payload["vessel"]["draft_ft"] == pytest.approx(20.0, abs=0.2)
+    assert payload["required_ft"] == pytest.approx(22.0, abs=0.2)   # + 2 ft clearance
+
+
 # --- berth labels ----------------------------------------------------------
 def test_bands_are_annotated_with_covering_berths(client, db_session):
     _seed_wharf(db_session)
@@ -250,6 +272,44 @@ def test_vessel_without_loa_is_422(client, db_session):
     rid = _reservation(db_session, lo=None, hi=None, t_start=_t(10), t_end=_t(14),
                        status="requested", vessel_id=v)
     assert client.get(f"/feasibility?reservation_id={rid}").status_code == 422
+
+
+# --- candidates (discrete berth slots) -------------------------------------
+def test_candidates_are_vessel_sized_and_berth_labeled(client, db_session):
+    _seed_wharf(db_session)
+    db_session.execute(
+        text("INSERT INTO berth (name, popa_sta_start, popa_sta_end) "
+             "VALUES ('Berth Test', 0, 900)")
+    )
+    rid = _subject(db_session, loa_m=30.0)
+    payload = client.get(f"/feasibility?reservation_id={rid}").json()
+    cands = payload["candidates"]
+    assert cands
+    loa_ft = payload["vessel"]["loa_ft"]
+    # Every candidate is exactly the vessel's footprint (not a big free band).
+    for c in cands:
+        assert c["popa_hi"] - c["popa_lo"] == pytest.approx(loa_ft, abs=0.5)
+    # At least one is anchored at the named berth.
+    assert any(c["berth"] == "Berth Test" for c in cands)
+
+
+def test_confirming_a_candidate_places_and_confirms(client, db_session):
+    # The "confirm upon selection" contract: PATCH the reservation with a
+    # candidate's bow + heading + status=confirmed, and it lands placed +
+    # confirmed (no survey -> depth warns, not blocks; the slot avoids obstacles
+    # so no 409).
+    _seed_wharf(db_session)
+    rid = _subject(db_session, loa_m=30.0)
+    payload = client.get(f"/feasibility?reservation_id={rid}").json()
+    c = payload["candidates"][0]
+    patch = {"bow_dock": c["bow_dock"], "direction": c["direction"],
+             "status": "confirmed", "unassigned": False}
+    r = client.patch(f"/reservations/{rid}", json=patch)
+    assert r.status_code == 200, r.text
+    row = next(x for x in client.get("/reservations").json() if x["id"] == rid)
+    assert row["status"] == "confirmed"
+    assert row["station_unassigned"] is False
+    assert row["station_lo"] is not None
 
 
 # --- payload shape ---------------------------------------------------------

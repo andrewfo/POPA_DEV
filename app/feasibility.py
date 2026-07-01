@@ -37,6 +37,10 @@ from app.depth.gate import FEET_PER_M, controlling_depth_over, depth_shortfall
 
 Interval = tuple[float, float]
 
+# Cap the discrete berth options shown in the picker, so a wide-open wharf with a
+# large berth catalog doesn't flood the menu.
+MAX_CANDIDATES = 20
+
 
 # ---------------------------------------------------------------------------
 # Pure interval math — no database
@@ -98,6 +102,53 @@ def placement_range(band: Interval, loa_ft: float) -> Interval:
     return (f0, f1 - loa_ft)
 
 
+def candidate_slots(
+    bands: list[Interval],
+    berths: list[tuple[float, float, str]],
+    loa_ft: float,
+) -> list[tuple[float, str | None]]:
+    """Discrete, vessel-sized placements — the concrete "berths" a Find-berth pick
+    offers, not the raw free bands.
+
+    One slot per named berth the vessel can sit at (its footprint anchored at the
+    berth's low-station end, clamped to stay inside a feasible band and to still
+    overlap that berth), plus a low-end fallback slot for any feasible band no
+    berth covered. Each slot is a low-station start; the footprint is
+    ``[start, start + loa_ft]``. Returns ``[(start, berth_name | None), ...]``
+    sorted low-to-high, de-duplicated by start.
+    """
+    slots: list[tuple[float, str | None]] = []
+    seen: set[float] = set()
+    covered: set[Interval] = set()
+
+    def push(start: float, name: str | None) -> None:
+        key = round(start, 1)
+        if key in seen:
+            return
+        seen.add(key)
+        slots.append((start, name))
+
+    for blo, bhi, name in berths:
+        for flo, fhi in bands:
+            if fhi - flo < loa_ft:
+                continue
+            if not (blo < fhi and flo < bhi):  # berth must overlap this free band
+                continue
+            start = min(max(blo, flo), fhi - loa_ft)
+            if start + loa_ft <= blo or start >= bhi:  # footprint must touch the berth
+                continue
+            push(start, name)
+            covered.add((flo, fhi))
+            break
+
+    for flo, fhi in bands:
+        if (flo, fhi) not in covered:
+            push(flo, None)
+
+    slots.sort(key=lambda s: s[0])
+    return slots
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator — loads the reservation, gathers obstacles, annotates bands
 # ---------------------------------------------------------------------------
@@ -113,15 +164,20 @@ _RESERVATION_SQL = text(
     """
 )
 
-# Confirmed/tentative rows are firm enough to remove space; requested rows carry
-# no placement yet (empty range) and observed rows are advisory only, so neither
-# blocks. Exclude the subject row itself.
+# Any *placed* plan overlapping the window removes space, so a candidate can never
+# be offered on top of another booking's time × station rectangle. That means
+# confirmed + tentative + a requested row that carries a placement (e.g. one an
+# operator unconfirmed — it keeps its range) — anything with a non-empty station
+# range that isn't cancelled/completed. ``observed`` is excluded on purpose: AIS is
+# advisory and approximate, so it never removes space (it rides along as an
+# overlay). An unplaced request (empty range) has nothing to avoid. Exclude the
+# subject row itself.
 _OBSTACLES_SQL = text(
     """
     SELECT lower(r.station_range) AS lo, upper(r.station_range) AS hi
     FROM reservation r
-    WHERE r.status::text IN ('confirmed', 'tentative')
-      AND r.id <> :rid
+    WHERE r.id <> :rid
+      AND r.status::text NOT IN ('cancelled', 'completed', 'observed')
       AND NOT isempty(r.station_range)
       AND r.time_range && tstzrange(:t_from, :t_to, '[)')
     """
@@ -167,6 +223,11 @@ def compute_feasibility(session: Session, reservation_id: int) -> dict | None:
     loa_ft = float(r.loa_m) * FEET_PER_M
     draft_m = float(r.draft_m) if r.draft_m is not None else None
     clearance_ft = get_settings().depth_clearance_ft
+    # Draft + the required under-keel depth, in feet — surfaced so the UI can show
+    # WHY a berth reads "shallow" (draft is stored in metres; a berth clears when
+    # its controlling depth >= draft_ft + clearance). None when draft is unknown.
+    draft_ft = round(draft_m * FEET_PER_M, 1) if draft_m is not None else None
+    required_ft = round(draft_ft + clearance_ft, 1) if draft_ft is not None else None
 
     extent = _wharf_extent(session)
     if extent is None:
@@ -218,6 +279,38 @@ def compute_feasibility(session: Session, reservation_id: int) -> dict | None:
             }
         )
 
+    # Discrete, vessel-sized placements — the concrete berths the "Find berth"
+    # picker offers (each confirms directly), as opposed to the raw free bands
+    # (kept for the map's free-space context). Depth is checked over each slot's
+    # exact footprint, so it's more precise than the band-wide reading above.
+    slot_defs = candidate_slots(
+        bands, [(b["lo"], b["hi"], b["name"]) for b in berths], loa_ft
+    )[:MAX_CANDIDATES]
+    candidates = []
+    for start, berth_name in slot_defs:
+        lo, hi = start, start + loa_ft
+        ctrl, surveyed = controlling_depth_over(session, lo, hi)
+        shortfall = depth_shortfall(ctrl, draft_m, clearance_ft)
+        status = "unknown" if ctrl is None else ("shallow" if shortfall else "ok")
+        candidates.append(
+            {
+                "berth": berth_name,
+                "popa_lo": lo,
+                "popa_hi": hi,
+                "dock_lo": dk(lo),
+                "dock_hi": dk(hi),
+                "length_ft": loa_ft,
+                "bow_dock": dk(_bow_popa(lo, loa_ft, direction)),
+                "direction": direction,
+                "depth": {
+                    "controlling_ft": ctrl,
+                    "surveyed_at": surveyed.isoformat() if surveyed else None,
+                    "shortfall_ft": round(shortfall, 2) if shortfall else None,
+                    "status": status,
+                },
+            }
+        )
+
     observed = [
         {
             "reservation_id": o.id,
@@ -237,14 +330,17 @@ def compute_feasibility(session: Session, reservation_id: int) -> dict | None:
             "imo": r.vessel_imo,
             "loa_ft": round(loa_ft, 1),
             "draft_m": draft_m,
+            "draft_ft": draft_ft,
             "beam_m": float(r.beam_m) if r.beam_m is not None else None,
         },
+        "required_ft": required_ft,
         "window": {
             "t_start": r.t_start.isoformat(),
             "t_end": r.t_end.isoformat(),
         },
         "wharf": {"popa_lo": extent[0], "popa_hi": extent[1]},
         "clearance_ft": clearance_ft,
+        "candidates": candidates,
         "bands": band_rows,
         "observed": observed,
     }

@@ -59,15 +59,23 @@ is a later layer", both user-requested):
     (parse exists; review→commit not).
 - **Feasibility oracle (read-only; first step toward the scheduler §6):**
   `GET /feasibility?reservation_id=` (`app/feasibility.py`,
-  `tests/test_feasibility*.py`) — for one requested vessel + window it computes the
-  station **bands where it can feasibly berth**: clears the 75 ft mooring gap from
-  every `confirmed`/`tentative` row overlapping the window, fits the wharf extent,
-  and carries a depth annotation (`ok`/`shallow`/`unknown`) from the latest survey —
-  the *same* checks the confirm path enforces, so an offered band confirms without a
-  409/422. `observed` AIS rides along as an advisory overlay (approximate ranges
-  never remove space); `requested` rows are ignored. **Proposes, never places** —
-  the operator picks a band (a "Find berth" button on the reservation card paints
-  them on the map and pre-fills the Place + Confirm form). It reuses the depth gate
+  `tests/test_feasibility*.py`) — for one requested vessel + window it returns the
+  **discrete, vessel-sized candidate berths** it can take: the free space (wharf
+  extent minus every *placed* plan overlapping the window, padded by the 75 ft
+  mooring gap) is snapped to the named berth catalog into concrete slots, each a
+  Dock-No. range with a depth reading over its exact footprint. It clears the same
+  gates the confirm path enforces, so a candidate confirms without a 409/422:
+  - **blocks any placed plan** overlapping in time — `confirmed`, `tentative`, and a
+    `requested` row that still carries a placement (e.g. one an operator
+    unconfirmed). `observed` AIS is advisory only (approximate ranges never remove
+    space — it rides along as an overlay); an *unplaced* request (empty range) has
+    nothing to avoid;
+  - **depth** per candidate (`ok`/`shallow`/`unknown`) is the shallowest reading
+    under the *whole hull* vs the vessel's draft + under-keel clearance; the payload
+    surfaces `draft_ft` + `required_ft` so the UI explains *why* a berth is shallow.
+  **Proposes, never places** — a "Find berth" button opens a hover picker of the
+  candidate berths (hover locates one on the map; **click confirms it directly**, a
+  shallow berth prompting for the depth override). Reuses the depth gate
   (`app/depth/gate`), crosswalk, and the mooring gap (a documented
   `conflicts.MOORING_GAP_FT` advisory mirror of migration 0007's `GAP_FT`), adding
   no new schema. This is the eventual OR-Tools solver's feasible-position primitive,

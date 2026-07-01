@@ -160,11 +160,14 @@ No scheduling optimizer / auto-assignment (OR-Tools comes much later). The
 deliverable is a conflict-safe data layer populated from live AIS. Its first,
 non-optimizing step now exists as a **read-only feasibility oracle**
 (`app/feasibility.py`, `GET /feasibility?reservation_id=`): for one requested
-vessel + window it computes the station bands where it can berth — clearing the
-mooring gap from `confirmed`/`tentative` rows, fitting the wharf, depth-annotated —
-mirroring the confirm-path gates so an offered band confirms without a 409/422. It
-**proposes, never places** (the operator confirms via the form), like AIS
-verification and the AI intake channel; the optimizer proper stays out of scope.
+vessel + window it returns the **discrete, vessel-sized candidate berths** it can
+take — free space (wharf extent minus every *placed* plan overlapping the window,
+padded by the mooring gap) snapped to the named berth catalog, each depth-checked
+over its exact footprint against draft + clearance. It mirrors the confirm-path
+gates so a candidate confirms without a 409/422. It **proposes, never places**: a
+"Find berth" hover picker lets the operator pick a berth and confirm it directly
+(like AIS verification and the AI intake channel). The optimizer proper stays out
+of scope.
 
 Note: items the original plan deferred have been pulled forward at the user's
 request and now exist — a **read-only UI**, berth-request intake **capture**
@@ -334,8 +337,10 @@ app/
                        #   also MOORING_GAP_FT — advisory mirror of migration 0007's GAP_FT (the
                        #   constraint stays source of truth), read by feasibility.py
   feasibility.py       # feasibility oracle (GET /feasibility) — read-only berth advisor toward
-                       #   the scheduler: free bands (extent − confirmed/tentative padded by the
-                       #   gap) that fit LOA, depth-annotated; proposes, never places
+                       #   the scheduler: discrete vessel-sized candidate berths (free space −
+                       #   any placed plan, padded by the gap; snapped to the berth catalog),
+                       #   depth-checked per footprint; proposes, never places (hover picker
+                       #   confirms on select)
   shiptypes.py         # AIS service-craft set (tug/towing/pilot) shared by the live-panel
                        #   filters (conflicts + verification unplanned); mirrors the UI's
                        #   shipTypeCategory buckets (static/js/api.js); 33 (dredger) NEVER in it

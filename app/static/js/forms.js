@@ -6,7 +6,10 @@ import {
   centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, BADGE_COLORS,
 } from "./api.js";
 import { state } from "./state.js";
-import { locateVesselOnMap, loadPositions, renderFeasibility, clearFeasibility } from "./map.js";
+import {
+  locateVesselOnMap, loadPositions,
+  renderFeasibility, clearFeasibility, highlightFeasSlot, clearFeasHighlight,
+} from "./map.js";
 import { loadTimeline } from "./timeline.js";
 import { loadStats, loadConflicts, loadVerification } from "./panels.js";
 import { loadHistory } from "./history.js";
@@ -203,7 +206,6 @@ function resCard(r) {
         ${r.status === "confirmed" ? '<button class="btn-sm" data-act="unconfirm">Unconfirm</button>' : ""}
         ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
       </div>
-      <div class="feas-list" data-feas hidden></div>
       <form class="edit-form" data-edit-request>
         <fieldset>
           <legend>Berth request</legend>
@@ -252,56 +254,113 @@ function resCard(r) {
     </div>`;
 }
 
-// Render the oracle's feasible bands into a card's [data-feas] panel. Each band is
-// a clickable row that pre-fills the placement form (bow Dock No. + heading) so the
-// operator can Place + Confirm in one more step. Depth-shallow bands are shown (the
-// gate blocks them only on confirm, overridably), tinted amber.
-function renderBands(container, payload, form) {
-  const bands = payload.bands || [];
+// The Find-berth hover picker: a floating window of the concrete, vessel-sized
+// candidate berths the oracle returned. One picker at a time (opening a new one
+// closes the old). Hovering a row highlights that berth on the map; clicking it
+// CONFIRMS the placement straight away.
+let closeFeasPicker = null;
+
+function openFeasPicker(anchorBtn, resId, payload) {
+  if (closeFeasPicker) closeFeasPicker();
+  const cands = payload.candidates || [];
   const obsN = (payload.observed || []).length;
-  const dockRange = (b) => `Dock ${Math.round(Math.min(b.dock_lo, b.dock_hi))}–${Math.round(Math.max(b.dock_lo, b.dock_hi))}`;
+  const v = payload.vessel || {};
+  const requiredFt = payload.required_ft;   // draft + under-keel clearance, ft
+  const dockRange = (c) => `Dock ${Math.round(Math.min(c.dock_lo, c.dock_hi))}–${Math.round(Math.max(c.dock_lo, c.dock_hi))}`;
+  // Chip shows the actual controlling depth (the shallowest reading under the
+  // whole hull), so "shallow" is never a bare label — the operator sees the ft.
   const depthChip = (d) => {
-    if (d.status === "ok") return '<span class="feas-chip ok">depth OK</span>';
-    if (d.status === "shallow") return `<span class="feas-chip warn">shallow ${d.shortfall_ft ? "−" + d.shortfall_ft.toFixed(1) + " ft" : ""}</span>`;
-    return '<span class="feas-chip warn">no survey</span>';
+    if (d.controlling_ft == null) return '<span class="feas-chip warn">no survey</span>';
+    const ft = `${d.controlling_ft.toFixed(0)} ft`;
+    return d.status === "ok"
+      ? `<span class="feas-chip ok">${ft} deep</span>`
+      : `<span class="feas-chip warn" title="shallowest under the hull">${ft} · too shallow</span>`;
   };
-  const head =
-    `<div class="feas-head">Feasible berths for <b>${esc(payload.vessel.name || "vessel")}</b>` +
-    ` (LOA ${Math.round(payload.vessel.loa_ft)} ft)` +
-    ` <button type="button" class="btn-sm" data-act="feas-hide">Hide</button></div>`;
-  if (!bands.length) {
-    container.innerHTML = head +
-      '<div class="hint" style="margin:4px 0">No open stretch fits this vessel in its window — every berth is taken or too short.' +
-      (obsN ? ` ${obsN} vessel${obsN > 1 ? "s" : ""} observed alongside now (advisory).` : "") + "</div>";
-  } else {
-    const rows = bands.map((b) =>
-      `<button type="button" class="feas-band ${b.depth.status === "ok" ? "ok" : "warn"}"` +
-      ` data-bow="${b.bow_dock}" data-dir="${esc(b.direction)}">` +
-      `<span class="feas-where">${dockRange(b)}</span>` +
-      `<span class="feas-len">${Math.round(b.length_ft)} ft${b.berths.length ? " · " + esc(b.berths.join(", ")) : ""}</span>` +
-      depthChip(b.depth) + `</button>`
-    ).join("");
-    container.innerHTML = head +
-      `<div class="hint" style="margin:4px 0">${bands.length} spot${bands.length > 1 ? "s" : ""} fit · click one to place${obsN ? ` · ${obsN} observed nearby (dashed)` : ""}</div>` +
-      `<div class="feas-bands">${rows}</div>`;
-  }
-  container.querySelector('[data-act="feas-hide"]').addEventListener("click", () => {
-    container.hidden = true;
+
+  const pop = document.createElement("div");
+  pop.className = "feas-pop";
+  const rows = cands.map((c, i) =>
+    `<button type="button" class="feas-cand ${c.depth.status === "ok" ? "ok" : "warn"}" data-i="${i}">` +
+    `<span class="feas-berth">${c.berth ? esc(c.berth) : "Open berth"}</span>` +
+    `<span class="feas-where">${dockRange(c)}</span>` +
+    depthChip(c.depth) + `</button>`
+  ).join("");
+  // Header spells out draft + the depth the vessel needs, so a "too shallow"
+  // berth is self-explanatory (draft is metres-canonical; shown here in ft).
+  const draftBit = v.draft_ft != null
+    ? ` · draft ${Math.round(v.draft_ft)} ft${requiredFt != null ? ` <span class="feas-need">needs ${Math.round(requiredFt)} ft</span>` : ""}`
+    : "";
+  pop.innerHTML =
+    `<div class="feas-pop-head"><b>${esc(v.name || "vessel")}</b> · LOA ${Math.round(v.loa_ft)} ft${draftBit}` +
+    `<button type="button" class="feas-pop-x" title="Close">×</button></div>` +
+    (cands.length
+      ? `<div class="feas-pop-hint">${cands.length} berth${cands.length > 1 ? "s" : ""} clear of other bookings · hover to locate · click to confirm. Depth = shallowest under the full hull.${obsN ? ` ${obsN} observed nearby.` : ""}</div>` +
+        `<div class="feas-cands">${rows}</div>`
+      : `<div class="feas-pop-hint">No berth fits this vessel in its window — every spot is booked or too short.${obsN ? ` ${obsN} observed alongside now.` : ""}</div>`) +
+    `<div class="feas-pop-result"></div>`;
+  document.body.appendChild(pop);
+
+  // Anchor under the button, kept within the viewport.
+  const r = anchorBtn.getBoundingClientRect();
+  pop.style.top = `${Math.round(r.bottom + 6)}px`;
+  pop.style.left = `${Math.round(Math.min(r.left, window.innerWidth - pop.offsetWidth - 10))}px`;
+
+  const result = pop.querySelector(".feas-pop-result");
+  let done = false;
+  const close = () => {
+    if (done) return;
+    done = true;
+    document.removeEventListener("mousedown", onOutside, true);
+    document.removeEventListener("keydown", onKey, true);
+    pop.remove();
     clearFeasibility();
+    if (closeFeasPicker === close) closeFeasPicker = null;
+  };
+  closeFeasPicker = close;
+  const onOutside = (e) => { if (!pop.contains(e.target) && e.target !== anchorBtn) close(); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  // Defer so the click that opened the picker doesn't immediately close it.
+  setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+  document.addEventListener("keydown", onKey, true);
+  pop.querySelector(".feas-pop-x").addEventListener("click", close);
+
+  pop.querySelectorAll(".feas-cand").forEach((btn) => {
+    const c = cands[Number(btn.dataset.i)];
+    btn.addEventListener("mouseenter", () => highlightFeasSlot(c.popa_lo, c.popa_hi));
+    btn.addEventListener("mouseleave", () => clearFeasHighlight());
+    btn.addEventListener("click", () => confirmCandidate(resId, c, requiredFt, result, close));
   });
-  container.querySelectorAll(".feas-band").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      // Prefill the placement form from the chosen band and open it — reuse the
-      // existing Place + Confirm handler (depth gate + overlap check on save).
-      form.classList.add("open");
-      if (form.elements.status.value !== "confirmed") form.elements.status.value = "confirmed";
-      form.elements.unassigned.checked = false;
-      form.elements.direction.value = btn.dataset.dir;
-      form.elements.bow_dock.value = btn.dataset.bow;
-      form.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      form.elements.bow_dock.focus();
-    });
-  });
+}
+
+// Confirm a chosen candidate berth directly: PATCH the reservation to placed +
+// confirmed. A shallow / unsurveyed berth needs an explicit depth override
+// (the oracle already flagged it), so ask before sending it. Refreshes on success.
+async function confirmCandidate(resId, c, requiredFt, result, close) {
+  result.className = "feas-pop-result";
+  const base = { bow_dock: c.bow_dock, direction: c.direction, status: "confirmed", unassigned: false };
+  let payload = base;
+  if (c.depth.status !== "ok") {
+    const need = requiredFt != null ? ` (needs ${Math.round(requiredFt)} ft under keel)` : "";
+    const why = c.depth.status === "shallow"
+      ? `Shallowest depth under the hull here is ${c.depth.controlling_ft.toFixed(1)} ft${need} — ${c.depth.shortfall_ft} ft short.`
+      : "No depth survey covers this berth.";
+    if (!confirm(`${why}\n\nConfirm the placement anyway? (logged as a depth override)`)) return;
+    payload = { ...base, depth_override: true };
+  }
+  result.textContent = "Confirming…";
+  let w = await apiWrite("PATCH", `/reservations/${resId}`, payload);
+  // A depth block we didn't pre-empt (survey changed since the lookup) -> offer override.
+  if (!w.ok && w.status === 422 && !payload.depth_override
+      && confirm("Too shallow to confirm. Override and confirm anyway?")) {
+    w = await apiWrite("PATCH", `/reservations/${resId}`, { ...base, depth_override: true });
+  }
+  if (w.ok) {
+    close();
+    loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification();
+  } else {
+    result.className = "feas-pop-result err";
+    result.textContent = "Failed: " + writeError(w);
+  }
 }
 
 function wireResCards(container) {
@@ -383,22 +442,25 @@ function wireResCards(container) {
       if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); } else alert("Failed: " + writeError(w));
     });
 
-    // Find berth: ask the feasibility oracle where this vessel fits in its
-    // window, list the bands in the card, and paint them on the map. Read-only —
-    // it proposes; the operator still places via the form below. Clicking a band
-    // pre-fills the placement form (bow + heading) so Place + Confirm is one step.
-    const feas = card.querySelector("[data-feas]");
+    // Find berth: ask the feasibility oracle where this vessel fits in its window
+    // and open a hover picker of the concrete, vessel-sized candidate berths.
+    // Hovering a row highlights that slot on the map; clicking it CONFIRMS the
+    // placement directly (the depth gate + overlap constraint stay the backstop).
     const findBtn = card.querySelector('[data-act="find-berth"]');
     if (findBtn) findBtn.addEventListener("click", async () => {
-      feas.hidden = false;
-      feas.innerHTML = '<div class="hint" style="margin:6px 0">Finding feasible berths…</div>';
+      findBtn.disabled = true;
+      const prev = findBtn.textContent;
+      findBtn.textContent = "Finding…";
       try {
         const p = await api(`/feasibility?reservation_id=${id}`);
         renderFeasibility(p);
-        renderBands(feas, p, form);
+        openFeasPicker(findBtn, id, p);
       } catch (e) {
-        feas.innerHTML = `<div class="mini-result err" style="display:block">Couldn’t compute feasibility (${esc(String(e.message || e))})</div>`;
         clearFeasibility();
+        alert("Couldn’t find berths: " + esc(String(e.message || e)));
+      } finally {
+        findBtn.disabled = false;
+        findBtn.textContent = prev;
       }
     });
 

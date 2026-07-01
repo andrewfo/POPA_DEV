@@ -623,41 +623,53 @@ map.on("overlayremove", (e) => {
 // ===== /CONTROLLING-DEPTH OVERLAY ==============================================
 
 // ===== FEASIBILITY OVERLAY =====================================================
-// Paint the oracle's output: each feasible band as a water-side rectangle (green
-// = deep enough for the vessel's draft, amber = shallow/unsurveyed but still
-// selectable — the depth gate blocks it only on confirm, and is overridable), and
-// each observed AIS berthing in the window as a hollow advisory outline. The band
-// is clickable-through to the card list; here it just visualises where the vessel
-// fits. Reuses depthBand (same water-side normal as the hulls/depth cells).
+// Paint the oracle's output: the discrete, vessel-sized candidate berths as
+// water-side rectangles (green = deep enough for the vessel's draft, amber =
+// shallow/unsurveyed but still selectable — the depth gate blocks it only on
+// confirm, and is overridable), the raw free bands as a faint dashed outline for
+// context, and each observed AIS berthing as a hollow advisory outline. A
+// separate highlight layer emphasises the one candidate the operator is hovering
+// in the picker. Reuses depthBand (same water-side normal as the hulls/depth cells).
 const FEAS_NEAR_M = 0, FEAS_FAR_M = 46;   // thinner than the depth band (78 m)
+const feasHighlightLayer = L.layerGroup();
 
-export function clearFeasibility() { feasibilityLayer.clearLayers(); }
+export function clearFeasibility() {
+  feasibilityLayer.clearLayers();
+  feasHighlightLayer.clearLayers();
+}
 
 export function renderFeasibility(payload) {
   feasibilityLayer.clearLayers();
+  feasHighlightLayer.clearLayers();
   if (!state.centerline || !payload) return;
   if (!map.hasLayer(feasibilityLayer)) feasibilityLayer.addTo(map);   // asking for it implies showing it
-  const v = payload.vessel || {};
+  // Free-space context: the raw bands, faint so they don't read as "the berth".
   for (const band of payload.bands || []) {
     const ring = depthBand(band.popa_lo, band.popa_hi, FEAS_NEAR_M, FEAS_FAR_M);
+    if (ring) L.polygon(ring, { color: PAL.inkDim, weight: 1, opacity: 0.35, dashArray: "4 5", fill: false }).addTo(feasibilityLayer);
+  }
+  // The concrete candidate berths — vessel-sized slots the picker offers.
+  const v = payload.vessel || {};
+  for (const c of payload.candidates || []) {
+    const ring = depthBand(c.popa_lo, c.popa_hi, FEAS_NEAR_M, FEAS_FAR_M);
     if (!ring) continue;
-    const ok = band.depth.status === "ok";
+    const ok = c.depth.status === "ok";
     const color = ok ? PAL.green : PAL.amber;
-    const berths = (band.berths || []).length ? band.berths.join(", ") : "—";
-    const depthNote = band.depth.controlling_ft == null
-      ? "depth: no survey here"
-      : `controlling ${band.depth.controlling_ft.toFixed(1)} ft`
-        + (band.depth.shortfall_ft ? ` · short ${band.depth.shortfall_ft.toFixed(1)} ft` : "");
-    L.polygon(ring, { color, weight: 1, opacity: 0.9, fillColor: color, fillOpacity: 0.22 })
+    const dockLbl = `${Math.round(Math.min(c.dock_lo, c.dock_hi))}–${Math.round(Math.max(c.dock_lo, c.dock_hi))}`;
+    const depthNote = c.depth.controlling_ft == null
+      ? "no survey here"
+      : `controlling ${c.depth.controlling_ft.toFixed(1)} ft`
+        + (c.depth.shortfall_ft ? ` · short ${c.depth.shortfall_ft.toFixed(1)} ft` : "");
+    L.polygon(ring, { color, weight: 1, opacity: 0.9, fillColor: color, fillOpacity: 0.3 })
       .bindPopup(
-        `<b>Feasible for ${esc(v.name || "vessel")}</b>` +
-        `<br>Dock ${Math.round(Math.min(band.dock_lo, band.dock_hi))}–${Math.round(Math.max(band.dock_lo, band.dock_hi))}` +
-        `<br>${Math.round(band.length_ft)} ft free · berth ${esc(berths)}` +
+        `<b>${c.berth ? esc(c.berth) : "Open berth"}</b> — ${esc(v.name || "vessel")}` +
+        `<br>Dock ${dockLbl} · ${Math.round(c.length_ft)} ft` +
         `<br>${esc(depthNote)}`
       )
-      .bindTooltip(`${Math.round(band.length_ft)} ft · ${ok ? "OK" : "shallow"}`, { direction: "top" })
+      .bindTooltip(`${c.berth ? esc(c.berth) + " · " : ""}Dock ${dockLbl} · ${ok ? "OK" : "shallow"}`, { direction: "top" })
       .addTo(feasibilityLayer);
   }
+  // Observed AIS berthings in the window — advisory only, never a candidate.
   for (const o of payload.observed || []) {
     const ring = depthBand(o.popa_lo, o.popa_hi, FEAS_NEAR_M, FEAS_FAR_M);
     if (!ring) continue;
@@ -666,6 +678,20 @@ export function renderFeasibility(payload) {
       .addTo(feasibilityLayer);
   }
 }
+
+// Emphasise one candidate berth on the map (called as the operator hovers a row
+// in the picker) and centre it into view. Cleared on mouseleave / picker close.
+export function highlightFeasSlot(popaLo, popaHi) {
+  feasHighlightLayer.clearLayers();
+  if (!state.centerline) return;
+  if (!map.hasLayer(feasHighlightLayer)) feasHighlightLayer.addTo(map);
+  const ring = depthBand(popaLo, popaHi, FEAS_NEAR_M - 4, FEAS_FAR_M + 8);
+  if (!ring) return;
+  const poly = L.polygon(ring, { color: PAL.cyan, weight: 2.5, opacity: 1, fillColor: PAL.cyan, fillOpacity: 0.18 }).addTo(feasHighlightLayer);
+  map.panInsideBounds(poly.getBounds(), { animate: true });
+}
+
+export function clearFeasHighlight() { feasHighlightLayer.clearLayers(); }
 // ===== /FEASIBILITY OVERLAY ====================================================
 
 // --- Map coordinate / scale read-out ---------------------------------------

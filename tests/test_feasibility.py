@@ -8,7 +8,12 @@ orchestration (depth annotation, Dock No., 404/422) is exercised in
 """
 from __future__ import annotations
 
-from app.feasibility import feasible_bands, placement_range, subtract_intervals
+from app.feasibility import (
+    candidate_slots,
+    feasible_bands,
+    placement_range,
+    subtract_intervals,
+)
 
 
 # --- subtract_intervals ----------------------------------------------------
@@ -78,3 +83,42 @@ def test_placement_range_is_band_minus_loa():
 
 def test_placement_range_collapses_to_a_point_when_band_equals_loa():
     assert placement_range((100, 300), 200) == (100, 100)
+
+
+# --- candidate_slots: discrete, berth-snapped placements -------------------
+def test_candidate_one_slot_per_overlapping_berth():
+    # Bands [0,925] and [1275,4000]; three berths — each yields one vessel-sized
+    # slot anchored at (or clamped near) its low end.
+    bands = [(0.0, 925.0), (1275.0, 4000.0)]
+    berths = [(0.0, 900.0, "B1"), (900.0, 1400.0, "B2"), (1400.0, 2000.0, "B3")]
+    slots = candidate_slots(bands, berths, 200.0)
+    assert [name for _, name in slots] == ["B1", "B2", "B3"]
+    # B2 is clamped so its footprint stays inside the [0,925] band but still
+    # touches the berth (which starts at 900).
+    starts = dict((name, start) for start, name in slots)
+    assert starts["B1"] == 0.0
+    assert 700.0 <= starts["B2"] <= 725.0
+    assert starts["B3"] == 1400.0
+
+
+def test_candidate_fallback_slot_when_no_berths():
+    # No catalog -> one low-end slot per feasible band.
+    bands = [(0.0, 925.0), (1275.0, 4000.0)]
+    assert candidate_slots(bands, [], 200.0) == [(0.0, None), (1275.0, None)]
+
+
+def test_candidate_skips_berth_that_cannot_host_the_footprint():
+    # A berth wholly inside the padded obstacle gap (no overlapping band) yields
+    # no slot.
+    bands = [(0.0, 900.0), (1300.0, 2000.0)]  # gap 900..1300 blocked
+    berths = [(1000.0, 1200.0, "GAP")]        # sits entirely in the blocked gap
+    assert candidate_slots(bands, berths, 150.0) == [(0.0, None), (1300.0, None)]
+
+
+def test_candidate_dedupes_by_start():
+    # Two berths that resolve to the same anchored start collapse to one slot.
+    bands = [(0.0, 4000.0)]
+    berths = [(0.0, 100.0, "A"), (0.0, 120.0, "B")]
+    slots = candidate_slots(bands, berths, 200.0)
+    assert len(slots) == 1
+    assert slots[0][0] == 0.0
