@@ -6,7 +6,7 @@ import {
   centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, BADGE_COLORS,
 } from "./api.js";
 import { state } from "./state.js";
-import { locateVesselOnMap, loadPositions } from "./map.js";
+import { locateVesselOnMap, loadPositions, renderFeasibility, clearFeasibility } from "./map.js";
 import { loadTimeline } from "./timeline.js";
 import { loadStats, loadConflicts, loadVerification } from "./panels.js";
 import { loadHistory } from "./history.js";
@@ -197,11 +197,13 @@ function resCard(r) {
       <div class="meta">${sta}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
       <div class="row-actions">
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
+        ${["requested", "tentative", "confirmed"].includes(r.status) ? '<button class="btn-sm" data-act="find-berth">Find berth</button>' : ""}
         <button class="btn-sm" data-act="edit-request">Edit request</button>
         <button class="btn-sm" data-act="edit">Edit placement</button>
         ${r.status === "confirmed" ? '<button class="btn-sm" data-act="unconfirm">Unconfirm</button>' : ""}
         ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
       </div>
+      <div class="feas-list" data-feas hidden></div>
       <form class="edit-form" data-edit-request>
         <fieldset>
           <legend>Berth request</legend>
@@ -248,6 +250,58 @@ function resCard(r) {
         <div class="mini-result"></div>
       </form>
     </div>`;
+}
+
+// Render the oracle's feasible bands into a card's [data-feas] panel. Each band is
+// a clickable row that pre-fills the placement form (bow Dock No. + heading) so the
+// operator can Place + Confirm in one more step. Depth-shallow bands are shown (the
+// gate blocks them only on confirm, overridably), tinted amber.
+function renderBands(container, payload, form) {
+  const bands = payload.bands || [];
+  const obsN = (payload.observed || []).length;
+  const dockRange = (b) => `Dock ${Math.round(Math.min(b.dock_lo, b.dock_hi))}–${Math.round(Math.max(b.dock_lo, b.dock_hi))}`;
+  const depthChip = (d) => {
+    if (d.status === "ok") return '<span class="feas-chip ok">depth OK</span>';
+    if (d.status === "shallow") return `<span class="feas-chip warn">shallow ${d.shortfall_ft ? "−" + d.shortfall_ft.toFixed(1) + " ft" : ""}</span>`;
+    return '<span class="feas-chip warn">no survey</span>';
+  };
+  const head =
+    `<div class="feas-head">Feasible berths for <b>${esc(payload.vessel.name || "vessel")}</b>` +
+    ` (LOA ${Math.round(payload.vessel.loa_ft)} ft)` +
+    ` <button type="button" class="btn-sm" data-act="feas-hide">Hide</button></div>`;
+  if (!bands.length) {
+    container.innerHTML = head +
+      '<div class="hint" style="margin:4px 0">No open stretch fits this vessel in its window — every berth is taken or too short.' +
+      (obsN ? ` ${obsN} vessel${obsN > 1 ? "s" : ""} observed alongside now (advisory).` : "") + "</div>";
+  } else {
+    const rows = bands.map((b) =>
+      `<button type="button" class="feas-band ${b.depth.status === "ok" ? "ok" : "warn"}"` +
+      ` data-bow="${b.bow_dock}" data-dir="${esc(b.direction)}">` +
+      `<span class="feas-where">${dockRange(b)}</span>` +
+      `<span class="feas-len">${Math.round(b.length_ft)} ft${b.berths.length ? " · " + esc(b.berths.join(", ")) : ""}</span>` +
+      depthChip(b.depth) + `</button>`
+    ).join("");
+    container.innerHTML = head +
+      `<div class="hint" style="margin:4px 0">${bands.length} spot${bands.length > 1 ? "s" : ""} fit · click one to place${obsN ? ` · ${obsN} observed nearby (dashed)` : ""}</div>` +
+      `<div class="feas-bands">${rows}</div>`;
+  }
+  container.querySelector('[data-act="feas-hide"]').addEventListener("click", () => {
+    container.hidden = true;
+    clearFeasibility();
+  });
+  container.querySelectorAll(".feas-band").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      // Prefill the placement form from the chosen band and open it — reuse the
+      // existing Place + Confirm handler (depth gate + overlap check on save).
+      form.classList.add("open");
+      if (form.elements.status.value !== "confirmed") form.elements.status.value = "confirmed";
+      form.elements.unassigned.checked = false;
+      form.elements.direction.value = btn.dataset.dir;
+      form.elements.bow_dock.value = btn.dataset.bow;
+      form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      form.elements.bow_dock.focus();
+    });
+  });
 }
 
 function wireResCards(container) {
@@ -329,6 +383,25 @@ function wireResCards(container) {
       if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); } else alert("Failed: " + writeError(w));
     });
 
+    // Find berth: ask the feasibility oracle where this vessel fits in its
+    // window, list the bands in the card, and paint them on the map. Read-only —
+    // it proposes; the operator still places via the form below. Clicking a band
+    // pre-fills the placement form (bow + heading) so Place + Confirm is one step.
+    const feas = card.querySelector("[data-feas]");
+    const findBtn = card.querySelector('[data-act="find-berth"]');
+    if (findBtn) findBtn.addEventListener("click", async () => {
+      feas.hidden = false;
+      feas.innerHTML = '<div class="hint" style="margin:6px 0">Finding feasible berths…</div>';
+      try {
+        const p = await api(`/feasibility?reservation_id=${id}`);
+        renderFeasibility(p);
+        renderBands(feas, p, form);
+      } catch (e) {
+        feas.innerHTML = `<div class="mini-result err" style="display:block">Couldn’t compute feasibility (${esc(String(e.message || e))})</div>`;
+        clearFeasibility();
+      }
+    });
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       res.className = "mini-result";
@@ -346,6 +419,7 @@ function wireResCards(container) {
       if (w.ok) {
         res.className = "mini-result ok";
         res.innerHTML = "Saved." + warnHtml(w.data && w.data.warnings);
+        clearFeasibility();   // the placement moved; any painted bands are now stale
         loadTimeline();
         loadStats();   // status change may move the confirmed / reservation counts
         loadConflicts();   // ...and may create or resolve a conflict

@@ -57,6 +57,21 @@ is a later layer", both user-requested):
     `ai`.
   - What's still TODO for step 7: committing the legacy-spreadsheet backfill
     (parse exists; review→commit not).
+- **Feasibility oracle (read-only; first step toward the scheduler §6):**
+  `GET /feasibility?reservation_id=` (`app/feasibility.py`,
+  `tests/test_feasibility*.py`) — for one requested vessel + window it computes the
+  station **bands where it can feasibly berth**: clears the 75 ft mooring gap from
+  every `confirmed`/`tentative` row overlapping the window, fits the wharf extent,
+  and carries a depth annotation (`ok`/`shallow`/`unknown`) from the latest survey —
+  the *same* checks the confirm path enforces, so an offered band confirms without a
+  409/422. `observed` AIS rides along as an advisory overlay (approximate ranges
+  never remove space); `requested` rows are ignored. **Proposes, never places** —
+  the operator picks a band (a "Find berth" button on the reservation card paints
+  them on the map and pre-fills the Place + Confirm form). It reuses the depth gate
+  (`app/depth/gate`), crosswalk, and the mooring gap (a documented
+  `conflicts.MOORING_GAP_FT` advisory mirror of migration 0007's `GAP_FT`), adding
+  no new schema. This is the eventual OR-Tools solver's feasible-position primitive,
+  built stand-alone and non-optimizing.
 
 ### Known gaps carried forward (do these regardless of feature work)
 
@@ -425,7 +440,11 @@ Not tied to a single step — pick up as the system matures.
 
 - **Scheduling optimizer / auto-assignment** (OR-Tools) — much later. This, not
   AIS, is what would ever *place* ships automatically (from requests + berth
-  availability).
+  availability). Its **first, non-optimizing step now exists** as the read-only
+  **feasibility oracle** (`GET /feasibility`, §1) — the feasible-position primitive
+  a CP-SAT model would consume. The optimizer proper (an objective over multiple
+  vessels, rolling horizon, churn minimization) is still out of scope, and even it
+  would only *propose* placements for operator confirmation.
 - Anything that requires blocking `observed` overlaps. Re-read the Core model
   section of `CLAUDE.md` before reaching for that.
 

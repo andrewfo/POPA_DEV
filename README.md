@@ -77,6 +77,10 @@ uvicorn app.main:app --reload
 #                            harbor craft (tugs/towboats/pilots) hidden; widen via the params
 #   GET  /verification[?current=&service_craft=]  -> plan vs observed AIS (unplanned list is
 #                            ongoing-only + no harbor craft by default)
+#   GET  /feasibility?reservation_id=N  -> read-only berth-feasibility oracle: the station
+#                            bands where a requested vessel fits (clears the mooring gap from
+#                            confirmed/tentative rows, fits the wharf, depth-annotated). Advises;
+#                            never places -> operator confirms via the form
 #   GET  /berths          -> named berth catalog (POPA station ranges) to assign from
 #   POST /intake/berth-request  -> manual berth request (phone/email); also a form on /
 #   PATCH /reservations/{id}    -> edit; assign a berth via {"berth_id": N} (fills station_range)

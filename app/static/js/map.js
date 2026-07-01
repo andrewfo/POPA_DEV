@@ -178,6 +178,13 @@ export const shipLayer = L.layerGroup().addTo(map);
 // upload/delete. Defined here so it can join the layer-toggle box below.
 export const depthLayer = L.layerGroup();
 
+// Feasibility oracle overlay: the station bands where a requested vessel can
+// berth (green = deep enough, amber = shallow but overridable) plus an advisory
+// outline of the observed AIS berthings in its window. Populated on demand by
+// renderFeasibility (from the "Find berth" button on a reservation card), not by
+// the poll loop; cleared with the panel. Defined here so it joins the layer box.
+export const feasibilityLayer = L.layerGroup();
+
 // Show/hide toggles for the map layers. Each layer (and its child label markers)
 // is added to the map above, so unchecking removes the ticks/labels/berths
 // together. Collapsed to a small layers icon (top-right) so it doesn't cover the
@@ -189,6 +196,7 @@ L.control.layers(null, {
   "Vessel outlines": shipLayer,
   "Berths": berthLayer,
   "Controlling depth": depthLayer,
+  "Feasible berths": feasibilityLayer,
   "Dock markers (yellow)": yellowLayer,
   "Dredge markers": feetLayer,
 }, { collapsed: true, position: "topright" }).addTo(map);
@@ -613,6 +621,52 @@ map.on("overlayremove", (e) => {
   if (e.layer === depthLayer) depthLegend._div.style.display = "none";
 });
 // ===== /CONTROLLING-DEPTH OVERLAY ==============================================
+
+// ===== FEASIBILITY OVERLAY =====================================================
+// Paint the oracle's output: each feasible band as a water-side rectangle (green
+// = deep enough for the vessel's draft, amber = shallow/unsurveyed but still
+// selectable — the depth gate blocks it only on confirm, and is overridable), and
+// each observed AIS berthing in the window as a hollow advisory outline. The band
+// is clickable-through to the card list; here it just visualises where the vessel
+// fits. Reuses depthBand (same water-side normal as the hulls/depth cells).
+const FEAS_NEAR_M = 0, FEAS_FAR_M = 46;   // thinner than the depth band (78 m)
+
+export function clearFeasibility() { feasibilityLayer.clearLayers(); }
+
+export function renderFeasibility(payload) {
+  feasibilityLayer.clearLayers();
+  if (!state.centerline || !payload) return;
+  if (!map.hasLayer(feasibilityLayer)) feasibilityLayer.addTo(map);   // asking for it implies showing it
+  const v = payload.vessel || {};
+  for (const band of payload.bands || []) {
+    const ring = depthBand(band.popa_lo, band.popa_hi, FEAS_NEAR_M, FEAS_FAR_M);
+    if (!ring) continue;
+    const ok = band.depth.status === "ok";
+    const color = ok ? PAL.green : PAL.amber;
+    const berths = (band.berths || []).length ? band.berths.join(", ") : "—";
+    const depthNote = band.depth.controlling_ft == null
+      ? "depth: no survey here"
+      : `controlling ${band.depth.controlling_ft.toFixed(1)} ft`
+        + (band.depth.shortfall_ft ? ` · short ${band.depth.shortfall_ft.toFixed(1)} ft` : "");
+    L.polygon(ring, { color, weight: 1, opacity: 0.9, fillColor: color, fillOpacity: 0.22 })
+      .bindPopup(
+        `<b>Feasible for ${esc(v.name || "vessel")}</b>` +
+        `<br>Dock ${Math.round(Math.min(band.dock_lo, band.dock_hi))}–${Math.round(Math.max(band.dock_lo, band.dock_hi))}` +
+        `<br>${Math.round(band.length_ft)} ft free · berth ${esc(berths)}` +
+        `<br>${esc(depthNote)}`
+      )
+      .bindTooltip(`${Math.round(band.length_ft)} ft · ${ok ? "OK" : "shallow"}`, { direction: "top" })
+      .addTo(feasibilityLayer);
+  }
+  for (const o of payload.observed || []) {
+    const ring = depthBand(o.popa_lo, o.popa_hi, FEAS_NEAR_M, FEAS_FAR_M);
+    if (!ring) continue;
+    L.polygon(ring, { color: PAL.inkDim, weight: 1, opacity: 0.7, dashArray: "5 4", fill: false })
+      .bindPopup(`<b>${esc(o.vessel_name || "(unnamed)")}</b><br><i>observed here now (advisory)</i>`)
+      .addTo(feasibilityLayer);
+  }
+}
+// ===== /FEASIBILITY OVERLAY ====================================================
 
 // --- Map coordinate / scale read-out ---------------------------------------
 (function () {

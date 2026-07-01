@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.config import get_settings
 from app.conflicts import find_conflicts
 from app.db import get_session
+from app.feasibility import compute_feasibility
 from app.routers.common import actor
 from app.verification import expire_stale, verify
 
@@ -95,6 +96,34 @@ def get_verification(
         current_only=current and from_ is None and to is None,
         include_service_craft=service_craft,
     )
+
+
+@router.get("/feasibility")
+def get_feasibility(
+    reservation_id: int,
+    session: Session = Depends(get_session),
+) -> dict:
+    """Where along the wharf can this requested vessel feasibly berth?
+
+    A read-only *advisor* (it never places): for the reservation's vessel + window
+    it returns the maximal station bands that clear the 75 ft mooring gap from
+    every ``confirmed``/``tentative`` booking overlapping the window, fit the
+    wharf, and carry a depth annotation (``ok``/``shallow``/``unknown``) from the
+    latest depth survey — the same checks the confirm path enforces, so an offered
+    band confirms without a 409/422. ``observed`` AIS berthings ride along as an
+    advisory ``observed`` overlay (approximate ranges never remove space). The
+    operator picks a band and confirms through the normal form; placement stays
+    theirs.
+
+    404 if the reservation is gone; 422 if it can't be sized (no vessel, no
+    bounded window, or unknown LOA)."""
+    try:
+        result = compute_feasibility(session, reservation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="reservation not found")
+    return result
 
 
 @router.post("/verification/sweep")

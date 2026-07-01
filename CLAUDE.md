@@ -157,7 +157,14 @@ station/time window before a reservation can be confirmed.
 ## Out of scope for now
 
 No scheduling optimizer / auto-assignment (OR-Tools comes much later). The
-deliverable is a conflict-safe data layer populated from live AIS.
+deliverable is a conflict-safe data layer populated from live AIS. Its first,
+non-optimizing step now exists as a **read-only feasibility oracle**
+(`app/feasibility.py`, `GET /feasibility?reservation_id=`): for one requested
+vessel + window it computes the station bands where it can berth — clearing the
+mooring gap from `confirmed`/`tentative` rows, fitting the wharf, depth-annotated —
+mirroring the confirm-path gates so an offered band confirms without a 409/422. It
+**proposes, never places** (the operator confirms via the form), like AIS
+verification and the AI intake channel; the optimizer proper stays out of scope.
 
 Note: items the original plan deferred have been pulled forward at the user's
 request and now exist — a **read-only UI**, berth-request intake **capture**
@@ -323,7 +330,12 @@ app/
   main.py              # FastAPI app assembly: middleware + OperationalError handler + static
                        #   mount + / and /health; the HTTP surface itself lives in routers/
   edit.py              # manual edit surface: vessel patch + reservation create/edit/delete
-  conflicts.py         # step 6: time×station overlap primitive + find_conflicts (GET /conflicts)
+  conflicts.py         # step 6: time×station overlap primitive + find_conflicts (GET /conflicts);
+                       #   also MOORING_GAP_FT — advisory mirror of migration 0007's GAP_FT (the
+                       #   constraint stays source of truth), read by feasibility.py
+  feasibility.py       # feasibility oracle (GET /feasibility) — read-only berth advisor toward
+                       #   the scheduler: free bands (extent − confirmed/tentative padded by the
+                       #   gap) that fit LOA, depth-annotated; proposes, never places
   shiptypes.py         # AIS service-craft set (tug/towing/pilot) shared by the live-panel
                        #   filters (conflicts + verification unplanned); mirrors the UI's
                        #   shipTypeCategory buckets (static/js/api.js); 33 (dredger) NEVER in it
@@ -408,6 +420,13 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   it is the single source of truth, there is deliberately **no** `app.config`
   mirror (a former `min_vessel_gap_ft` setting looked tunable but the constraint
   ignored it, so it was removed). Change the gap via a new migration, never config.
+  There is **one** Python-side copy — `conflicts.MOORING_GAP_FT` — and it is an
+  explicitly-documented **advisory mirror**, not a second source: the feasibility
+  oracle reads it to pre-check placements against the same gap the constraint will
+  enforce (so an offered spot doesn't then 409). It lives in `conflicts.py` (next
+  to the overlap math), NOT in config, because the migration text can't be
+  imported; if migration 0007's `GAP_FT` ever changes, change this to match. Don't
+  "dedupe" it into a config setting — that's the trap that was removed.
 - **The live panels are alert surfaces, not logs — separate them from the data
   at the QUERY layer, never at derivation.** `observed` rows stay in the one
   reservation table (ground truth; History keeps everything), but

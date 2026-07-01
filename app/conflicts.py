@@ -46,6 +46,16 @@ from app.shiptypes import SERVICE_CRAFT_SQL
 # longer occupies the wharf, so it never participates in a conflict.
 INACTIVE_STATUSES = ("cancelled", "completed")
 
+# Minimum mooring gap between two confirmed hulls, in feet. This is an ADVISORY
+# MIRROR of migration 0007's ``GAP_FT`` — the exclusion constraint remains the
+# single source of truth (it bakes the value into frozen SQL DDL that Python
+# cannot import). It lives here, next to the overlap primitives rather than in
+# ``app.config``, precisely because it is NOT a tunable: the feasibility oracle
+# (``app/feasibility.py``) reads it to pre-check placements against the same gap
+# the constraint will enforce at confirm time, so a "feasible" spot doesn't then
+# 409. If migration 0007's ``GAP_FT`` ever changes, change this to match.
+MOORING_GAP_FT = 75.0
+
 
 # ---------------------------------------------------------------------------
 # Pure predicates — model the stored ranges exactly; no database
