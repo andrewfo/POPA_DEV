@@ -13,7 +13,10 @@ that CRS and carries the authoritative geo->station path
    berthing zone (the digitized apron, plus a perpendicular-offset band that
    drops wall-toe shallows and far-channel points), bin by station, and keep the
    **shallowest** sounding per bin (controlling = governing depth).
-3. Store the bins as ``depth_segment`` rows under a new dated ``depth_survey``.
+3. Store the bins as ``depth_segment`` rows under a new dated ``depth_survey``,
+   and (same pass) a 2-D ``depth_cell`` grid binned by station AND offset-from-quay
+   for the map's cross-section overlay — the gate reads ``depth_segment``, the
+   cells are visualization only (a segment's depth is the min over its cells).
 
 Surveys are VERSIONED: every call inserts a NEW survey (depths change
 constantly), and the draft gate reads the latest active one. This keeps no raw
@@ -58,6 +61,7 @@ def import_survey(
     bin_ft = float(bin_ft if bin_ft is not None else s.depth_bin_ft)
     toe_ft = float(toe_offset_ft if toe_offset_ft is not None else s.depth_toe_offset_ft)
     max_ft = float(max_offset_ft if max_offset_ft is not None else s.depth_max_offset_ft)
+    off_bin_ft = float(s.depth_offset_bin_ft)
     toe_m = toe_ft / FEET_PER_M
     max_m = max_ft / FEET_PER_M
 
@@ -98,61 +102,97 @@ def import_survey(
                 copy.write_row((x, y, z))
                 n_parsed += 1
 
-    # 3) Project -> clip -> bin -> min, all in PostGIS, straight into depth_segment.
+    # 3) Project -> clip, once, into a temp table carrying each surviving
+    #    sounding's POPA station, perpendicular offset (feet), and depth. Both the
+    #    per-station controlling profile (depth_segment) and the 2-D cross-section
+    #    grid (depth_cell) are then binned from this same set, so they can never
+    #    disagree (a segment's controlling depth is the min over its cells) and
+    #    the expensive nearest-segment projection runs only once.
+    session.execute(
+        text(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS tmp_proj
+            (sta double precision, off_ft double precision, z double precision)
+            ON COMMIT DROP
+            """
+        )
+    )
+    session.execute(text("TRUNCATE tmp_proj"))
+    session.execute(
+        text(
+            """
+            INSERT INTO tmp_proj (sta, off_ft, z)
+            SELECT p.sta, p.off_m * :ft_per_m, p.z
+            FROM (
+                SELECT
+                    t.z AS z,
+                    ST_InterpolatePoint(seg.geom, seg.pt) AS sta,
+                    ST_Distance(seg.geom2d::geography, seg.pt::geography) AS off_m,
+                    seg.apron AS apron,
+                    seg.pt AS pt
+                FROM tmp_sounding t
+                CROSS JOIN LATERAL (
+                    SELECT ws.geom AS geom,
+                           ST_Force2D(ws.geom) AS geom2d,
+                           ws.apron AS apron,
+                           ST_Transform(
+                               ST_SetSRID(ST_MakePoint(t.x, t.y), :srid), 4326
+                           ) AS pt
+                    FROM wharf_segment ws
+                    ORDER BY ws.geom <-> ST_Transform(
+                        ST_SetSRID(ST_MakePoint(t.x, t.y), :srid), 4326
+                    )
+                    LIMIT 1
+                ) seg
+            ) p
+            WHERE p.sta IS NOT NULL
+              AND (p.apron IS NULL OR ST_Contains(p.apron, p.pt))
+              AND p.off_m BETWEEN :toe_m AND :max_m
+            """
+        ),
+        {"srid": srid, "ft_per_m": FEET_PER_M, "toe_m": toe_m, "max_m": max_m},
+    )
+
+    # 3a) Per-station controlling profile (the draft gate reads this).
     result = session.execute(
         text(
-            f"""
+            """
             INSERT INTO depth_segment
                 (survey_id, popa_range, controlling_depth_ft, point_count)
             SELECT
                 :sid,
-                numrange(CAST(g.bin_lo AS numeric),
-                         CAST(g.bin_lo + :bin AS numeric), '[)'),
-                g.controlling,
-                g.n
-            FROM (
-                SELECT
-                    floor(p.sta / :bin) * :bin AS bin_lo,
-                    min(p.z) AS controlling,
-                    count(*) AS n
-                FROM (
-                    SELECT
-                        t.z AS z,
-                        ST_InterpolatePoint(seg.geom, seg.pt) AS sta,
-                        ST_Distance(seg.geom2d::geography, seg.pt::geography) AS off_m,
-                        seg.apron AS apron,
-                        seg.pt AS pt
-                    FROM tmp_sounding t
-                    CROSS JOIN LATERAL (
-                        SELECT ws.geom AS geom,
-                               ST_Force2D(ws.geom) AS geom2d,
-                               ws.apron AS apron,
-                               ST_Transform(
-                                   ST_SetSRID(ST_MakePoint(t.x, t.y), :srid), 4326
-                               ) AS pt
-                        FROM wharf_segment ws
-                        ORDER BY ws.geom <-> ST_Transform(
-                            ST_SetSRID(ST_MakePoint(t.x, t.y), :srid), 4326
-                        )
-                        LIMIT 1
-                    ) seg
-                ) p
-                WHERE p.sta IS NOT NULL
-                  AND (p.apron IS NULL OR ST_Contains(p.apron, p.pt))
-                  AND p.off_m BETWEEN :toe_m AND :max_m
-                GROUP BY 1
-            ) g
+                numrange(CAST(floor(sta / :bin) * :bin AS numeric),
+                         CAST(floor(sta / :bin) * :bin + :bin AS numeric), '[)'),
+                min(z),
+                count(*)
+            FROM tmp_proj
+            GROUP BY floor(sta / :bin)
             """
         ),
-        {
-            "sid": sid,
-            "bin": bin_ft,
-            "srid": srid,
-            "toe_m": toe_m,
-            "max_m": max_m,
-        },
+        {"sid": sid, "bin": bin_ft},
     )
     segment_count = result.rowcount
+
+    # 3b) 2-D cross-section grid (station × offset), for the map overlay only.
+    session.execute(
+        text(
+            """
+            INSERT INTO depth_cell
+                (survey_id, popa_range, offset_range, controlling_depth_ft, point_count)
+            SELECT
+                :sid,
+                numrange(CAST(floor(sta / :bin) * :bin AS numeric),
+                         CAST(floor(sta / :bin) * :bin + :bin AS numeric), '[)'),
+                numrange(CAST(floor(off_ft / :obin) * :obin AS numeric),
+                         CAST(floor(off_ft / :obin) * :obin + :obin AS numeric), '[)'),
+                min(z),
+                count(*)
+            FROM tmp_proj
+            GROUP BY floor(sta / :bin), floor(off_ft / :obin)
+            """
+        ),
+        {"sid": sid, "bin": bin_ft, "obin": off_bin_ft},
+    )
 
     if not segment_count:
         # Nothing survived the clip: almost always a CRS mismatch or a survey that

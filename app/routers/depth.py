@@ -160,7 +160,36 @@ def survey_profile(
         }
         for r in rows
     ]
-    return {"survey_id": int(sid), "bins": bins}
+
+    # 2-D cross-section grid (migration 0013): the same soundings binned by
+    # station AND perpendicular offset-from-quay (feet), so the map can draw how
+    # the bottom shoals out into the channel. Older surveys (pre-0013) have no
+    # cells, so this is simply empty and the overlay falls back to flat bands.
+    cell_rows = session.execute(
+        text(
+            """
+            SELECT lower(popa_range) AS lo, upper(popa_range) AS hi,
+                   lower(offset_range) AS off_lo, upper(offset_range) AS off_hi,
+                   controlling_depth_ft AS depth, point_count AS n
+            FROM depth_cell
+            WHERE survey_id = :sid
+            ORDER BY lower(popa_range), lower(offset_range)
+            """
+        ),
+        {"sid": sid},
+    ).all()
+    cells = [
+        {
+            "popa_lo": float(r.lo),
+            "popa_hi": float(r.hi),
+            "off_lo_ft": float(r.off_lo),
+            "off_hi_ft": float(r.off_hi),
+            "controlling_depth_ft": float(r.depth),
+            "point_count": r.n,
+        }
+        for r in cell_rows
+    ]
+    return {"survey_id": int(sid), "bins": bins, "cells": cells}
 
 
 @router.delete("/surveys/{survey_id}", status_code=204)

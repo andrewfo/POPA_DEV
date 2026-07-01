@@ -130,6 +130,54 @@ def test_import_reduces_to_controlling_min(db_session):
     assert summary["min_depth_ft"] == pytest.approx(12.0)
 
 
+def test_import_builds_2d_cross_section_cells(db_session):
+    # Two soundings in the SAME station bin at DIFFERENT offsets off the quay:
+    # ~73 ft (lat 10.0002) and ~110 ft (lat 10.0003), both inside the [8,150] band.
+    # With a 25 ft offset bin they land in distinct cells, so the station carries a
+    # cross-section — and the per-station controlling depth is the min over cells.
+    _synthetic_segment(db_session)
+    summary = _ingest(
+        db_session,
+        soundings=[
+            (0.005, 10.0002, 30.0),   # M~500, ~73 ft off
+            (0.005, 10.0003, 45.0),   # M~500, ~110 ft off (deeper, further out)
+        ],
+    )
+    sid = summary["id"]
+    cells = db_session.execute(
+        text(
+            """
+            SELECT lower(offset_range) AS off_lo, controlling_depth_ft AS d
+            FROM depth_cell
+            WHERE survey_id = :sid AND lower(popa_range) = 0
+            ORDER BY lower(offset_range)
+            """
+        ),
+        {"sid": sid},
+    ).all()
+    assert [(float(c.off_lo), float(c.d)) for c in cells] == [(50.0, 30.0), (100.0, 45.0)]
+    # The station's segment controlling depth is the min over its cells.
+    seg = db_session.execute(
+        text(
+            "SELECT controlling_depth_ft FROM depth_segment "
+            "WHERE survey_id = :sid AND lower(popa_range) = 0"
+        ),
+        {"sid": sid},
+    ).scalar_one()
+    assert float(seg) == pytest.approx(30.0)
+
+
+def test_profile_returns_cells(client, db_session):
+    _synthetic_segment(db_session)
+    _ingest(db_session)
+    db_session.commit()
+    prof = client.get("/depth/profile").json()
+    assert prof["bins"], "per-station bins present"
+    assert prof["cells"], "2-D cross-section cells present"
+    c = prof["cells"][0]
+    assert {"popa_lo", "popa_hi", "off_lo_ft", "off_hi_ft", "controlling_depth_ft"} <= c.keys()
+
+
 def test_import_empty_when_off_wharf_raises(db_session):
     _synthetic_segment(db_session)
     # Soundings far off the face (all clipped) -> no segment -> 422-style refusal.

@@ -755,6 +755,16 @@
     display: flex; justify-content: space-between; gap: 8px;
     color: var(--muted); margin-top: 3px; font-size: 9px; white-space: nowrap;
   }
+  /* Per-cell bed-elevation labels on the 2-D depth field (map.js renderDepthField).
+     A bare negative number (ft below datum) — no tooltip chrome, so the grid of
+     cross-section values reads like a chart annotation, not a hover bubble. */
+  .leaflet-tooltip.depth-elev {
+    background: none; border: none; box-shadow: none; padding: 0;
+    color: #f0f0f0; font-size: 9px; font-weight: 600; line-height: 1;
+    text-shadow: 0 0 2px #000, 0 0 2px #000; pointer-events: none;
+    white-space: nowrap;
+  }
+  .leaflet-tooltip.depth-elev::before { display: none; }
   /* Transient "locate" halo: a few cyan pings fired when a vessel row in the
      sidebar is clicked, to find its contact on the chart. Cyan = a tool, not a
      status (matches the timeline playhead). */

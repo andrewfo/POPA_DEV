@@ -173,6 +173,13 @@ class Settings(BaseSettings):
     # min; the max caps how far into the channel a sounding counts.
     depth_toe_offset_ft: float = 8.0
     depth_max_offset_ft: float = 150.0
+    # Cross-channel bin width for the 2-D depth field (feet) — the map's
+    # cross-section overlay (depth_cell, migration 0013). Soundings in the [toe,
+    # max] offset band are additionally binned by perpendicular offset-from-quay
+    # at this resolution, so the bottom's shoaling out into the channel is drawn
+    # rather than collapsed to one controlling number per station. Purely
+    # visualization; the draft gate still reads the per-station controlling depth.
+    depth_offset_bin_ft: float = 25.0
 
     # --- Sidebar "Vessels" stat ---
     # The headline "Vessels" count is vessels *present* — those with an AIS fix

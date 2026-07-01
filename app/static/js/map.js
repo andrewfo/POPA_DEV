@@ -563,7 +563,7 @@ depthLegend.onAdd = function () {
   return div;
 };
 depthLegend.addTo(map);
-function updateDepthLegend(range, surveyId) {
+function updateDepthLegend(range, surveyId, labelled) {
   const div = depthLegend._div;
   if (!div) return;
   if (!range) {
@@ -575,41 +575,90 @@ function updateDepthLegend(range, surveyId) {
     + '<div class="depth-bar"></div>'
     + `<div class="depth-scale"><span>${range.min.toFixed(1)} shallow</span>`
     + `<span>${range.max.toFixed(1)} deep</span></div>`
+    + (labelled ? '<div class="lg-note">labels = bed elevation (−ft below datum)</div>' : "")
     + (surveyId != null ? `<div class="lg-note">survey #${surveyId}</div>` : "");
 }
 
-// Fetch the active profile and (re)draw the bands. Colours are scaled across the
-// survey's own min..max controlling depth (the meaningful spread), with the
-// endpoints shown on the legend. Exported so depth.js can refresh after an
-// upload/delete.
+const M_PER_FT = 0.3048;
+
+// Fetch the active profile and (re)draw the overlay. When the survey carries a
+// 2-D cross-section grid (depth_cell, migration 0013) we paint the full field —
+// cells marching out into the channel, each labelled with its bed elevation as a
+// NEGATIVE number (feet below datum). Older surveys with no cells fall back to
+// the flat per-station controlling bands. Colours are scaled across the drawn
+// set's own min..max depth (the meaningful spread). Exported so depth.js can
+// refresh after an upload/delete.
 export async function loadDepthOverlay() {
   try {
     const prof = await api("/depth/profile");
     depthLayer.clearLayers();
     const bins = (prof && prof.bins) || [];
-    if (!bins.length || !state.centerline) { updateDepthLegend(null); return; }
-    const depths = bins.map((b) => b.controlling_depth_ft);
-    const min = Math.min(...depths), max = Math.max(...depths);
-    const span = max - min || 1;
-    for (const b of bins) {
-      const ring = depthBand(b.popa_lo, b.popa_hi, DEPTH_NEAR_M, DEPTH_FAR_M);
-      if (!ring) continue;
-      const color = depthColor((b.controlling_depth_ft - min) / span);
-      L.polygon(ring, { color, weight: 0.4, opacity: 0.5, fillColor: color, fillOpacity: 0.5 })
-        .bindPopup(
-          `<b>Controlling ${b.controlling_depth_ft.toFixed(1)} ft</b>` +
-          `<br>POPA ${fmtSta(b.popa_lo)}–${fmtSta(b.popa_hi)}` +
-          `<br>Dock ${fmtSta(b.dock_lo)}–${fmtSta(b.dock_hi)}` +
-          `<br>${b.point_count ?? "—"} soundings`
-        )
-        .bindTooltip(`${b.controlling_depth_ft.toFixed(1)} ft`, { direction: "top" })
-        .addTo(depthLayer);
+    const cells = (prof && prof.cells) || [];
+    if (!state.centerline || (!bins.length && !cells.length)) {
+      updateDepthLegend(null);
+      return;
     }
-    updateDepthLegend({ min, max }, prof.survey_id);
+    if (cells.length) renderDepthField(cells, prof.survey_id);
+    else renderDepthBands(bins, prof.survey_id);
   } catch (e) {
     depthLayer.clearLayers();
     updateDepthLegend(null);
   }
+}
+
+// The 2-D cross-section field: one cell per (station bin × offset-from-quay bin).
+// Cells at larger offset sit further into the channel (where the bed deepens), so
+// each station reads as a cross-section perpendicular to the quay. Each cell is
+// labelled with its elevation = -depth (negative = below datum).
+function renderDepthField(cells, surveyId) {
+  const depths = cells.map((c) => c.controlling_depth_ft);
+  const min = Math.min(...depths), max = Math.max(...depths);
+  const span = max - min || 1;
+  for (const c of cells) {
+    const ring = depthBand(
+      c.popa_lo, c.popa_hi, c.off_lo_ft * M_PER_FT, c.off_hi_ft * M_PER_FT
+    );
+    if (!ring) continue;
+    const color = depthColor((c.controlling_depth_ft - min) / span);
+    const elev = -c.controlling_depth_ft;            // ft below datum, shown negative
+    L.polygon(ring, {
+      color: "#0a0a0a", weight: 0.3, opacity: 0.35,
+      fillColor: color, fillOpacity: 0.55,
+    })
+      .bindPopup(
+        `<b>${c.controlling_depth_ft.toFixed(1)} ft</b> · elevation ${elev.toFixed(1)} ft` +
+        `<br>POPA ${fmtSta(c.popa_lo)}–${fmtSta(c.popa_hi)}` +
+        `<br>${c.off_lo_ft.toFixed(0)}–${c.off_hi_ft.toFixed(0)} ft off quay` +
+        `<br>${c.point_count ?? "—"} soundings`
+      )
+      .bindTooltip(elev.toFixed(0), {
+        permanent: true, direction: "center", className: "depth-elev",
+      })
+      .addTo(depthLayer);
+  }
+  updateDepthLegend({ min, max }, surveyId, true);
+}
+
+// Legacy flat bands: one controlling depth per station (no cross-section data).
+function renderDepthBands(bins, surveyId) {
+  const depths = bins.map((b) => b.controlling_depth_ft);
+  const min = Math.min(...depths), max = Math.max(...depths);
+  const span = max - min || 1;
+  for (const b of bins) {
+    const ring = depthBand(b.popa_lo, b.popa_hi, DEPTH_NEAR_M, DEPTH_FAR_M);
+    if (!ring) continue;
+    const color = depthColor((b.controlling_depth_ft - min) / span);
+    L.polygon(ring, { color, weight: 0.4, opacity: 0.5, fillColor: color, fillOpacity: 0.5 })
+      .bindPopup(
+        `<b>Controlling ${b.controlling_depth_ft.toFixed(1)} ft</b>` +
+        `<br>POPA ${fmtSta(b.popa_lo)}–${fmtSta(b.popa_hi)}` +
+        `<br>Dock ${fmtSta(b.dock_lo)}–${fmtSta(b.dock_hi)}` +
+        `<br>${b.point_count ?? "—"} soundings`
+      )
+      .bindTooltip(`${b.controlling_depth_ft.toFixed(1)} ft`, { direction: "top" })
+      .addTo(depthLayer);
+  }
+  updateDepthLegend({ min, max }, surveyId);
 }
 
 // Render on toggle-on (the layer is emptied while hidden); show/hide the legend

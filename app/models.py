@@ -370,6 +370,9 @@ class DepthSurvey(Base):
     segments: Mapped[list["DepthSegment"]] = relationship(
         back_populates="survey", cascade="all, delete-orphan"
     )
+    cells: Mapped[list["DepthCell"]] = relationship(
+        back_populates="survey", cascade="all, delete-orphan"
+    )
 
 
 class DepthSegment(Base):
@@ -390,6 +393,30 @@ class DepthSegment(Base):
     point_count: Mapped[int | None] = mapped_column(Integer)
 
     survey: Mapped[DepthSurvey] = relationship(back_populates="segments")
+
+
+class DepthCell(Base):
+    """A 2-D cell of a survey (migration 0013): a station bin × a cross-channel
+    offset bin, carrying the shallowest sounding in that cell. Unlike
+    ``DepthSegment`` (one controlling depth per station), cells keep the
+    perpendicular dimension so the map can show how the bottom shoals *out into
+    the channel*. Visualization only — the draft gate still reads
+    ``DepthSegment``; a station's segment depth is the min over its cells.
+    ``offset_range`` is a half-open ``numrange`` [lo, hi) in FEET off the quay.
+    """
+
+    __tablename__ = "depth_cell"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    survey_id: Mapped[int] = mapped_column(
+        ForeignKey("depth_survey.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    station_range: Mapped[object] = mapped_column("popa_range", NUMRANGE, nullable=False)
+    offset_range: Mapped[object] = mapped_column(NUMRANGE, nullable=False)
+    controlling_depth_ft: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
+    point_count: Mapped[int | None] = mapped_column(Integer)
+
+    survey: Mapped[DepthSurvey] = relationship(back_populates="cells")
 
 
 Index("ix_position_report_mmsi_ts", PositionReport.mmsi, PositionReport.msg_ts)

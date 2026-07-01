@@ -118,6 +118,13 @@ from day one with no manual intake.
   each upload is a new dated row; the gate reads the latest `active` one), and the
   raw soundings are NOT kept, only the reduced profile. Uploaded via
   `POST /depth/surveys` (or `python -m app.depth.ingest`); see `app/depth/*`.
+  A **`depth_cell`** grid (migration 0013) is built in the *same* ingest pass —
+  the same soundings binned by station **and** perpendicular offset-from-quay
+  (feet), each cell keeping its shallowest sounding. It is **visualization only**
+  (the map's cross-section overlay, showing how the bed shoals out into the
+  channel with per-cell bed-elevation labels); the draft gate still reads
+  `depth_segment`, and a station's controlling depth is the min over its cells,
+  so the two never disagree.
 
 Enforce no-overlap at the DB, not in app code:
 
@@ -395,7 +402,8 @@ alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intak
                        #   0009 'ai' source (AI-channel provenance) ·
                        #   0010 intake_event soft-delete (deleted_at) + audit_log table ·
                        #   0011 worker_heartbeat (per-worker liveness telemetry) ·
-                       #   0012 depth_survey + depth_segment (controlling-depth data layer)
+                       #   0012 depth_survey + depth_segment (controlling-depth data layer) ·
+                       #   0013 depth_cell (2-D station×offset depth field for the cross-section overlay)
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation, conflict overlap predicates; db-marked (auto-skip):
                        #   geo→station, occupancy derive, intake, reservations, edit (vessel patch /
