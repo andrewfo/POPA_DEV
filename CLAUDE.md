@@ -168,10 +168,18 @@ deliverable is a conflict-safe data layer populated from live AIS. Its first,
 non-optimizing step now exists as a **read-only feasibility oracle**
 (`app/feasibility.py`, `GET /feasibility?reservation_id=`): for one requested
 vessel + window it returns the **discrete, vessel-sized candidate berths** it can
-take — free space (wharf extent minus every *placed* plan overlapping the window,
-padded by the mooring gap) snapped to the named berth catalog, each depth-checked
-over its exact footprint against draft + clearance. It mirrors the confirm-path
-gates so a candidate confirms without a 409/422. It **proposes, never places**: a
+take — free space (wharf extent minus everything occupying the wharf in the
+window, padded by the mooring gap) snapped to the named berth catalog, each
+depth-checked over its exact footprint against draft + clearance. "Everything
+occupying the wharf" is every *placed* plan (confirmed/tentative/placed-requested)
+**and** every `observed` AIS berthing overlapping the window — the oracle must
+never offer a spot that would conflict with a ship there **now** or a booking
+**later** (a deliberate operator call: observed rows are approximate, but a
+candidate that collides with a currently-berthed vessel is worse than an
+over-conservative one, so they remove space too, gap-padded like any obstacle; they
+still ride along as an overlay so the map shows what blocked a stretch). It mirrors
+the confirm-path gates so a candidate confirms without a 409/422. It **proposes,
+never places**: a
 "Find berth" hover picker lets the operator pick a berth and confirm it directly
 (like AIS verification and the AI intake channel). The optimizer proper stays out
 of scope.

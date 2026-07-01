@@ -306,9 +306,9 @@ function openFeasPicker(anchorBtn, resId, payload) {
     `<div class="feas-pop-head"><b>${esc(v.name || "vessel")}</b> · LOA ${Math.round(v.loa_ft)} ft${draftBit}` +
     `<button type="button" class="feas-pop-x" title="Close">×</button></div>` +
     (cands.length
-      ? `<div class="feas-pop-hint">${cands.length} berth${cands.length > 1 ? "s" : ""} clear of other bookings · hover to locate · click to confirm. Depth = shallowest under the full hull.${obsN ? ` ${obsN} observed nearby.` : ""}</div>` +
+      ? `<div class="feas-pop-hint">${cands.length} berth${cands.length > 1 ? "s" : ""} clear of every other vessel and booking · hover to locate · click to confirm. Depth = shallowest under the full hull.${obsN ? ` ${obsN} observed alongside (avoided).` : ""}</div>` +
         `<div class="feas-cands">${rows}</div>`
-      : `<div class="feas-pop-hint">No berth fits this vessel in its window — every spot is booked or too short.${obsN ? ` ${obsN} observed alongside now.` : ""}</div>`) +
+      : `<div class="feas-pop-hint">No berth fits this vessel in its window — every spot is booked, occupied, or too short.${obsN ? ` ${obsN} observed alongside now.` : ""}</div>`) +
     `<div class="feas-pop-result"></div>`;
   document.body.appendChild(pop);
 

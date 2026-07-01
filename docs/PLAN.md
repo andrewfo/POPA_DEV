@@ -61,15 +61,16 @@ is a later layer", both user-requested):
   `GET /feasibility?reservation_id=` (`app/feasibility.py`,
   `tests/test_feasibility*.py`) — for one requested vessel + window it returns the
   **discrete, vessel-sized candidate berths** it can take: the free space (wharf
-  extent minus every *placed* plan overlapping the window, padded by the 75 ft
+  extent minus everything occupying the wharf in the window, padded by the 75 ft
   mooring gap) is snapped to the named berth catalog into concrete slots, each a
   Dock-No. range with a depth reading over its exact footprint. It clears the same
   gates the confirm path enforces, so a candidate confirms without a 409/422:
-  - **blocks any placed plan** overlapping in time — `confirmed`, `tentative`, and a
-    `requested` row that still carries a placement (e.g. one an operator
-    unconfirmed). `observed` AIS is advisory only (approximate ranges never remove
-    space — it rides along as an overlay); an *unplaced* request (empty range) has
-    nothing to avoid;
+  - **blocks anything occupying the wharf** in the window — `confirmed`,
+    `tentative`, a `requested` row that still carries a placement, **and `observed`
+    AIS berthings** (added 2026-07-01: Find-berth must never offer a spot that
+    conflicts with a ship there **now** or a booking **later** — observed ranges are
+    approximate but gap-padded like any obstacle, and still ride along as an
+    overlay). An *unplaced* request (empty range) has nothing to avoid;
   - **depth** per candidate (`ok`/`shallow`/`unknown`) is the shallowest reading
     under the *whole hull* vs the vessel's draft + under-keel clearance; the payload
     surfaces `draft_ft` + `required_ft` so the UI explains *why* a berth is shallow.

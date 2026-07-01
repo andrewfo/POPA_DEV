@@ -5,17 +5,21 @@ window), it computes the maximal station bands where the vessel would fit,
 mirroring exactly what the confirm path enforces so an offered spot doesn't then
 409/422:
 
-* it clears the mooring gap from every ``confirmed``/``tentative`` reservation
-  whose window overlaps (the same 75 ft the ``no_wharf_overlap`` exclusion
-  constraint bakes in — see ``app.conflicts.MOORING_GAP_FT``);
+* it clears the mooring gap from every reservation occupying the wharf in the
+  window — ``confirmed``/``tentative``/placed ``requested`` bookings AND
+  ``observed`` AIS berthings (the same 75 ft the ``no_wharf_overlap`` exclusion
+  constraint bakes in — see ``app.conflicts.MOORING_GAP_FT``), so a candidate can
+  never conflict with a ship there **now** or a booking **later**;
 * it fits within the wharf extent;
 * it carries enough controlling depth for the vessel's draft (the same
   ``app/depth/gate.py`` check the confirm gate runs).
 
-``observed`` AIS rows are ground truth but approximate, so they never *remove*
-space (that would over-block); they ride along as an advisory overlay. Placement
-stays the operator's job — the oracle proposes, the operator confirms through the
-existing form. Two layers, like ``app/conflicts.py``:
+``observed`` AIS rows are approximate, so padding them by the full mooring gap is
+deliberately conservative — the operator would rather never be offered a spot that
+conflicts with a currently-berthed vessel than be offered one that does. They also
+still ride along as an overlay so the map shows *why* the space near them is gone.
+Placement stays the operator's job — the oracle proposes, the operator confirms
+through the existing form. Two layers, like ``app/conflicts.py``:
 
 * **Pure interval math** (``subtract_intervals`` / ``feasible_bands`` /
   ``placement_range``) — unit-tested, no database.
@@ -164,27 +168,29 @@ _RESERVATION_SQL = text(
     """
 )
 
-# Any *placed* plan overlapping the window removes space, so a candidate can never
-# be offered on top of another booking's time × station rectangle. That means
-# confirmed + tentative + a requested row that carries a placement (e.g. one an
-# operator unconfirmed — it keeps its range) — anything with a non-empty station
-# range that isn't cancelled/completed. ``observed`` is excluded on purpose: AIS is
-# advisory and approximate, so it never removes space (it rides along as an
-# overlay). An unplaced request (empty range) has nothing to avoid. Exclude the
-# subject row itself.
+# Anything occupying the wharf in the window removes space, so a candidate can
+# never be offered where it would create a conflict — with a ship there **now**
+# (``observed`` AIS) or a **booking later** (confirmed/tentative, or a requested
+# row that carries a placement). Any non-empty station range whose time overlaps
+# the window and isn't cancelled/completed. ``observed`` is INCLUDED (the operator
+# asked that Find-berth never offer a spot that conflicts with a currently-berthed
+# vessel — approximate AIS ranges are padded by the mooring gap like every other
+# obstacle, so a candidate stays clear of them). An unplaced request (empty range)
+# has nothing to avoid. Exclude the subject row itself.
 _OBSTACLES_SQL = text(
     """
     SELECT lower(r.station_range) AS lo, upper(r.station_range) AS hi
     FROM reservation r
     WHERE r.id <> :rid
-      AND r.status::text NOT IN ('cancelled', 'completed', 'observed')
+      AND r.status::text NOT IN ('cancelled', 'completed')
       AND NOT isempty(r.station_range)
       AND r.time_range && tstzrange(:t_from, :t_to, '[)')
     """
 )
 
-# Observed AIS berthings that overlap the window — drawn as an advisory overlay,
-# never removed from the feasible set (approximate ranges must not over-block).
+# Observed AIS berthings that overlap the window — these remove space too (via
+# _OBSTACLES_SQL above); this query returns them again for the map overlay, so the
+# operator can see which currently-berthed ship blocked a stretch.
 _OBSERVED_SQL = text(
     """
     SELECT r.id,

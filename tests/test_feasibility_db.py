@@ -37,10 +37,14 @@ def _t(day, hour=0):
 def _seed_wharf(session) -> tuple[float, float]:
     """Pin a single wharf segment spanning POPA [0, 4000] (Dock No. = 3365 - POPA,
     the canonical default). Returns the extent. Also clears any dev-seeded berth
-    catalog and neutralizes dev-seeded depth surveys, so berth/depth state is
-    whatever the test seeds (or none) — all inside the rolled-back transaction."""
+    catalog, reservations, and neutralizes dev-seeded depth surveys, so
+    berth/depth/occupancy state is whatever the test seeds (or none) — all inside
+    the rolled-back transaction. Reservations are cleared because the oracle now
+    treats ``observed`` AIS rows as obstacles, and the dev DB carries ongoing
+    (open-ended) observed berthings that overlap any future window."""
     session.execute(text("DELETE FROM wharf_segment"))
     session.execute(text("DELETE FROM berth"))
+    session.execute(text("DELETE FROM reservation"))
     session.execute(text("UPDATE depth_survey SET active = false"))
     session.execute(
         text(
@@ -144,16 +148,21 @@ def test_tentative_obstacle_also_blocks(client, db_session):
     assert all(not _overlaps(b, 925, 1275) for b in payload["bands"])
 
 
-def test_observed_is_advisory_not_blocking(client, db_session):
+def test_observed_blocks_and_is_overlaid(client, db_session):
+    # A ship there NOW (observed AIS) must remove space too — Find-berth may never
+    # offer a spot that conflicts with a currently-berthed vessel.
     _seed_wharf(db_session)
     rid = _subject(db_session)
     obs = _reservation(db_session, lo=1000, hi=1200, t_start=_t(10), t_end=_t(14),
                        status="observed")
     payload = client.get(f"/feasibility?reservation_id={rid}").json()
-    # The observed span is NOT removed from the feasible set...
-    assert _covers(payload, 1100)
-    # ...it rides along as an advisory overlay instead.
+    # The observed span (padded by the 75 ft gap) is removed from the feasible set...
+    assert all(not _overlaps(b, 925, 1275) for b in payload["bands"])
+    # ...and still rides along as an overlay so the map shows what blocked it.
     assert any(o["reservation_id"] == obs for o in payload["observed"])
+    # Space clear of it is still offered on either side.
+    assert _covers(payload, 500)
+    assert _covers(payload, 2000)
 
 
 def test_placed_requested_row_blocks(client, db_session):
