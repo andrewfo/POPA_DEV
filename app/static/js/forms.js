@@ -196,12 +196,20 @@ function resCard(r) {
   // the berth is unassigned.
   const bowDock = r.station_unassigned ? ""
     : (r.direction === "downstream" ? r.station_lo_dock : r.station_hi_dock);
+  // Show notes on the card face (not just in the edit form), highlighting an
+  // "[AIS override]" line so a dropped manual dimension stays apparent.
+  const notesHtml = r.notes
+    ? esc(r.notes).split("\n").map((ln) =>
+        ln.includes("[AIS override]") ? `<span class="note-ais">▲ ${ln}</span>` : ln
+      ).join("<br>")
+    : "";
   return `
     <div class="card req-card" data-res="${r.id}" style="border-left-color:${color}">
       <div class="name">${esc(r.vessel_name || "(unnamed)")} ${imo}
         <span class="status-badge" style="color:${color}">${esc(r.status)}</span></div>
       <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(r.source)}</div>
       <div class="meta">${sta}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
+      ${notesHtml ? `<div class="meta">${notesHtml}</div>` : ""}
       <div class="row-actions">
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
         ${["requested", "tentative", "confirmed"].includes(r.status) ? '<button class="btn-sm" data-act="find-berth">Find berth</button>' : ""}

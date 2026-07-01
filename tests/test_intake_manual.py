@@ -301,6 +301,13 @@ def test_ais_tracked_vessel_warns_that_entered_draft_is_overridden(db_session):
     # And the stored draft is unchanged (NULL-fill kept the AIS value).
     v = db_session.execute(select(Vessel).where(Vessel.imo == 9990002)).scalar_one()
     assert float(v.draft) == 9.1
+    # The override is durable, not just a transient warning: it's stamped on the
+    # reservation's notes so it stays apparent on the request card / in History.
+    res = db_session.execute(
+        select(Reservation).where(Reservation.id == out["reservation_id"])
+    ).scalar_one()
+    assert "[AIS override]" in res.notes
+    assert "20.0→29.9 ft" in res.notes
 
 
 def test_manual_only_vessel_does_not_warn_about_override(db_session):
