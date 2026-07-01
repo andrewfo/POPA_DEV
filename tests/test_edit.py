@@ -154,6 +154,34 @@ def test_patch_vessel_404(client):
     assert client.patch("/vessels/99999999", json={"name": "x"}).status_code == 404
 
 
+def test_patch_ais_vessel_dimension_warns_it_wont_stick(client, db_session):
+    # Editing an AIS-tracked (MMSI) vessel's dimension applies, but the AIS feed
+    # reverts it — the response says so.
+    vid = _add_vessel(db_session, mmsi=636000123, name="AIS SHIP")
+    r = client.patch(f"/vessels/{vid}", json={"draft": 6.1})
+    assert r.status_code == 200
+    warns = " ".join(r.json().get("warnings", []))
+    assert "AIS-tracked" in warns and "won't stick" in warns
+
+
+def test_patch_manual_vessel_dimension_does_not_warn(client, db_session):
+    # A manual-only vessel (no MMSI) owns its dimensions — no warning.
+    vid = db_session.execute(
+        text("INSERT INTO vessel (imo, name) VALUES (9111228, 'MANUAL ONLY') RETURNING id")
+    ).scalar_one()
+    r = client.patch(f"/vessels/{vid}", json={"draft": 6.1})
+    assert r.status_code == 200
+    assert not r.json().get("warnings")
+
+
+def test_patch_ais_vessel_nondimension_edit_does_not_warn(client, db_session):
+    # A non-dimension edit (name) on an AIS vessel never warns.
+    vid = _add_vessel(db_session, mmsi=636000124, name="TYPO")
+    r = client.patch(f"/vessels/{vid}", json={"name": "FIXED"})
+    assert r.status_code == 200
+    assert not r.json().get("warnings")
+
+
 def test_create_edit_reservation(client, db_session):
     vid = _add_vessel(db_session, mmsi=636000002)
     # Station bounds are entered in Dock No. (stern first, the larger Dock No.);

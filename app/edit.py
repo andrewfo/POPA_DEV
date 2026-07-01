@@ -367,24 +367,49 @@ def _vessel_draft_m(session: Session, vessel_id: int | None) -> float | None:
 
 
 
+# Dimension columns AIS keeps authoritative for an MMSI-keyed vessel. Editing them
+# here *applies* (this surface is authoritative, unlike intake's NULL-fill), but the
+# AIS ingestor overwrites them by MMSI on the next ShipStaticData — so the edit is
+# transient. Warn rather than let the operator think it stuck.
+_AIS_EDIT_DIMS = {"loa": "LOA", "beam": "beam", "draft": "draft"}
+
+
+def _ais_dim_edit_warnings(mmsi: int | None, changes: dict) -> list[str]:
+    """Warn when this edit changes a dimension of an AIS-tracked vessel — the live
+    feed will overwrite it on the next AIS message, so the change won't stick."""
+    if mmsi is None:
+        return []
+    edited = [label for field, label in _AIS_EDIT_DIMS.items() if changes.get(field) is not None]
+    if not edited:
+        return []
+    return [
+        f"{', '.join(edited)} saved, but this vessel is AIS-tracked (MMSI {mmsi}); "
+        f"the live AIS feed overwrites its dimensions on the next message, so this "
+        f"edit won't stick. Correct it at the AIS source."
+    ]
+
+
 def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict | None:
     """Overwrite the provided columns of a vessel. Returns a summary dict, or
     ``None`` if no such vessel (-> 404). ``mmsi``/``imo`` collisions or the
     "mmsi or imo required" check surface as IntegrityError at flush -> 409."""
-    exists = session.execute(
-        select(Vessel.id).where(Vessel.id == vessel_id)
-    ).scalar_one_or_none()
-    if exists is None:
+    row = session.execute(
+        select(Vessel.mmsi).where(Vessel.id == vessel_id)
+    ).first()
+    if row is None:
         return None
 
     changes = upd.model_dump(exclude_unset=True)
+    # Effective MMSI: an edit may be setting one now (linking the vessel to AIS).
+    effective_mmsi = changes.get("mmsi", row.mmsi)
+    warnings = _ais_dim_edit_warnings(effective_mmsi, changes)
     if changes:
         session.execute(
             update(Vessel)
             .where(Vessel.id == vessel_id)
             .values(**changes, updated_at=func.now())
         )
-    return {"id": vessel_id, "updated_fields": sorted(changes)}
+    return {"id": vessel_id, "updated_fields": sorted(changes), "warnings": warnings}
 
 
 def create_reservation(session: Session, req: ReservationCreate) -> dict:

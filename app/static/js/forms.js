@@ -120,9 +120,13 @@ function openVesselEditor(id) {
     const payload = formPayload(form, ["imo", "mmsi", "loa", "beam", "draft"]);
     const w = await apiWrite("PATCH", `/vessels/${id}`, payload);
     if (w.ok) {
-      res.className = "mini-result ok"; res.textContent = "Saved.";
+      const warns = w.data && w.data.warnings;
+      res.className = "mini-result ok";
+      res.innerHTML = "Saved." + warnHtml(warns);
       loadVessels(); loadPositions();
-      setTimeout(() => { box.innerHTML = ""; }, 1200);
+      // Keep the editor open when there's a warning (e.g. an AIS-tracked vessel's
+      // dimensions won't stick) so the operator actually reads it.
+      if (!(warns && warns.length)) setTimeout(() => { box.innerHTML = ""; }, 1200);
     } else {
       res.className = "mini-result err";
       res.textContent = "Failed: " + writeError(w);
