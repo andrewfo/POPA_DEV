@@ -77,6 +77,12 @@ class VesselUpdate(BaseModel):
     beam: float | None = None  # metres
     draft: float | None = None  # metres
     destination: str | None = None
+    # Operator override of the AIS-authoritative dimensions (migration 0015).
+    # For an AIS-tracked vessel (has MMSI) loa/beam/draft edits are normally
+    # dropped. Set this True to pin the manual value instead — the edit applies
+    # AND the AIS ingestor stops overwriting the dimensions. Set False to hand
+    # them back to AIS. ``None`` leaves the current lock state unchanged.
+    dims_locked: bool | None = None
 
 
 class ReservationCreate(BaseModel):
@@ -378,10 +384,11 @@ _AIS_EDIT_DIMS = {"loa": "LOA", "beam": "beam", "draft": "draft"}
 
 
 def _strip_ais_dims(mmsi: int | None, changes: dict) -> list[str]:
-    """For an AIS-tracked vessel (has MMSI), drop any loa/beam/draft edit from
-    ``changes`` in place — AIS is authoritative for its dimensions, so a manual
-    value must not overwrite (or drift) them — and return a warning naming what
-    was dropped. Manual-only vessels (no MMSI) keep their edits (returns [])."""
+    """For an AIS-tracked vessel (has MMSI) that is NOT under an operator override,
+    drop any loa/beam/draft edit from ``changes`` in place — AIS is authoritative
+    for its dimensions, so a manual value must not overwrite (or drift) them — and
+    return a warning naming what was dropped. Manual-only vessels (no MMSI) keep
+    their edits (returns [])."""
     if mmsi is None:
         return []
     dropped = [label for field, label in _AIS_EDIT_DIMS.items() if changes.pop(field, _UNSET) is not _UNSET]
@@ -390,11 +397,70 @@ def _strip_ais_dims(mmsi: int | None, changes: dict) -> list[str]:
     return [
         f"{', '.join(dropped)} not applied — this vessel is AIS-tracked (MMSI "
         f"{mmsi}); AIS is authoritative for its dimensions (they come from the "
-        f"live feed). Correct it at the AIS source, not here."
+        f"live feed). Correct it at the AIS source, or tick 'Override AIS "
+        f"dimensions' to pin a value here."
+    ]
+
+
+def _override_warnings(mmsi: int | None, changes: dict) -> list[str]:
+    """Warn when an operator pins an AIS-tracked vessel's dimensions via the
+    override lock (``dims_locked``). The dim edits DO apply (the caller leaves
+    them in ``changes``); this just makes the deliberate override visible and
+    reminds that the AIS feed will no longer touch those columns. Nothing to warn
+    about for a manual-only vessel (no MMSI) — AIS never owned its dims."""
+    if mmsi is None:
+        return []
+    dims = [label for field, label in _AIS_EDIT_DIMS.items() if field in changes]
+    detail = f" ({', '.join(dims)})" if dims else ""
+    return [
+        f"AIS dimension override in force for MMSI {mmsi}{detail}: the manual "
+        f"value is pinned and the AIS feed will no longer update it. Clear the "
+        f"override to hand dimensions back to AIS."
     ]
 
 
 _UNSET = object()  # sentinel so dict.pop can tell "absent" from a real None value
+
+# The intake channel stamps ``[AIS override] entered <dims>; AIS values kept
+# (authoritative).`` onto a reservation when it drops an AIS-tracked vessel's
+# entered dims (app/intake/manual._override_note). Once an operator pins those
+# dims via the override lock, that note is stale — the entered value now governs —
+# so we flip the marker to ``[AIS override cancelled]`` and correct the trailing
+# clause. Both are literal ``replace()`` swaps, so the flip is idempotent: the
+# ``[AIS override]`` literal is NOT a substring of ``[AIS override cancelled]``
+# (the char after "override" is a space, not "]"), and the reworded tail no longer
+# matches either.
+_OVERRIDE_MARKER = "[AIS override]"
+_OVERRIDE_CANCELLED = "[AIS override cancelled]"
+_OVERRIDE_TAIL = "AIS values kept (authoritative)."
+_OVERRIDE_TAIL_CANCELLED = "entered value now applied (manual override)."
+
+
+def _cancel_override_notes(session: Session, vessel_id: int) -> int:
+    """Flip any stale ``[AIS override]`` note on this vessel's reservations to
+    ``[AIS override cancelled]`` — called when the override lock is engaged, so the
+    request card / History stop claiming the entered value was dropped. Idempotent
+    and a no-op when the vessel has no such note. Returns the rows updated."""
+    result = session.execute(
+        text(
+            """
+            UPDATE reservation
+               SET notes = replace(
+                       replace(notes, :marker, :cancelled),
+                       :tail, :tail_cancelled)
+             WHERE vessel_id = :vid
+               AND notes LIKE '%' || :marker || '%'
+            """
+        ),
+        {
+            "vid": vessel_id,
+            "marker": _OVERRIDE_MARKER,
+            "cancelled": _OVERRIDE_CANCELLED,
+            "tail": _OVERRIDE_TAIL,
+            "tail_cancelled": _OVERRIDE_TAIL_CANCELLED,
+        },
+    )
+    return result.rowcount
 
 
 def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict | None:
@@ -404,10 +470,13 @@ def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict |
 
     An AIS-tracked vessel's dimensions (loa/beam/draft) are AIS-authoritative and
     are **not** overwritten here — the edit is dropped with a warning (see
-    ``_strip_ais_dims``); every other field, and every field of a manual-only
-    vessel, overwrites as provided."""
+    ``_strip_ais_dims``). The **override escape hatch** (``dims_locked``, migration
+    0015) lets an operator pin a corrected value when AIS itself is wrong: with the
+    lock in force the manual dims apply AND the ingestor stops reverting them (a
+    warning still names the pinned override). Every other field, and every field of
+    a manual-only vessel, overwrites as provided."""
     row = session.execute(
-        select(Vessel.mmsi).where(Vessel.id == vessel_id)
+        select(Vessel.mmsi, Vessel.dims_locked).where(Vessel.id == vessel_id)
     ).first()
     if row is None:
         return None
@@ -415,14 +484,29 @@ def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict |
     changes = upd.model_dump(exclude_unset=True)
     # Effective MMSI: an edit may be setting one now (linking the vessel to AIS).
     effective_mmsi = changes.get("mmsi", row.mmsi)
-    warnings = _strip_ais_dims(effective_mmsi, changes)
+    # Effective override state after this edit (the edit may be toggling the lock).
+    locked = changes.get("dims_locked", row.dims_locked)
+    if locked:
+        # Override in force: apply the manual dims, but surface that the pin is on.
+        warnings = _override_warnings(effective_mmsi, changes)
+    else:
+        # Default: AIS keeps its dimensions; drop manual dim edits for an MMSI row.
+        warnings = _strip_ais_dims(effective_mmsi, changes)
     if changes:
         session.execute(
             update(Vessel)
             .where(Vessel.id == vessel_id)
             .values(**changes, updated_at=func.now())
         )
-    return {"id": vessel_id, "updated_fields": sorted(changes), "warnings": warnings}
+    # With the override lock now in force, the entered dims govern — so any stale
+    # ``[AIS override]`` note (which said the entry was dropped) is cancelled.
+    override_cancelled = _cancel_override_notes(session, vessel_id) if locked else 0
+    return {
+        "id": vessel_id,
+        "updated_fields": sorted(changes),
+        "warnings": warnings,
+        "override_cancelled": override_cancelled,
+    }
 
 
 def create_reservation(session: Session, req: ReservationCreate) -> dict:

@@ -162,6 +162,16 @@ class Vessel(Base):
     draft: Mapped[float | None] = mapped_column(Numeric(6, 2))  # m
     destination: Mapped[str | None] = mapped_column(String(120))
 
+    # Operator override lock for the dimension columns (loa/beam/draft/dim_a/
+    # dim_b), migration 0015. Normally AIS owns those for an MMSI-keyed vessel and
+    # a manual edit is refused; setting this pins the operator's corrected value
+    # (AIS itself is sometimes wrong) and the AIS ingestor stops overwriting the
+    # dimensions for this row. Off by default; clearing it hands the dimensions
+    # back to the feed. See app/edit.update_vessel + app/ais/ingest.
+    dims_locked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=func.false(), default=False
+    )
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

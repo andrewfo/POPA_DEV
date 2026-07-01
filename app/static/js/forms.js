@@ -101,6 +101,10 @@ function openVesselEditor(id) {
           <div><label>Draft (m)</label><input type="number" step="any" name="draft" value="${val(v.draft)}" /></div>
           <div><label>Callsign</label><input name="callsign" value="${esc(val(v.callsign))}" /></div>
         </div>
+        ${v.mmsi != null ? `
+        <div class="check"><input type="checkbox" name="dims_locked" id="dimsLocked" ${v.dims_locked ? "checked" : ""} /><label for="dimsLocked" style="margin:0">Override AIS dimensions</label></div>
+        <div class="hint" style="margin:-2px 0 6px">This vessel is AIS-tracked, so LOA/beam/draft come from the live feed and manual edits are normally ignored. Tick this only when AIS itself is wrong — the values above are then pinned and the feed stops reverting them. Untick to hand them back to AIS.</div>
+        ` : ""}
         <label>Destination</label><input name="destination" value="${esc(val(v.destination))}" />
         <div class="row-actions">
           <button type="submit" class="btn-sm primary">Save</button>
@@ -118,6 +122,11 @@ function openVesselEditor(id) {
     // Blank fields are skipped (not cleared) — a manual edit overwrites only what
     // it sets, mirroring the server's exclude_unset partial update.
     const payload = formPayload(form, ["imo", "mmsi", "loa", "beam", "draft"]);
+    // The AIS-dimension override checkbox only exists for AIS-tracked vessels;
+    // send its explicit true/false so unticking hands dimensions back to AIS
+    // (FormData omits an unchecked box, so it can't ride through formPayload).
+    const lockChk = form.elements.dims_locked;
+    if (lockChk) payload.dims_locked = lockChk.checked;
     const w = await apiWrite("PATCH", `/vessels/${id}`, payload);
     if (w.ok) {
       const warns = w.data && w.data.warnings;
@@ -144,6 +153,56 @@ function writeError(w) {
 }
 function warnHtml(warnings) {
   return (warnings && warnings.length) ? `<span class="warn">▲ ${esc(warnings.join("; "))}</span>` : "";
+}
+
+// When a berth request dropped the operator's entered dimensions because the
+// vessel is AIS-tracked (AIS is authoritative), offer a red "Manual override"
+// button in the result area. Clicking it pins the ENTERED value onto the vessel
+// (`dims_locked`, migration 0015) — the escape hatch for when AIS itself is
+// wrong — reusing the same vessel PATCH the edit surface uses. `data` is the
+// intake response; it must carry `vessel_id` and a non-empty `ais_overrides`.
+function renderManualOverride(container, data) {
+  const ov = data && data.ais_overrides;
+  if (!data || !data.vessel_id || !ov || !ov.length) return;
+  const entered = ov.map((o) => `${o.label} ${o.entered_ft} ft`).join(", ");
+  const wrap = document.createElement("div");
+  wrap.style.marginTop = "6px";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-sm override";
+  btn.textContent = "Manual override";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    // Revert to whatever was entered: pin the entered metres value + lock so the
+    // AIS ingestor stops reverting it.
+    const patch = { dims_locked: true };
+    for (const o of ov) patch[o.field] = o.entered_m;
+    const w = await apiWrite("PATCH", `/vessels/${data.vessel_id}`, patch);
+    if (w.ok) {
+      const flipped = w.data && w.data.override_cancelled;
+      container.className = "result ok";
+      container.innerHTML =
+        `Manual override applied — entered dimensions (${esc(entered)}) pinned on ` +
+        `vessel #${data.vessel_id}; the AIS feed will no longer revert them ` +
+        `(clear the lock on the vessel to hand them back to AIS).` +
+        (flipped ? ` AIS override → cancelled on ${flipped} reservation${flipped === 1 ? "" : "s"}.` : "");
+      loadVessels(); loadRequests(); loadBerthRequests(); loadPositions();
+    } else {
+      btn.disabled = false;
+      container.insertAdjacentHTML(
+        "beforeend", `<span class="warn">▲ override failed: ${esc(writeError(w))}</span>`
+      );
+    }
+  });
+  const hint = document.createElement("div");
+  hint.className = "warn";
+  hint.style.marginTop = "2px";
+  hint.textContent =
+    `AIS is authoritative for this vessel. Only override if AIS itself is wrong — ` +
+    `this pins ${entered} and stops the feed updating the dimensions.`;
+  wrap.appendChild(btn);
+  wrap.appendChild(hint);
+  container.appendChild(wrap);
 }
 
 // --- Reservations (read + inline edit / unconfirm) -------------------------
@@ -579,7 +638,13 @@ function isValidImo(imo) {
         el.value = ft;
         shown.push(`${name.replace("_ft", "")} ${ft} ft`);
       }
-      if (shown.length) aisNote = ` AIS-authoritative dimensions shown (${shown.join(", ")}); edits to these won't apply — correct them at the AIS source.`;
+      if (shown.length) {
+        aisNote = vessel.dims_locked
+          // Already pinned via Manual override: the shown dims are the operator's
+          // own, managed on the vessel — not AIS's, and still not editable here.
+          ? ` Dimensions are operator-pinned via manual override (${shown.join(", ")}); edits here still won't apply — change or unlock them on the vessel.`
+          : ` AIS-authoritative dimensions shown (${shown.join(", ")}); edits to these won't apply — correct them at the AIS source, or use Manual override after saving.`;
+      }
     }
     setMode(id);
     document.getElementById("intakePanel").open = true;
@@ -646,6 +711,9 @@ function isValidImo(imo) {
       const warns = (data.warnings && data.warnings.length)
         ? `<span class="warn">▲ ${data.warnings.join("; ")}</span>` : "";
       result.innerHTML = msg + warns;
+      // Dropped an AIS-tracked vessel's entered dims? Offer the red "Manual
+      // override" that pins them (dims_locked) in case AIS itself is wrong.
+      renderManualOverride(result, data);
       if (editing || (!data.duplicate && !data.skipped)) resetForm();
       loadRequests(); loadBerthRequests(); loadVessels(); loadStats();
     } catch (err) {

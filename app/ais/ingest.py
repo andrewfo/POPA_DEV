@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,12 @@ from app.ais.source import AISMessage, AISSource
 from app.models import PositionReport, Vessel
 
 logger = logging.getLogger(__name__)
+
+# Dimension columns AIS owns for an MMSI-keyed vessel, but which an operator can
+# pin via ``vessel.dims_locked`` (migration 0015). When locked, the ingestor
+# keeps the stored value instead of overwriting it from the feed. loa/dim_a/dim_b
+# are frozen together so ``loa = dim_a + dim_b`` can't drift while pinned.
+_LOCKED_DIMS = {"loa", "beam", "draft", "dim_a", "dim_b"}
 
 
 class Ingestor:
@@ -75,11 +81,20 @@ class Ingestor:
         }
         ins = pg_insert(Vessel).values(**values)
         # COALESCE(new, existing): keep prior detail if the new field is null.
-        set_ = {
-            k: func.coalesce(getattr(ins.excluded, k), getattr(Vessel, k))
-            for k in values
-            if k != "mmsi"
-        }
+        # Dimension columns are additionally gated on ``dims_locked``: when an
+        # operator has pinned a corrected value (AIS was wrong — migration 0015),
+        # keep the stored value even though the feed carries one, so the override
+        # is persistent instead of reverting on the next ShipStaticData. Identity
+        # / non-dimension fields keep merging from AIS regardless of the lock.
+        set_ = {}
+        for k in values:
+            if k == "mmsi":
+                continue
+            merged = func.coalesce(getattr(ins.excluded, k), getattr(Vessel, k))
+            if k in _LOCKED_DIMS:
+                set_[k] = case((Vessel.dims_locked, getattr(Vessel, k)), else_=merged)
+            else:
+                set_[k] = merged
         set_["updated_at"] = func.now()
         stmt = ins.on_conflict_do_update(index_elements=["mmsi"], set_=set_).returning(
             Vessel.id

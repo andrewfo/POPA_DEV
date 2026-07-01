@@ -38,10 +38,12 @@ def edit_vessel(
     def _audit(result: dict | None) -> dict | None:
         if result is None:  # no such vessel -> 404, nothing changed
             return None
+        detail = {"updated_fields": result.get("updated_fields")}
+        if result.get("override_cancelled"):
+            detail["override_cancelled"] = result["override_cancelled"]
         return dict(
             actor=actor(request), action="edit", entity="vessel",
-            entity_id=vessel_id,
-            detail={"updated_fields": result.get("updated_fields")},
+            entity_id=vessel_id, detail=detail,
         )
 
     result = do_write(

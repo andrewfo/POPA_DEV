@@ -578,6 +578,25 @@ def _override_note(diffs: list[tuple[str, float, float]]) -> str:
     return f"[AIS override] entered {parts}; AIS values kept (authoritative)."
 
 
+def _override_payload(diffs: list[tuple[str, float, float]]) -> list[dict]:
+    """Structured description of each dropped AIS-override dimension, returned in
+    the API response so the UI can offer a **"Manual override"** action that pins
+    the operator's *entered* value onto the vessel (``dims_locked``, migration
+    0015). ``field`` is the ``vessel`` column name (matches ``VesselUpdate``);
+    ``entered_m`` is the metres value the override PATCH should apply; the feet
+    values are for display. Empty when nothing was overridden."""
+    return [
+        {
+            "field": label.lower(),  # loa | beam | draft — matches VesselUpdate
+            "label": label,
+            "entered_m": round(ent, 2),
+            "entered_ft": round(ent * FEET_PER_M, 1),
+            "ais_ft": round(ais * FEET_PER_M, 1),
+        }
+        for label, ent, ais in diffs
+    ]
+
+
 def _restore_kept_ais_prefill(session: Session, form: BerthRequestForm, prior: dict) -> None:
     """On edit, undo the AIS-value prefill the operator left untouched, restoring
     their **original** entered dimension from the prior raw — so the ``[AIS
@@ -611,7 +630,9 @@ def _restore_kept_ais_prefill(session: Session, form: BerthRequestForm, prior: d
             setattr(form, field, prior.get(field))
 
 
-def _apply_ais_overrides(session: Session, req: NormalizedRequest) -> bool:
+def _apply_ais_overrides(
+    session: Session, req: NormalizedRequest
+) -> tuple[bool, list[tuple[str, float, float]]]:
     """Record any AIS override this request carries, and report whether its IMO
     resolves to an **AIS-tracked** vessel (has MMSI).
 
@@ -623,14 +644,17 @@ def _apply_ais_overrides(session: Session, req: NormalizedRequest) -> bool:
     so it shows on the request card and in History (the entered value also stays
     verbatim in ``intake_event.raw``).
 
-    Returns True iff the IMO is on file for an AIS-tracked vessel; the caller
-    passes ``overwrite=not <this>`` to ``_upsert_vessel`` so AIS dims survive."""
+    Returns ``(ais_tracked, diffs)``: ``ais_tracked`` is True iff the IMO is on
+    file for an AIS-tracked vessel (the caller passes ``overwrite=not <this>`` to
+    ``_upsert_vessel`` so AIS dims survive); ``diffs`` is the per-dimension
+    override list, surfaced to the API so the operator can still force the entered
+    value through the ``dims_locked`` escape hatch (see ``_override_payload``)."""
     name, diffs = _ais_overrides(session, req)
     if diffs:
         req.warnings.extend(_override_warnings(name, diffs))
         note = _override_note(diffs)
         req.notes = f"{req.notes}\n{note}" if req.notes else note
-    return name is not None
+    return name is not None, diffs
 
 
 def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
@@ -668,8 +692,10 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     overwrite_vessel = _resolve_imo_vessel(session, req)
     # An AIS-tracked ship's dimensions are authoritative, so an entered draft/LOA/
     # beam that differs is dropped. Record that (warn + durable note) so it isn't
-    # silent (the "I set 20 ft but it shows 30 ft" case).
-    _apply_ais_overrides(session, req)
+    # silent (the "I set 20 ft but it shows 30 ft" case); the diffs also ride into
+    # the response so the operator can force the entered value via the manual
+    # override (dims_locked) if AIS itself is wrong.
+    _, override_diffs = _apply_ais_overrides(session, req)
 
     # 1. Land the raw request. ON CONFLICT DO NOTHING on the content hash makes a
     #    duplicate submission a no-op; if nothing lands, don't create a second
@@ -737,6 +763,10 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
         "reservation_id": reservation_id,
         "vessel_id": vessel_id,
         "warnings": req.warnings,
+        # Dropped AIS-authoritative dims the operator entered — surfaced so the UI
+        # can offer a "Manual override" that pins them (dims_locked). Empty unless
+        # the IMO resolved to an AIS-tracked vessel whose stored dims differ.
+        "ais_overrides": _override_payload(override_diffs),
     }
 
 
@@ -876,7 +906,7 @@ def update_manual_request(
     # record the override, exactly as the create path does. (Overwriting here only
     # dropped the AIS value until the next ShipStaticData reverted it — a silent,
     # transient loss; now the AIS dims stand.)
-    ais_tracked = _apply_ais_overrides(session, req)
+    ais_tracked, override_diffs = _apply_ais_overrides(session, req)
     vessel_id = _upsert_vessel(session, req, overwrite=not ais_tracked)
     # A corrected LOA (manual vessel) must re-derive any already-placed footprint,
     # so the map stops drawing the length captured at placement time. For an
@@ -933,6 +963,9 @@ def update_manual_request(
         "reservation_id": reservation_id,
         "vessel_id": vessel_id,
         "warnings": req.warnings,
+        # Dropped AIS-authoritative dims the operator entered — surfaced so the UI
+        # can offer a "Manual override" that pins them (dims_locked).
+        "ais_overrides": _override_payload(override_diffs),
         # Pre-edit raw, for the audit_log: the edit overwrites raw in place (the one
         # sanctioned mutation), so the prior payload only survives if captured here.
         "prior_raw": prior,

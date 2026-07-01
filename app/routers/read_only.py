@@ -327,7 +327,7 @@ def list_vessels(
         text(
             """
             SELECT v.id, v.mmsi, v.imo, v.name, v.callsign, v.ship_type,
-                   v.destination, v.loa, v.beam, v.draft,
+                   v.destination, v.loa, v.beam, v.draft, v.dims_locked,
                    p.sog, p.cog, p.nav_status, p.msg_ts
             FROM vessel v
             LEFT JOIN LATERAL (
@@ -356,6 +356,7 @@ def list_vessels(
             "loa": float(r.loa) if r.loa is not None else None,
             "beam": float(r.beam) if r.beam is not None else None,
             "draft": float(r.draft) if r.draft is not None else None,
+            "dims_locked": bool(r.dims_locked),
             "sog": r.sog,
             "cog": r.cog,
             "nav_status": r.nav_status,

@@ -176,6 +176,146 @@ def test_patch_ais_vessel_dimension_is_not_applied(client, db_session):
     assert float(draft) == 9.1
 
 
+def test_patch_ais_vessel_dimension_override_applies_and_locks(client, db_session):
+    # The escape hatch: when AIS itself is wrong, ticking the override pins the
+    # manual dims AND sets dims_locked so the ingestor stops reverting them.
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft) "
+             "VALUES (636000223, 'AIS SHIP', 9.1) RETURNING id")
+    ).scalar_one()
+    r = client.patch(f"/vessels/{vid}", json={"draft": 6.1, "dims_locked": True})
+    assert r.status_code == 200
+    warns = " ".join(r.json().get("warnings", []))
+    assert "override in force" in warns
+    row = db_session.execute(
+        text("SELECT draft, dims_locked FROM vessel WHERE id = :id"), {"id": vid}
+    ).one()
+    assert float(row.draft) == 6.1
+    assert row.dims_locked is True
+
+
+def test_manual_override_cancels_ais_override_note(client, db_session):
+    # Pinning the entered dims cancels the now-stale [AIS override] note on the
+    # vessel's reservations (the entered value governs, AIS no longer "kept").
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft) "
+             "VALUES (636000227, 'AIS SHIP', 9.1) RETURNING id")
+    ).scalar_one()
+    rid = db_session.execute(
+        text(
+            """
+            INSERT INTO reservation
+                (vessel_id, type, station_range, time_range, status, source,
+                 notes, created_at)
+            VALUES (:vid, 'vessel', 'empty'::numrange,
+                    tstzrange(now(), now() + interval '1 day', '[)'),
+                    'requested', 'phone',
+                    '[AIS override] entered draft 20.0→29.9 ft; AIS values kept (authoritative).',
+                    now())
+            RETURNING id
+            """
+        ),
+        {"vid": vid},
+    ).scalar_one()
+    r = client.patch(f"/vessels/{vid}", json={"draft": 6.1, "dims_locked": True})
+    assert r.status_code == 200
+    assert r.json().get("override_cancelled") == 1
+    notes = db_session.execute(
+        text("SELECT notes FROM reservation WHERE id = :id"), {"id": rid}
+    ).scalar_one()
+    assert "[AIS override cancelled]" in notes
+    assert "[AIS override]" not in notes
+    assert "entered value now applied (manual override)." in notes
+    assert "AIS values kept (authoritative)." not in notes
+
+
+def test_override_note_flip_is_idempotent_and_scoped(client, db_session):
+    # An unrelated (non-override) note is untouched, and re-running the override
+    # doesn't double-mangle an already-cancelled note.
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft, dims_locked) "
+             "VALUES (636000228, 'AIS SHIP', 9.1, TRUE) RETURNING id")
+    ).scalar_one()
+    rid = db_session.execute(
+        text(
+            """
+            INSERT INTO reservation
+                (vessel_id, type, station_range, time_range, status, source,
+                 notes, created_at)
+            VALUES (:vid, 'vessel', 'empty'::numrange,
+                    tstzrange(now(), now() + interval '1 day', '[)'),
+                    'requested', 'phone', 'plain note, no marker', now())
+            RETURNING id
+            """
+        ),
+        {"vid": vid},
+    ).scalar_one()
+    r = client.patch(f"/vessels/{vid}", json={"draft": 6.0, "dims_locked": True})
+    assert r.status_code == 200
+    assert r.json().get("override_cancelled") == 0  # nothing to flip
+    notes = db_session.execute(
+        text("SELECT notes FROM reservation WHERE id = :id"), {"id": rid}
+    ).scalar_one()
+    assert notes == "plain note, no marker"
+
+
+def test_patch_ais_vessel_clearing_override_hands_dims_back(client, db_session):
+    # Unticking the override drops a fresh dim edit (AIS is authoritative again)
+    # and clears the lock so the feed resumes updating.
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft, dims_locked) "
+             "VALUES (636000224, 'AIS SHIP', 6.1, TRUE) RETURNING id")
+    ).scalar_one()
+    r = client.patch(f"/vessels/{vid}", json={"draft": 5.0, "dims_locked": False})
+    assert r.status_code == 200
+    warns = " ".join(r.json().get("warnings", []))
+    assert "AIS-tracked" in warns and "not applied" in warns
+    row = db_session.execute(
+        text("SELECT draft, dims_locked FROM vessel WHERE id = :id"), {"id": vid}
+    ).one()
+    assert float(row.draft) == 6.1  # dim edit dropped; prior pinned value stands
+    assert row.dims_locked is False
+
+
+def test_ingestor_does_not_revert_locked_dims(db_session):
+    # The other half of the escape hatch: a dims_locked vessel keeps its pinned
+    # value even when a fresh ShipStaticData carries a different one — otherwise
+    # the override would revert on the next feed message.
+    from app.ais.ingest import Ingestor
+    from app.ais.messages import AISStatic
+
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft, dims_locked) "
+             "VALUES (636000225, 'PINNED', 6.1, TRUE) RETURNING id")
+    ).scalar_one()
+    ing = Ingestor(db_session)
+    ing._upsert_vessel_static(
+        AISStatic(mmsi=636000225, name="PINNED", draft=9.4, loa=200.0)
+    )
+    row = db_session.execute(
+        text("SELECT draft, loa FROM vessel WHERE id = :id"), {"id": vid}
+    ).one()
+    assert float(row.draft) == 6.1   # locked — feed value ignored
+    assert row.loa is None           # locked — feed loa ignored
+
+
+def test_ingestor_updates_unlocked_dims(db_session):
+    # Sanity: without the lock the feed still owns the dimensions (default).
+    from app.ais.ingest import Ingestor
+    from app.ais.messages import AISStatic
+
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft) "
+             "VALUES (636000226, 'OPEN', 6.1) RETURNING id")
+    ).scalar_one()
+    ing = Ingestor(db_session)
+    ing._upsert_vessel_static(AISStatic(mmsi=636000226, name="OPEN", draft=9.4))
+    draft = db_session.execute(
+        text("SELECT draft FROM vessel WHERE id = :id"), {"id": vid}
+    ).scalar_one()
+    assert float(draft) == 9.4       # feed value applied
+
+
 def test_patch_manual_vessel_dimension_does_not_warn(client, db_session):
     # A manual-only vessel (no MMSI) owns its dimensions — no warning.
     vid = db_session.execute(

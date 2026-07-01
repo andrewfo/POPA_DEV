@@ -75,7 +75,9 @@ from day one with no manual intake.
   dockno_scale/offset), and a nullable `apron` polygon (digitized water-side
   berthing zone; the occupancy "alongside" test, migration 0005)
 - `vessel` — IMO/MMSI as canonical key (names are non-unique and misspelled),
-  name, LOA, beam, draft
+  name, LOA, beam, draft, and `dims_locked` (migration 0015: an operator override
+  lock pinning the AIS-authoritative dimensions when AIS itself is wrong — the
+  ingestor stops reverting them while set)
 - `berth` — named canonical POPA station range (`popa_sta_start/end`, migration
   0006). "Berths are named station ranges": a berth is the operator's *handle*,
   not the allocation unit. Seeded from the port's berth shapefile via
@@ -412,7 +414,8 @@ alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intak
                        #   0011 worker_heartbeat (per-worker liveness telemetry) ·
                        #   0012 depth_survey + depth_segment (controlling-depth data layer) ·
                        #   0013 depth_cell (2-D station×offset depth field for the cross-section overlay) ·
-                       #   0014 data repair: heal AIS vessels whose dims a manual edit corrupted (loa=dim_a+dim_b)
+                       #   0014 data repair: heal AIS vessels whose dims a manual edit corrupted (loa=dim_a+dim_b) ·
+                       #   0015 vessel.dims_locked: operator override lock pinning an AIS-tracked vessel's dims
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation, conflict overlap predicates; db-marked (auto-skip):
                        #   geo→station, occupancy derive, intake, reservations, edit (vessel patch /
@@ -517,7 +520,15 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   longer clobber a live AIS dimension (it only lost the AIS value until the next
   `ShipStaticData` reverted it — a silent, transient loss). Both paths run the one
   `_apply_ais_overrides` helper, which decides AIS-tracked-ness and records the
-  override (warning + durable `[AIS override]` note). Correspondingly, the
+  override (warning + durable `[AIS override]` note). **Escape hatch:** because AIS
+  itself is sometimes wrong, `_apply_ais_overrides` also returns the dropped dims,
+  which both intake responses surface as `ais_overrides` (structured
+  `[{field, entered_m, entered_ft, ais_ft}]` via `_override_payload`); the
+  berth-request form renders a red **"Manual override"** button
+  (`renderManualOverride`) that PATCHes `/vessels/{id}` with
+  `{dims_locked: true, <field>: entered_m}` — reusing the `dims_locked` override
+  lock (migration 0015) to pin the entered value AND stop the ingestor reverting
+  it. Correspondingly, the
   berth-request **edit form prefills the effective AIS dimensions**, not the
   operator's original typed entry: `GET /intake/berth-requests` now returns each
   request's linked vessel dims in feet + an `ais_tracked` flag
@@ -601,6 +612,23 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   corrupted: for an MMSI vessel where `loa <> dim_a+dim_b`, recompute
   `loa = dim_a+dim_b` and null the unrecoverable manual `draft` so the feed
   refills it.) A manual-only vessel (no MMSI) still owns all its dimensions.
+  **Escape hatch — the override lock** (`vessel.dims_locked`, migration 0015):
+  AIS is sometimes wrong (a mis-encoded LOA, a stale draft), so an operator can
+  tick **"Override AIS dimensions"** on the vessel edit form to *pin* a corrected
+  value. With the lock in force `update_vessel` **applies** the manual
+  loa/beam/draft instead of dropping it (`_override_warnings` still surfaces that
+  the pin is on), **and** the AIS ingestor stops overwriting the dimension columns
+  for that row (`_upsert_vessel_static` keeps the stored value when `dims_locked`;
+  loa/beam/draft/dim_a/dim_b freeze together so `loa = dim_a+dim_b` can't drift
+  while pinned). Off by default (nothing changes until an operator overrides);
+  unticking hands the dimensions back to AIS, which refills them on the next
+  `ShipStaticData`. `/vessels` exposes `dims_locked` so the form reflects the
+  current lock. Non-dimension fields keep merging from AIS regardless of the lock.
+  Engaging the lock also **cancels any stale `[AIS override]` note** the intake
+  channel stamped on the vessel's reservations (`_cancel_override_notes`): the
+  entered value now governs, so the marker flips to `[AIS override cancelled]` and
+  the "AIS values kept (authoritative)" tail is reworded (idempotent literal
+  swaps; `override_cancelled` count returned + audited).
   Vessel dims are edited in **metres** (the canonical store), not feet. Station ranges are entered in **Dock No. feet** —
   the stationing painted on the wharf (the yellow dock markers on the map), what
   an operator actually reads off the quay — and converted to canonical POPA on

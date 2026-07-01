@@ -129,7 +129,7 @@ def list_berth_requests(
             SELECT e.id, e.source, e.received_at, e.processed,
                    e.reservation_id, e.raw, e.deleted_at,
                    r.status AS reservation_status,
-                   v.id AS vessel_id, v.mmsi AS vessel_mmsi,
+                   v.id AS vessel_id, v.mmsi AS vessel_mmsi, v.dims_locked AS vessel_dims_locked,
                    v.loa AS vessel_loa, v.beam AS vessel_beam, v.draft AS vessel_draft
             FROM intake_event e
             LEFT JOIN reservation r ON r.id = e.reservation_id
@@ -174,6 +174,10 @@ def _vessel_dims(r) -> dict | None:
 
     return {
         "ais_tracked": r.vessel_mmsi is not None,
+        # An operator override lock is pinning the dimensions (migration 0015): the
+        # stored dims are the operator's own, so the edit form shouldn't relabel
+        # them "AIS-authoritative" or force-prefill AIS over them.
+        "dims_locked": bool(r.vessel_dims_locked),
         "loa_ft": to_ft(r.vessel_loa),
         "beam_ft": to_ft(r.vessel_beam),
         "draft_ft": to_ft(r.vessel_draft),

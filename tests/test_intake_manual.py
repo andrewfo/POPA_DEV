@@ -378,6 +378,31 @@ def test_ais_tracked_vessel_warns_that_entered_draft_is_overridden(db_session):
     assert "20.0→29.9 ft" in res.notes
 
 
+def test_response_carries_ais_overrides_for_manual_override(db_session):
+    # The response surfaces the dropped dims (field + entered/AIS values) so the
+    # UI can offer a "Manual override" that pins the entered value (dims_locked).
+    db_session.execute(text(
+        "INSERT INTO vessel (mmsi, imo, name, draft) "
+        "VALUES (565440222, 9990038, 'AIS SHIP', 9.1)"
+    ))
+    out = record_manual_request(
+        db_session, _form(vessel="AIS SHIP", imo=9990038, draft_ft=20.0, beam_ft=None),
+    )
+    ov = out["ais_overrides"]
+    assert len(ov) == 1
+    entry = ov[0]
+    assert entry["field"] == "draft"          # matches VesselUpdate column
+    assert entry["entered_ft"] == 20.0
+    assert abs(entry["entered_m"] - round(20.0 / FEET_PER_M, 2)) < 0.01
+    assert out["vessel_id"] is not None       # the button targets this vessel
+
+
+def test_no_ais_overrides_when_nothing_dropped(db_session):
+    # A manual-only ship applies the entered dims, so there's nothing to override.
+    out = record_manual_request(db_session, _form(imo=9990040, draft_ft=20.0))
+    assert out["ais_overrides"] == []
+
+
 def test_manual_only_vessel_does_not_warn_about_override(db_session):
     # A ship with no MMSI is the operator's to define — the entered draft applies,
     # so no override warning.
