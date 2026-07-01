@@ -367,32 +367,45 @@ def _vessel_draft_m(session: Session, vessel_id: int | None) -> float | None:
 
 
 
-# Dimension columns AIS keeps authoritative for an MMSI-keyed vessel. Editing them
-# here *applies* (this surface is authoritative, unlike intake's NULL-fill), but the
-# AIS ingestor overwrites them by MMSI on the next ShipStaticData — so the edit is
-# transient. Warn rather than let the operator think it stuck.
+# Dimension columns AIS keeps authoritative for an MMSI-keyed vessel. For such a
+# vessel these come from ShipStaticData (loa = dim_a + dim_b) and are the single
+# source of truth, so a manual edit here is NOT applied — it stays with AIS. (It
+# used to apply and merely warn "the feed will revert it"; but the revert only
+# lands on the next ShipStaticData, so a berthed ship kept the wrong manual value
+# for a long time AND drifted loa away from dim_a+dim_b — the ACER ARROW 500 ft /
+# 20 ft draft bug.) A manual-only vessel (no MMSI) still owns its dimensions.
 _AIS_EDIT_DIMS = {"loa": "LOA", "beam": "beam", "draft": "draft"}
 
 
-def _ais_dim_edit_warnings(mmsi: int | None, changes: dict) -> list[str]:
-    """Warn when this edit changes a dimension of an AIS-tracked vessel — the live
-    feed will overwrite it on the next AIS message, so the change won't stick."""
+def _strip_ais_dims(mmsi: int | None, changes: dict) -> list[str]:
+    """For an AIS-tracked vessel (has MMSI), drop any loa/beam/draft edit from
+    ``changes`` in place — AIS is authoritative for its dimensions, so a manual
+    value must not overwrite (or drift) them — and return a warning naming what
+    was dropped. Manual-only vessels (no MMSI) keep their edits (returns [])."""
     if mmsi is None:
         return []
-    edited = [label for field, label in _AIS_EDIT_DIMS.items() if changes.get(field) is not None]
-    if not edited:
+    dropped = [label for field, label in _AIS_EDIT_DIMS.items() if changes.pop(field, _UNSET) is not _UNSET]
+    if not dropped:
         return []
     return [
-        f"{', '.join(edited)} saved, but this vessel is AIS-tracked (MMSI {mmsi}); "
-        f"the live AIS feed overwrites its dimensions on the next message, so this "
-        f"edit won't stick. Correct it at the AIS source."
+        f"{', '.join(dropped)} not applied — this vessel is AIS-tracked (MMSI "
+        f"{mmsi}); AIS is authoritative for its dimensions (they come from the "
+        f"live feed). Correct it at the AIS source, not here."
     ]
+
+
+_UNSET = object()  # sentinel so dict.pop can tell "absent" from a real None value
 
 
 def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict | None:
     """Overwrite the provided columns of a vessel. Returns a summary dict, or
     ``None`` if no such vessel (-> 404). ``mmsi``/``imo`` collisions or the
-    "mmsi or imo required" check surface as IntegrityError at flush -> 409."""
+    "mmsi or imo required" check surface as IntegrityError at flush -> 409.
+
+    An AIS-tracked vessel's dimensions (loa/beam/draft) are AIS-authoritative and
+    are **not** overwritten here — the edit is dropped with a warning (see
+    ``_strip_ais_dims``); every other field, and every field of a manual-only
+    vessel, overwrites as provided."""
     row = session.execute(
         select(Vessel.mmsi).where(Vessel.id == vessel_id)
     ).first()
@@ -402,7 +415,7 @@ def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict |
     changes = upd.model_dump(exclude_unset=True)
     # Effective MMSI: an edit may be setting one now (linking the vessel to AIS).
     effective_mmsi = changes.get("mmsi", row.mmsi)
-    warnings = _ais_dim_edit_warnings(effective_mmsi, changes)
+    warnings = _strip_ais_dims(effective_mmsi, changes)
     if changes:
         session.execute(
             update(Vessel)

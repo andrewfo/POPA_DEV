@@ -261,11 +261,18 @@ backfill commit remains on step 7.)
   `reservation` (status `requested`, source `phone|email|operator`) with an
   **empty `station_range`** (berth unassigned). `email` was added to the source
   enums in migration `0004`. `GET /reservations` lists them (with `berth_name`).
-  For an **AIS-tracked** vessel (has MMSI) the create only NULL-fills dimensions
-  (AIS stays authoritative — the ingestor overwrites by MMSI on every static
-  message), so a typed draft/LOA/beam that differs is now flagged with a warning
-  (`_ais_override_warnings`, entered vs authoritative in feet) rather than
-  silently dropped.
+  For an **AIS-tracked** vessel (has MMSI) both create **and edit** only NULL-fill
+  dimensions (AIS stays authoritative — the ingestor overwrites by MMSI on every
+  static message), so a typed draft/LOA/beam that differs is flagged with a
+  warning (`_apply_ais_overrides` → `_override_warnings`, entered vs authoritative
+  in feet) and stamped as a durable `[AIS override]` note, rather than silently
+  dropped. The berth-request **edit form** prefills the AIS values (so it reflects
+  reality); a date-only edit that keeps them restores the operator's original
+  entered dims so the override note survives (`_restore_kept_ais_prefill`). The
+  **vessel Edit** surface (`app/edit.py`) likewise no longer overwrites an
+  AIS-tracked vessel's dims — the edit is dropped with a warning
+  (`_strip_ais_dims`); migration `0014` healed rows a prior manual edit had
+  already corrupted (`loa = dim_a+dim_b`, draft nulled for the feed to refill).
 - **Berth catalog + manual assignment** (migration `0006`) — a named `berth`
   table (canonical POPA range per berth, seeded from `data/gis`
   `berth_stations.json`) and `reservation.berth_id`. An operator assigns a berth
@@ -426,6 +433,12 @@ Not tied to a single step — pick up as the system matures.
 - ✅ `depth_survey` + `depth_segment` (migration `0012`) — the controlling-depth
   data layer for the draft gate; versioned hydrographic surveys reduced to a
   per-station controlling-depth profile (§3.3).
+- ✅ `depth_cell` (migration `0013`) — 2-D station×offset depth field for the
+  map's cross-section overlay (visualization only; the gate still reads
+  `depth_segment`).
+- ✅ Data repair (migration `0014`) — heal AIS-tracked vessels whose dimensions a
+  manual edit had corrupted: `loa = dim_a + dim_b`, drift-detected by
+  `loa <> dim_a+dim_b`; unrecoverable manual draft nulled for the feed to refill.
 - Wharf apron polygon / `wharf_area` (§2.1).
 - `reservation.derived_key` + unique index for idempotent observed rows (§2.5).
 - Keep `app/models.py` enum tuples and the migration in lockstep. The exclusion

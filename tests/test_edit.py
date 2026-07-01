@@ -140,7 +140,10 @@ def _get_reservation(client, res_id):
 
 
 def test_patch_vessel_overwrites(client, db_session):
-    vid = _add_vessel(db_session, name="MISPELT")
+    # A manual-only vessel (no MMSI) owns its dimensions, so loa overwrites.
+    vid = db_session.execute(
+        text("INSERT INTO vessel (imo, name) VALUES (9111215, 'MISPELT') RETURNING id")
+    ).scalar_one()
     r = client.patch(f"/vessels/{vid}", json={"name": "AGIOS NIKOLAOS", "loa": 183.5})
     assert r.status_code == 200
     row = db_session.execute(
@@ -154,14 +157,23 @@ def test_patch_vessel_404(client):
     assert client.patch("/vessels/99999999", json={"name": "x"}).status_code == 404
 
 
-def test_patch_ais_vessel_dimension_warns_it_wont_stick(client, db_session):
-    # Editing an AIS-tracked (MMSI) vessel's dimension applies, but the AIS feed
-    # reverts it — the response says so.
-    vid = _add_vessel(db_session, mmsi=636000123, name="AIS SHIP")
+def test_patch_ais_vessel_dimension_is_not_applied(client, db_session):
+    # AIS is authoritative for an AIS-tracked (MMSI) vessel's dimensions: a draft
+    # edit here is DROPPED, not applied (so it can't corrupt the AIS value until a
+    # far-off next ShipStaticData — the ACER ARROW bug), and the response says so.
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft) "
+             "VALUES (636000123, 'AIS SHIP', 9.1) RETURNING id")
+    ).scalar_one()
     r = client.patch(f"/vessels/{vid}", json={"draft": 6.1})
     assert r.status_code == 200
     warns = " ".join(r.json().get("warnings", []))
-    assert "AIS-tracked" in warns and "won't stick" in warns
+    assert "AIS-tracked" in warns and "not applied" in warns
+    # The stored draft is unchanged — the AIS value stands.
+    draft = db_session.execute(
+        text("SELECT draft FROM vessel WHERE id = :id"), {"id": vid}
+    ).scalar_one()
+    assert float(draft) == 9.1
 
 
 def test_patch_manual_vessel_dimension_does_not_warn(client, db_session):

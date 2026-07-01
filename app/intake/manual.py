@@ -578,6 +578,39 @@ def _override_note(diffs: list[tuple[str, float, float]]) -> str:
     return f"[AIS override] entered {parts}; AIS values kept (authoritative)."
 
 
+def _restore_kept_ais_prefill(session: Session, form: BerthRequestForm, prior: dict) -> None:
+    """On edit, undo the AIS-value prefill the operator left untouched, restoring
+    their **original** entered dimension from the prior raw — so the ``[AIS
+    override]`` note survives an unrelated edit (e.g. changing only the date).
+
+    The edit form prefills an AIS-tracked vessel's dims with the AIS-authoritative
+    values (``GET /intake/berth-requests`` -> ``editBerthRequest``). If the
+    operator keeps a prefilled value and saves, the submitted dim now *equals*
+    AIS, so ``_apply_ais_overrides`` would find no discrepancy and drop the
+    override note (and ``raw`` would lose the original entry). Treat "still equal
+    to the AIS value" as "unchanged" and put the prior raw's value back; a dim the
+    operator genuinely changed (now differs from AIS) is left as entered. Mutates
+    ``form`` in place; no-op for a new IMO or a manual-only (no-MMSI) ship."""
+    if form.imo is None:
+        return
+    row = session.execute(
+        select(Vessel.mmsi, Vessel.loa, Vessel.beam, Vessel.draft)
+        .where(Vessel.imo == form.imo)
+        .limit(1)
+    ).first()
+    if row is None or row.mmsi is None:
+        return  # new IMO or manual-only ship — the entered value is the operator's
+    for field, ais_m in (("length_ft", row.loa), ("beam_ft", row.beam), ("draft_ft", row.draft)):
+        if ais_m is None:
+            continue
+        entered_ft = getattr(form, field)
+        if entered_ft is None:
+            continue
+        ais_ft = float(ais_m) * FEET_PER_M
+        if abs(float(entered_ft) - ais_ft) < 0.5:  # kept the AIS prefill -> unchanged
+            setattr(form, field, prior.get(field))
+
+
 def _apply_ais_overrides(session: Session, req: NormalizedRequest) -> bool:
     """Record any AIS override this request carries, and report whether its IMO
     resolves to an **AIS-tracked** vessel (has MMSI).
@@ -819,6 +852,11 @@ def update_manual_request(
         form.signature = prior.get("signature")
     if form.notes is None:
         form.notes = prior.get("notes")
+
+    # The edit form prefills an AIS-tracked vessel's dims with the AIS values; if
+    # the operator kept them (e.g. edited only the date), restore the original
+    # entered dims so the [AIS override] note isn't erased by the edit.
+    _restore_kept_ais_prefill(session, form, prior)
 
     req = normalize_form(form)
     key = dedupe_key(req.raw)

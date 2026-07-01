@@ -403,7 +403,8 @@ alembic/               # migrations: 0001 schema · 0002 occupancy · 0003 intak
                        #   0010 intake_event soft-delete (deleted_at) + audit_log table ·
                        #   0011 worker_heartbeat (per-worker liveness telemetry) ·
                        #   0012 depth_survey + depth_segment (controlling-depth data layer) ·
-                       #   0013 depth_cell (2-D station×offset depth field for the cross-section overlay)
+                       #   0013 depth_cell (2-D station×offset depth field for the cross-section overlay) ·
+                       #   0014 data repair: heal AIS vessels whose dims a manual edit corrupted (loa=dim_a+dim_b)
 tests/                 # pure: crosswalk, geo→station(real), ais/intake parsers, occupancy math,
                        #   edit range/validation, conflict overlap predicates; db-marked (auto-skip):
                        #   geo→station, occupancy derive, intake, reservations, edit (vessel patch /
@@ -581,8 +582,18 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
 - The manual **edit** surface (`app/edit.py`) is **authoritative**: a vessel
   edit overwrites the fields it sets (unlike intake *create*, which only fills
   NULLs except when an IMO resolves to the same manual-only ship — see above —
-  and refuses an IMO already held by a different ship). Vessel dims are edited in **metres** (the
-  canonical store), not feet. Station ranges are entered in **Dock No. feet** —
+  and refuses an IMO already held by a different ship). **Exception — an
+  AIS-tracked vessel's dimensions** (loa/beam/draft on a row with an MMSI): those
+  are AIS-authoritative and are **NOT** overwritten here — the edit is **dropped**
+  with a warning (`_strip_ais_dims`), so AIS stays 100% persistent. (It used to
+  apply and merely warn "the feed will revert it"; but the revert only lands on
+  the next `ShipStaticData`, so a berthed / gone-quiet ship kept the wrong manual
+  value indefinitely and its stored `loa` drifted from `dim_a+dim_b` — the ACER
+  ARROW "500 ft LOA / 20 ft draft" bug. Migration 0014 healed rows already
+  corrupted: for an MMSI vessel where `loa <> dim_a+dim_b`, recompute
+  `loa = dim_a+dim_b` and null the unrecoverable manual `draft` so the feed
+  refills it.) A manual-only vessel (no MMSI) still owns all its dimensions.
+  Vessel dims are edited in **metres** (the canonical store), not feet. Station ranges are entered in **Dock No. feet** —
   the stationing painted on the wharf (the yellow dock markers on the map), what
   an operator actually reads off the quay — and converted to canonical POPA on
   store via the wharf segment's affine params

@@ -312,6 +312,45 @@ def test_edit_preserves_ais_vessel_dims_and_records_override(db_session):
     assert "[AIS override]" in res.notes
 
 
+def test_date_edit_keeps_ais_override_note(db_session):
+    # Bug: editing only the date on an AIS-tracked request wiped the [AIS override]
+    # note. The edit form prefills the AIS draft (9.1 m ~= 29.9 ft); if the operator
+    # keeps it and just changes the date, the submitted draft now equals AIS, so the
+    # override would vanish. The original 20 ft entry must be restored so the note
+    # survives.
+    db_session.execute(text(
+        "INSERT INTO vessel (mmsi, imo, name, draft) "
+        "VALUES (565440333, 9995557, 'AIS DATE SHIP', 9.1)"
+    ))
+    out = record_manual_request(
+        db_session, _form(vessel="AIS DATE SHIP", imo=9995557, draft_ft=20.0),
+    )
+    res0 = db_session.execute(
+        select(Reservation).where(Reservation.id == out["reservation_id"])
+    ).scalar_one()
+    assert "[AIS override]" in res0.notes  # present after create
+
+    # Simulate the edit form: date changed, draft left at the prefilled AIS value.
+    ais_draft_ft = round(9.1 * FEET_PER_M, 1)   # what the form prefills
+    update_manual_request(
+        db_session,
+        out["intake_event_id"],
+        _form(vessel="AIS DATE SHIP", imo=9995557, draft_ft=ais_draft_ft,
+              etb=dt.date(2026, 7, 20), etd=dt.date(2026, 7, 23)),
+    )
+    res = db_session.execute(
+        select(Reservation).where(Reservation.id == out["reservation_id"])
+    ).scalar_one()
+    # The override note survived — regenerated from the restored original 20 ft.
+    assert "[AIS override]" in res.notes
+    assert "20.0" in res.notes
+    # And the raw kept the operator's original entry, not the AIS prefill.
+    ev = db_session.execute(
+        select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
+    ).scalar_one()
+    assert ev.raw["draft_ft"] == 20.0
+
+
 def test_ais_tracked_vessel_warns_that_entered_draft_is_overridden(db_session):
     # An AIS-tracked ship (has MMSI) owns its dimensions: a request keeps AIS's
     # draft, so an operator's entered draft is dropped — and we say so. Seed the
