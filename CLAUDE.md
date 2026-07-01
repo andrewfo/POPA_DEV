@@ -504,7 +504,13 @@ DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a 
   When the IMO resolves to the **same** ship (stored name matches, or either
   side is unnamed), a **manual-only vessel** (no MMSI) is overwritten so a
   re-submitted corrected LOA/dims takes effect, while an **AIS-tracked vessel**
-  (has MMSI) still only NULL-fills (its dimensions stay authoritative). Whenever
+  (has MMSI) still only NULL-fills (its dimensions stay authoritative — the AIS
+  ingestor keeps overwriting them by MMSI on every `ShipStaticData`). Because that
+  silently drops an operator's typed dimension, `record_manual_request`
+  **surfaces a warning** (`_ais_override_warnings`) naming the entered value vs the
+  authoritative AIS one (in feet) when a request's draft/LOA/beam differs from an
+  MMSI-keyed vessel's stored value — so "I set 20 ft but it shows 30 ft" isn't a
+  silent surprise. Whenever
   a request's LOA reaches the vessel (create or edit), `_reproject_placements`
   re-derives any **bow-placed, planned** reservation's `station_range` from the
   new LOA holding the bow fixed (berth-assigned, unplaced, un-oriented, and

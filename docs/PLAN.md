@@ -261,6 +261,11 @@ backfill commit remains on step 7.)
   `reservation` (status `requested`, source `phone|email|operator`) with an
   **empty `station_range`** (berth unassigned). `email` was added to the source
   enums in migration `0004`. `GET /reservations` lists them (with `berth_name`).
+  For an **AIS-tracked** vessel (has MMSI) the create only NULL-fills dimensions
+  (AIS stays authoritative — the ingestor overwrites by MMSI on every static
+  message), so a typed draft/LOA/beam that differs is now flagged with a warning
+  (`_ais_override_warnings`, entered vs authoritative in feet) rather than
+  silently dropped.
 - **Berth catalog + manual assignment** (migration `0006`) — a named `berth`
   table (canonical POPA range per berth, seeded from `data/gis`
   `berth_stations.json`) and `reservation.berth_id`. An operator assigns a berth
