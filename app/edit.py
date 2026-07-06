@@ -46,7 +46,6 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.crosswalk import format_station, segment_dockno_params
 from app.depth.gate import controlling_depth_over, depth_shortfall
-from app.tz import assume_central
 from app.models import (
     DIRECTIONS,
     RESERVATION_SOURCES,
@@ -54,6 +53,7 @@ from app.models import (
     RESERVATION_TYPES,
     Vessel,
 )
+from app.tz import assume_central
 
 # Station "M" is feet; vessel LOA is stored in metres (matching AIS dimensions).
 # Used to turn a vessel length into a station span when placing a reservation

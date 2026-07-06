@@ -22,8 +22,8 @@ and ``format_station`` convert to/from that notation.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 # Published POPA crosswalk defaults.
 DEFAULT_CORPS_SCALE = 1.0
@@ -221,7 +221,7 @@ def project_to_station(
     px, py = lon * k, lat
     best_d2: float | None = None
     best_m = vertices[0][2]
-    for (lo1, la1, m1), (lo2, la2, m2) in zip(vertices[:-1], vertices[1:]):
+    for (lo1, la1, m1), (lo2, la2, m2) in zip(vertices[:-1], vertices[1:], strict=True):
         ax, ay = lo1 * k, la1
         bx, by = lo2 * k, la2
         dx, dy = bx - ax, by - ay

@@ -28,7 +28,7 @@ Runnable for the initial load:  ``python -m app.depth.ingest <file.XYZ>``
 from __future__ import annotations
 
 import datetime as dt
-from typing import Iterable
+from collections.abc import Iterable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -270,7 +270,7 @@ def main() -> None:
 
     session = SessionLocal()
     try:
-        with open(args.path, "r", encoding="utf-8", errors="ignore") as fh:
+        with open(args.path, encoding="utf-8", errors="ignore") as fh:
             summary = import_survey(
                 session,
                 parse_xyz(fh),

@@ -8,7 +8,7 @@ import, mirroring the project's "tolerant ingest" rule for messy inputs.
 """
 from __future__ import annotations
 
-from typing import Iterable, Iterator
+from collections.abc import Iterable, Iterator
 
 
 def parse_xyz(lines: Iterable[str]) -> Iterator[tuple[float, float, float]]:

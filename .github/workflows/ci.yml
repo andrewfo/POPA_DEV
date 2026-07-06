@@ -1,0 +1,120 @@
+name: CI
+
+# Lint, type-check, and test on every push / PR. The db-tests job spins up a
+# real PostGIS service container, runs the migrations + seed, and executes the
+# `db`-marked tests that would otherwise SKIP with no database — so the conflict
+# self-join, occupancy derivation, the depth gate, and the edit CRUD path are
+# actually exercised in CI, not just locally.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- Pure tests: no database on the runner. Test selection is NOT by the `db`
+  #     marker (it's applied inconsistently) — the real gate is the `db_session`
+  #     fixture, which probes once and auto-skips the DB tests when no PostGIS is
+  #     reachable. So we run the whole suite here: the crosswalk math, overlap
+  #     predicates, .XYZ parsing, intake normalization and edit helpers execute;
+  #     the db_session tests skip. This proves the no-DB path stays green.
+  pure-tests:
+    name: Tests (no DB — pure paths)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Run test suite (DB tests auto-skip with no database)
+        run: pytest -v -ra
+
+  # --- DB tests: the whole point of this file. A PostGIS service container backs
+  #     the `db`-marked suite so those tests RUN instead of auto-skipping.
+  db-tests:
+    name: DB tests (PostGIS)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: popa
+          POSTGRES_PASSWORD: popa
+          POSTGRES_DB: popa_wharf
+        ports:
+          - 5432:5432
+        # Hold the job until Postgres accepts connections, matching the dev
+        # compose healthcheck (pg_isready).
+        options: >-
+          --health-cmd "pg_isready -U popa -d popa_wharf"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # All DB access (app + alembic + conftest probe) resolves through
+      # app.config, which honors DATABASE_URL. psycopg3 driver, matching the app.
+      DATABASE_URL: postgresql+psycopg://popa:popa@localhost:5432/popa_wharf
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Migrate (alembic upgrade head)
+        run: python -m alembic upgrade head
+      - name: Seed wharf segment + berth catalog
+        run: python -m app.seed.wharf_seed
+      - name: Run full suite against PostGIS
+        # With DATABASE_URL pointing at the migrated + seeded service container,
+        # the db_session fixture connects and the DB tests RUN (instead of
+        # auto-skipping) — the whole reason this job exists. Run the full suite
+        # so pure and DB paths are both covered. `-ra` prints skip reasons, so a
+        # regression where the DB tests silently skip again is visible in the log.
+        run: pytest -v -ra
+
+  # --- Lint: ruff. Not yet a project dependency, so this pins it here. Fast to
+  #     fix; kept a separate job so a style nit doesn't mask a test result.
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: ruff check
+        run: ruff check app tests
+
+  # --- Type-check: mypy. The codebase has never been type-checked, so this is
+  #     ADVISORY (continue-on-error) to start — it surfaces issues without
+  #     blocking merges. Drop continue-on-error once the tree is clean.
+  typecheck:
+    name: Type-check (mypy, advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: |
+          pip install -e ".[dev]"
+          pip install mypy
+      - name: mypy
+        run: mypy app

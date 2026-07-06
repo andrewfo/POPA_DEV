@@ -41,3 +41,31 @@ asyncio_mode = "auto"
 markers = [
     "db: tests that require a live Postgres+PostGIS database (set DATABASE_URL)",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+# Generated / vendored dirs the linter should not police.
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+# A deliberately small, high-signal starter set: pyflakes (real errors — unused
+# names, bad f-strings), a pycodestyle subset, isort, pyupgrade, flake8-bugbear.
+# Style-only noise (line length, etc.) stays off until the tree is clean; widen
+# this over time rather than starting strict and drowning the gate.
+select = ["F", "E9", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency/param markers are *meant* to be called in argument
+# defaults — that's the framework's idiom, not the B008 mutable-default bug the
+# rule targets. Treat them as immutable so B008 stops flagging every endpoint.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Form",
+    "fastapi.File",
+]
+

@@ -15,7 +15,7 @@ from app.occupancy.derive import derive_observed
 
 pytestmark = pytest.mark.db
 
-T0 = dt.datetime(2026, 6, 1, 12, 0, tzinfo=dt.timezone.utc)
+T0 = dt.datetime(2026, 6, 1, 12, 0, tzinfo=dt.UTC)
 
 
 def _insert_segment(session) -> int:
@@ -146,7 +146,7 @@ def test_open_ended_berthing_has_unbounded_upper_and_contains_now(db_session):
     # track must be FRESH against the feed clock (a trailing segment silent past
     # berth_stale_close_min is closed as departed-during-a-gap), so seed it
     # ending near now — on a dev DB with live traffic the feed clock IS now.
-    t0 = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=70)
+    t0 = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=70)
     seg_id = _insert_segment(db_session)
     vid = _insert_vessel(db_session)
     _seed_berthing_track(db_session, vid, t0=t0)

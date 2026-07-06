@@ -26,7 +26,7 @@ from app.edit import (
 )
 from app.main import app
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
 
 # --- pure helpers (always run) ---------------------------------------------

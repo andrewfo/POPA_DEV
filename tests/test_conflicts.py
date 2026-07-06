@@ -19,7 +19,7 @@ from app.conflicts import (
     time_overlaps,
 )
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
 
 def _t(day: int) -> dt.datetime:

@@ -17,9 +17,9 @@ Run:  python -m app.intake.dataverse_run
 """
 from __future__ import annotations
 
-import logging
 import argparse
 import json
+import logging
 import time
 from pathlib import Path
 

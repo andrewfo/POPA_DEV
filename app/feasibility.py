@@ -34,8 +34,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.conflicts import MOORING_GAP_FT
 from app.config import get_settings
+from app.conflicts import MOORING_GAP_FT
 from app.crosswalk import segment_dockno_params
 from app.depth.gate import FEET_PER_M, controlling_depth_over, depth_shortfall
 

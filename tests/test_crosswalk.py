@@ -4,9 +4,9 @@ import math
 import pytest
 
 from app.crosswalk import (
-    AffineParams,
     DEFAULT_CORPS,
     DEFAULT_DOCKNO,
+    AffineParams,
     corps_to_popa,
     dockno_to_popa,
     format_station,

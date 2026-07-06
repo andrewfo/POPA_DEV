@@ -5,7 +5,7 @@ import datetime as dt
 
 from app.occupancy.detect import Sample, detect_berthings
 
-T0 = dt.datetime(2026, 6, 1, 12, 0, tzinfo=dt.timezone.utc)
+T0 = dt.datetime(2026, 6, 1, 12, 0, tzinfo=dt.UTC)
 
 
 def _track(specs: list[tuple[int, bool, float]]) -> list[Sample]:

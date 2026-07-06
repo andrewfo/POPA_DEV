@@ -619,15 +619,15 @@ def _restore_kept_ais_prefill(session: Session, form: BerthRequestForm, prior: d
     ).first()
     if row is None or row.mmsi is None:
         return  # new IMO or manual-only ship — the entered value is the operator's
-    for field, ais_m in (("length_ft", row.loa), ("beam_ft", row.beam), ("draft_ft", row.draft)):
+    for attr, ais_m in (("length_ft", row.loa), ("beam_ft", row.beam), ("draft_ft", row.draft)):
         if ais_m is None:
             continue
-        entered_ft = getattr(form, field)
+        entered_ft = getattr(form, attr)
         if entered_ft is None:
             continue
         ais_ft = float(ais_m) * FEET_PER_M
         if abs(float(entered_ft) - ais_ft) < 0.5:  # kept the AIS prefill -> unchanged
-            setattr(form, field, prior.get(field))
+            setattr(form, attr, prior.get(attr))
 
 
 def _apply_ais_overrides(

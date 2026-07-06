@@ -6,11 +6,11 @@ DB query covered separately in ``test_verification_db.py``.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.verification import classify_planned, expiry_action, where_planned
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def _t(y, m, d):

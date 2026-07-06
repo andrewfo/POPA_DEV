@@ -186,7 +186,7 @@ class Vessel(Base):
         ),
     )
 
-    reservations: Mapped[list["Reservation"]] = relationship(back_populates="vessel")
+    reservations: Mapped[list[Reservation]] = relationship(back_populates="vessel")
 
 
 class Reservation(Base):
@@ -377,10 +377,10 @@ class DepthSurvey(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    segments: Mapped[list["DepthSegment"]] = relationship(
+    segments: Mapped[list[DepthSegment]] = relationship(
         back_populates="survey", cascade="all, delete-orphan"
     )
-    cells: Mapped[list["DepthCell"]] = relationship(
+    cells: Mapped[list[DepthCell]] = relationship(
         back_populates="survey", cascade="all, delete-orphan"
     )
 

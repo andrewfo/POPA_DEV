@@ -68,7 +68,6 @@ def detect_berthings(
     events: list[BerthingEvent] = []
     seg_start: dt.datetime | None = None  # first still sample of the open segment
     seg_last_still: dt.datetime | None = None  # most recent confirmation it's there
-    last_idx = len(ordered) - 1
 
     def _can_enter(s: Sample) -> bool:
         if not s.alongside or s.sog is None:
@@ -86,7 +85,7 @@ def detect_berthings(
         if end - start >= dwell:
             events.append(BerthingEvent(start, end, open_ended))
 
-    for i, s in enumerate(ordered):
+    for s in ordered:
         if seg_start is None:
             if _can_enter(s):
                 seg_start = s.ts

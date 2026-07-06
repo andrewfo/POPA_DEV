@@ -16,7 +16,7 @@ from sqlalchemy import text
 from app.db import get_session
 from app.main import app
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
 
 @pytest.fixture

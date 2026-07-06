@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import func, select, text
 
-import pytest
-
 from app.db import get_session
-from pydantic import ValidationError
-
 from app.intake.manual import (
     FEET_PER_M,
     BerthRequestForm,
@@ -93,7 +91,7 @@ def test_etb_aware_input_keeps_its_instant():
     # An explicitly-zoned value (e.g. 'Z') is not re-stamped — its instant is
     # preserved, equal to the same moment expressed in Central.
     req = normalize_form(_form(etb="2026-06-16T14:30:00Z"))
-    assert req.etb == dt.datetime(2026, 6, 16, 14, 30, tzinfo=dt.timezone.utc)
+    assert req.etb == dt.datetime(2026, 6, 16, 14, 30, tzinfo=dt.UTC)
     assert req.etb.utcoffset() == dt.timedelta(0)  # kept UTC, not shifted
 
 

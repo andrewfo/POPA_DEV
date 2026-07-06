@@ -17,7 +17,7 @@ from sqlalchemy import text
 from app.db import get_session
 from app.main import app
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 FEET_PER_M = 3.280839895
 
 
