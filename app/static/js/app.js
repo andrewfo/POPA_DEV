@@ -70,6 +70,22 @@ document.querySelectorAll("summary .info").forEach((i) =>
   });
 })();
 
+// --- Tutorial modal --------------------------------------------------------
+// A static how-to overlay opened from the header button. Close on ×, backdrop
+// click, or Esc. No data — pure guide markup lives in index.html.
+(function () {
+  const modal = document.getElementById("tutorialModal");
+  const openBtn = document.getElementById("tutorialBtn");
+  const closeBtn = document.getElementById("tutorialClose");
+  if (!modal || !openBtn) return;
+  const open = () => modal.classList.add("open");
+  const close = () => modal.classList.remove("open");
+  openBtn.addEventListener("click", open);
+  closeBtn && closeBtn.addEventListener("click", close);
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+  addEventListener("keydown", (e) => { if (e.key === "Escape" && modal.classList.contains("open")) close(); });
+})();
+
 // --- Boot ------------------------------------------------------------------
 loadBbox();
 loadReferenceGeo().then(loadTimeline);   // lanes need BERTH_STA loaded first
