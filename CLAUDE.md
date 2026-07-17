@@ -428,6 +428,8 @@ Dockerfile             # production app image (one image runs all four roles); C
 docker-compose.prod.yml# prod stack: db + one-shot migrate/seed + api + ais + occupancy (NOT the dev compose)
 .env.example           # single config/secrets template (DB, operator creds, AIS key, prod worker knobs) -> .env
 DEPLOY.md              # host + deployment playbook (reverse proxy + TLS over a sanctioned net; Azure/Entra option)
+.github/workflows/ci.yml # CI on every push/PR: pure-tests (DB tests skip) + db-tests (PostGIS
+                       #   service container -> migrate + seed + full suite) + ruff lint + advisory mypy
 ```
 
 ## Working agreements for future changes

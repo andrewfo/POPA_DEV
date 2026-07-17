@@ -122,9 +122,10 @@ is a later layer", both user-requested):
   metric tons, `bunker_type` from the shared `BUNKER_TYPES` list.
 - **No automated reconnect/health proof for the AIS client.** `app/ais/run.py`
   is long-running but we have no soak test or metrics.
-- **DB tests are opt-in** and auto-skip without a database; CI needs a real
-  PostGIS service to exercise them. (Note: on Windows, `engine.connect()` to a
-  dead host can hang — set `?connect_timeout=N` to fail fast.)
+- **DB tests are opt-in** and auto-skip without a database; **CI now exercises
+  them** against a real PostGIS service container (`.github/workflows/ci.yml`,
+  §5.2). (Note: on Windows, `engine.connect()` to a dead host can hang — set
+  `?connect_timeout=N` to fail fast.)
 - **Auth is all-or-nothing HTTP Basic** — one shared operator credential gates
   the whole app, with no per-user accounts, roles, or audit of *who* edited. Fine
   for a small operator team; revisit (OIDC/SSO against the portpa.com tenant) if
@@ -367,10 +368,18 @@ Not tied to a single step — pick up as the system matures.
 - Add a fixture comparing a few surveyed (lat/lon → station) points end-to-end.
 
 ### 5.2 CI / test infrastructure
-- GitHub Actions: lint (ruff), type-check (mypy), `pytest` (pure) on every push;
+- ~~GitHub Actions: lint (ruff), type-check (mypy), `pytest` (pure) on every push;
   a job that spins up a **PostGIS service container**, runs `alembic upgrade
-  head`, and runs the `db`-marked tests.
+  head`, and runs the `db`-marked tests.~~ **Done** — `.github/workflows/ci.yml`
+  (`cf51214`): four jobs on every push/PR — `pure-tests` (full suite, DB tests
+  auto-skip), `db-tests` (a `postgis/postgis:16-3.4` service container →
+  `alembic upgrade head` → `app.seed.wharf_seed` → full suite, so the conflict
+  self-join, occupancy derivation, depth gate, and edit CRUD actually **run**),
+  `lint` (ruff), and an **advisory** `typecheck` (mypy, `continue-on-error` until
+  the tree is clean). Note: test selection is by the `db_session` fixture's
+  connect-probe, not the `db` marker (applied inconsistently).
 - Add a migration round-trip test (`upgrade` → `downgrade` → `upgrade`).
+- Drop `continue-on-error` on the mypy job once the tree type-checks clean.
 
 ### 5.3 AIS ingestion hardening
 - Reconnect with backoff + jitter; re-send the subscription within 3 s of every
@@ -506,9 +515,10 @@ Leaflet **UI** and berth-request intake **capture**. See §1.)
    `depth_segment` (migration `0012`), `.XYZ` upload + PostGIS reduction
    (`app/depth/*`), and the confirm gate (`app/edit._depth_gate`, blocks 422 with
    override). See §3.3.
-6. **CI** with a PostGIS service container; AIS reconnect/metrics hardening.
-   (Production deployment packaging is **done** — see §5.4; the prod image makes a
-   CI build/integration job straightforward.)
+6. ~~**CI** with a PostGIS service container~~ **done** (`.github/workflows/ci.yml`,
+   §5.2); what's left here is **AIS reconnect/metrics hardening** (§5.3) and a
+   last-AIS-message-age healthcheck (§5.4). (Production deployment packaging is
+   **done** — see §5.4.)
 7. *(Optional)* wire the legacy-spreadsheet backfill review→commit pipeline.
 8. **Frontend modularization** — split `index.html`'s inline script into ES
    modules per [`FRONTEND_SPLIT_PLAN.md`](../FRONTEND_SPLIT_PLAN.md) (no build
