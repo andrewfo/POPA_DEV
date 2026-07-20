@@ -1,7 +1,28 @@
 // Shared kernel: pure helpers + constants every other module imports. No DOM,
 // no Leaflet. Split out of the former single inline <script> in index.html.
 
-export const api = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(p + " → " + r.status); return r.json(); });
+// Flatten a FastAPI error body's `detail` into a human string. `detail` is a
+// plain string for our explicit HTTPException(...) raises (e.g. the feasibility
+// guard messages), or an array of validation objects for request-validation 422s.
+export function errorDetail(body) {
+  const d = body && body.detail;
+  if (!d) return null;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map((e) => (e && e.msg) ? e.msg : JSON.stringify(e)).join("; ");
+  return JSON.stringify(d);
+}
+
+// GET helper. On a non-2xx, surface the server's `detail` (so a 422 shows WHY —
+// e.g. "vessel length (LOA) is unknown …" — not just "→ 422"), falling back to
+// the status when there's no JSON body.
+export const api = async (p) => {
+  const r = await fetch(p);
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    throw new Error(errorDetail(body) || (p + " → " + r.status));
+  }
+  return r.json();
+};
 
 // Design tokens, read once from the CSS custom properties so the JS-drawn layers
 // (Leaflet styles, the SVG timeline, vessel outlines) share the stylesheet's

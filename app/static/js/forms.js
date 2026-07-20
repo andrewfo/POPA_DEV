@@ -2,7 +2,7 @@
 // cancel), the berth-request form (create + in-place edit), the raw berth-request
 // audit list, and the sidebar tab switcher.
 import {
-  api, apiWrite, esc, fmtCentral, formPayload, isoToLocalInput, localInputToIso,
+  api, apiWrite, errorDetail, esc, fmtCentral, formPayload, isoToLocalInput, localInputToIso,
   centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, BADGE_COLORS,
 } from "./api.js";
 import { state } from "./state.js";
@@ -147,9 +147,7 @@ function openVesselEditor(id) {
 // Human-readable error from an apiWrite() failure (detail may be a string or a
 // FastAPI validation-error array).
 function writeError(w) {
-  const d = w.data && w.data.detail;
-  if (!d) return "HTTP " + w.status;
-  return typeof d === "string" ? d : JSON.stringify(d);
+  return errorDetail(w.data) || ("HTTP " + w.status);
 }
 function warnHtml(warnings) {
   return (warnings && warnings.length) ? `<span class="warn">▲ ${esc(warnings.join("; "))}</span>` : "";
@@ -306,6 +304,9 @@ function resCard(r) {
             <div><label>Bow (Dock No.)</label><input type="number" step="any" name="bow_dock" value="${bowDock}" /></div>
             <div><label>Direction</label><select name="direction">${dirSel}</select></div>
           </div>
+          <label style="margin-top:6px">Or assign a named berth</label>
+          <select name="berth_id" data-berth="${r.berth_id ?? ""}"><option value="">— pick a berth (no LOA needed) —</option></select>
+          <div class="hint" style="margin:2px 0 0">Fills the berth's full station range — works even without the vessel's LOA or a depth survey. Leave blank to place by bow + heading above.</div>
           <div class="check"><input type="checkbox" name="unassigned" ${r.station_unassigned ? "checked" : ""} /><label style="margin:0">Berth unassigned</label></div>
         </fieldset>
         <div class="check"><input type="checkbox" name="depth_override" /><label style="margin:0">Override depth check</label></div>
@@ -434,6 +435,35 @@ async function confirmCandidate(resId, c, requiredFt, result, close) {
   }
 }
 
+// The named berth catalog, fetched once and reused across cards. Assigning a
+// berth to a reservation copies its station range onto the row (server-side),
+// which is why this is the LOA-free / survey-free way to always place a ship.
+let _berthCatalog = null;
+async function loadBerthCatalog() {
+  if (!_berthCatalog) _berthCatalog = await api("/berths");
+  return _berthCatalog;
+}
+// Fill each card's berth <select> (rendered with just a placeholder) from the
+// catalog, marking the row's current berth. Names only — POPA->Dock conversion
+// stays server-side (the crosswalk), never in the UI. Best-effort: on failure
+// the dropdown stays empty but the bow+heading path is unaffected.
+async function populateBerthSelects(container) {
+  const selects = container.querySelectorAll('select[name="berth_id"]');
+  if (!selects.length) return;
+  let berths;
+  try { berths = await loadBerthCatalog(); } catch { return; }
+  selects.forEach((sel) => {
+    const cur = sel.dataset.berth;
+    for (const b of berths) {
+      const o = document.createElement("option");
+      o.value = String(b.id);
+      o.textContent = b.name;
+      if (cur && String(b.id) === cur) o.selected = true;
+      sel.appendChild(o);
+    }
+  });
+}
+
 function wireResCards(container) {
   container.querySelectorAll(".req-card[data-res]").forEach((card) => {
     const id = Number(card.dataset.res);
@@ -541,13 +571,16 @@ function wireResCards(container) {
       // Only bow + heading place the vessel; the schedule stays as set by the
       // berth request (no ETB/ETD here). The stern is derived server-side from
       // the bow, the heading, and the vessel's LOA.
-      const payload = formPayload(form, ["bow_dock", "priority"]);
+      const payload = formPayload(form, ["bow_dock", "priority", "berth_id"]);
       payload.unassigned = form.elements.unassigned.checked;
       payload.depth_override = form.elements.depth_override.checked;
       // Placing needs both bow + heading. If the heading isn't set, leave the
       // station range untouched (this is a plain status/cargo edit) rather than
       // sending a half-placement the server would reject.
       if (!form.elements.direction.value) delete payload.bow_dock;
+      // Picking a named berth places by its catalog range (no LOA / no survey
+      // needed) — override the "unassigned" box so the pick actually takes effect.
+      if (payload.berth_id) payload.unassigned = false;
       const w = await apiWrite("PATCH", `/reservations/${id}`, payload);
       if (w.ok) {
         res.className = "mini-result ok";
@@ -564,6 +597,7 @@ function wireResCards(container) {
       }
     });
   });
+  populateBerthSelects(container);   // fill the berth dropdowns from the catalog (async, best-effort)
 }
 
 // An IMO number is 7 digits + a check digit (the 7th): the trailing digit

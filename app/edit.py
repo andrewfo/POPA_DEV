@@ -272,7 +272,10 @@ def _depth_gate(
     (we never invent depth data). Returns the warnings to surface; an empty list
     means the berth cleared."""
     if sr.empty:
-        return ["no berth assigned — draft not validated against controlling depth"]
+        return [
+            "confirmed but not placed — assign a berth (pick one, or enter "
+            "bow + heading) to validate draft against depth"
+        ]
     draft_m = _vessel_draft_m(session, vessel_id)
     if draft_m is None:
         return ["vessel draft unknown — not validated against controlling depth"]

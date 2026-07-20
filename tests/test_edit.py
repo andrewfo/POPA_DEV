@@ -461,6 +461,26 @@ def test_assign_berth_fills_station_range(client, db_session):
     assert got["station_unassigned"] is True and got["berth_id"] is None
 
 
+def test_confirm_by_berth_pick_with_no_survey_succeeds(client, db_session):
+    # The "always a way to place a ship" guarantee: assigning a named berth and
+    # confirming in one PATCH (the frontend's berth-dropdown payload) must place +
+    # confirm even with NO depth survey loaded and NO vessel LOA — the depth gate
+    # warns rather than blocks, so it returns 200, not 422.
+    bid = _add_berth(db_session, name="Test Berth Confirm")
+    rid = client.post("/reservations", json={
+        "etb": "2026-08-15T00:00:00Z", "etd": "2026-08-16T00:00:00Z",
+        "status": "requested",
+    }).json()["id"]
+    r = client.patch(
+        f"/reservations/{rid}",
+        json={"berth_id": bid, "status": "confirmed", "unassigned": False},
+    )
+    assert r.status_code == 200
+    got = _get_reservation(client, rid)
+    assert got["status"] == "confirmed"
+    assert got["station_unassigned"] is False and got["berth_id"] == bid
+
+
 def test_create_with_berth_and_subspan(client, db_session):
     bid = _add_berth(db_session, name="Test Berth B", lo=1107.3, hi=1966.5)
     # Explicit Dock No. bounds (stern 2200 > bow 1500) override the berth's full

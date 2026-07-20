@@ -109,8 +109,14 @@ is a later layer", both user-requested):
   job by design — AIS can't position a not-yet-arrived ship — so there is **no**
   automated placer. The not-yet-built layer is the **AIS verification** layer
   (§4), which checks these operator placements against reality after arrival.
-  UI gap: the sidebar form still takes raw station feet — no berth `<select>`
-  over `GET /berths` yet.
+  The placement form now also exposes a **berth `<select>`** over `GET /berths`
+  (2026-07-20): picking a named berth places by its catalog range — needing **no
+  vessel LOA and no depth survey** — which is the guaranteed "always a way to
+  place a ship" path (the bow+heading option needs the LOA, and "Find berth"
+  needs LOA + a bounded window). Relatedly, `GET /feasibility`'s 422 guards (no
+  LOA / no bounded window / no vessel) now **surface their reason** in the UI —
+  the `api()` helper reads the response `detail` instead of throwing a bare
+  "→ 422", so the operator is told what to fix.
 - **Intake detail lives only in `intake_event.raw`.** Fields with no normalized
   column (flag, S/S line, destinations, deadweight, bunkering detail — type /
   metric tons / acknowledgement, cargo weights, agency, requestor name/email/

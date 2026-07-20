@@ -222,9 +222,15 @@ def compute_feasibility(session: Session, reservation_id: int) -> dict | None:
     if r.vessel_id is None:
         raise ValueError("reservation has no vessel to size a berth for")
     if r.t_start is None or r.t_end is None:
-        raise ValueError("reservation has no bounded time window")
+        raise ValueError(
+            "no arrival/departure window set — add an ETB and ETD "
+            "(or pick a berth from the catalog), then retry"
+        )
     if r.loa_m is None:
-        raise ValueError("vessel length (LOA) is unknown; cannot size the berth")
+        raise ValueError(
+            "vessel length (LOA) is unknown — set it on the vessel, "
+            "or pick a berth from the catalog"
+        )
 
     loa_ft = float(r.loa_m) * FEET_PER_M
     draft_m = float(r.draft_m) if r.draft_m is not None else None
