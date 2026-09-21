@@ -34,7 +34,16 @@ if [[ -f "$REPO/.venv/bin/activate" ]]; then
   # shellcheck disable=SC1091
   source "$REPO/.venv/bin/activate"
 fi
-PYTHON="${PYTHON:-$(command -v python3 || command -v python)}"
+# Prefer the venv interpreter directly. Some venvs ship no `python3` symlink, so
+# `command -v python3` (even with the venv activated) can fall through to a system
+# python that lacks the project deps — the alembic/uvicorn failure we hit before.
+if [[ -z "${PYTHON:-}" ]]; then
+  if [[ -x "$REPO/.venv/bin/python" ]]; then
+    PYTHON="$REPO/.venv/bin/python"
+  else
+    PYTHON="$(command -v python3 || command -v python)"
+  fi
+fi
 if [[ -z "$PYTHON" ]]; then
   echo "No python3 or python found on PATH." >&2
   exit 1
