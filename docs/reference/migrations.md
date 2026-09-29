@@ -1,19 +1,19 @@
 # Alembic Migration History & Schema
 
-*Reference for `alembic/versions/0001`–`0015` and the tables they create. POPA wharf data layer — roadmap → [`../PLAN.md`](../PLAN.md); design contract → [`../../CLAUDE.md`](../../CLAUDE.md).*
+*Reference for `alembic/versions/0001`–`0016` and the tables they create. POPA wharf data layer — roadmap → [`../PLAN.md`](../PLAN.md); design contract → [`../../CLAUDE.md`](../../CLAUDE.md).*
 
 ## Purpose
 
 Alembic migrations are the **single source of truth** for the live schema. The ORM in `app/models.py` mirrors the migration-created schema but is never the authority — if the two diverge, the migration wins. The DB is never edited by hand; every schema change goes through a new migration revision.
 
-Each migration file is a self-contained, documented change. Migrations are applied in sequence (`0001` → `0015`); the Alembic `revision` / `down_revision` chain enforces this ordering. The `upgrade` function is the canonical definition of what the schema contains.
+Each migration file is a self-contained, documented change. Migrations are applied in sequence (`0001` → `0016`); the Alembic `revision` / `down_revision` chain enforces this ordering. The `upgrade` function is the canonical definition of what the schema contains.
 
 ## Tables
 
 | Table | Created in | Purpose |
 | --- | --- | --- |
 | `wharf_segment` | 0001 | Measured (`M` = POPA station) centerline + affine crosswalk params + apron polygon |
-| `vessel` | 0001 | Physical vessel: MMSI/IMO identity, name, dimensions (loa/beam/draft/dim_a/dim_b), `dims_locked` |
+| `vessel` | 0001 | Physical vessel: MMSI/IMO identity, name, dimensions (loa/beam/draft/dim_a/dim_b), `dims_locked`, `ais_*` dim shadow (0016) |
 | `reservation` | 0001 | Time × station rectangle: every occupancy (vessel, dredge, layberth) — AIS-derived or planned |
 | `intake_event` | 0001 | Raw inbound berth request exactly as received; audit + reconciliation trail; soft-deleted |
 | `position_report` | 0001 | Landed AIS position fixes; source-agnostic |
@@ -43,6 +43,7 @@ Each migration file is a self-contained, documented change. Migrations are appli
 | 0013 | Depth cells | Creates `depth_cell` (survey + `popa_range` + `offset_range` NUMRANGE + `controlling_depth_ft`; CASCADE). 2-D station × cross-channel grid for map visualization only; draft gate still reads `depth_segment`. |
 | 0014 | Repair AIS LOA drift | Data-only repair: for MMSI vessels where `loa ≠ dim_a + dim_b`, recomputes `loa = dim_a + dim_b` and nulls `draft` (irrecoverable). Fixes corruption caused by a former bug in the manual edit surface. No schema change; downgrade is a no-op. |
 | 0015 | `vessel.dims_locked` | Adds `vessel.dims_locked BOOLEAN NOT NULL DEFAULT false`. When set: the manual edit surface **applies** dimension edits for an AIS-tracked vessel, and the AIS ingestor stops overwriting those columns. Off by default; clearing it hands dimensions back to AIS. |
+| 0016 | `vessel.ais_*` dim shadow | Adds `vessel.ais_loa`/`ais_beam`/`ais_draft` (NUMERIC, nullable) — the last dims AIS reported, maintained by the ingestor on **every** `ShipStaticData` even while `dims_locked` freezes the live columns (they are *not* in the ingestor's locked set). Lets **revert-to-AIS** (`app/edit.update_vessel`, clearing the lock) restore the live loa/beam/draft **immediately** instead of waiting for the next broadcast. Backfilled from live dims for unlocked AIS-tracked rows; locked rows left NULL (unrecoverable → revert falls back to unlock-only). |
 
 ## Key invariants
 

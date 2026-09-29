@@ -224,8 +224,9 @@
   #sidebarResize { cursor: col-resize; background: var(--line); }
   #sidebarResize:hover { background: var(--accent); }
 
-  /* Sidebar tabs: Overview / Reservations / Berth requests. Each .tab-panel is
-     shown only when active; the panels share the one scrolling aside. */
+  /* Sidebar tabs: Overview / Reservations / Berth requests / Saved ships /
+     History. Each .tab-panel is shown only when active; the panels share the one
+     scrolling aside. */
   nav.tabs {
     display: flex; gap: 0; margin: 0 0 var(--s4);
     border-bottom: 1px solid var(--line);
@@ -478,6 +479,16 @@
   .filter-bar select:focus { outline: none; border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-dim); }
   /* Utilitarian checkboxes — square, accent tick */
   .intake .check input, .edit-form .check input, input[type=checkbox] { accent-color: var(--accent); }
+  /* A dimension field carrying an AIS-authoritative value: tinted so the operator
+     sees it came from the feed. Editable — overtyping it arms a confirm-to-pin
+     override on save (see forms.js). .ais-dim-edited marks one changed away from
+     the AIS value (the override is now pending confirmation). */
+  .intake input.ais-dim, .edit-form input.ais-dim {
+    border-color: var(--amber); background: rgba(224,165,46,.07);
+  }
+  .intake input.ais-dim-edited, .edit-form input.ais-dim-edited {
+    border-color: var(--accent); background: rgba(63,174,110,.10);
+  }
   .intake .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 9px; }
   .intake .grid3 { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 0 9px; }
   .intake .check { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: var(--ink); }
@@ -518,6 +529,8 @@
     border: 1px solid color-mix(in srgb, currentColor 50%, transparent);
     background: color-mix(in srgb, currentColor 12%, transparent);
   }
+  /* "Edited" notice on a vessel whose AIS dimensions are pinned (overridden). */
+  .edited-note { margin: 8px 0 2px; font-size: 12px; color: var(--ink-dim); display: flex; align-items: baseline; gap: 7px; }
   .row-actions { display: flex; gap: 4px; margin-top: 7px; flex-wrap: wrap; }
   .btn-sm {
     background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
@@ -1009,11 +1022,12 @@
       <span class="a-msg" id="conflictMsg">no time × station overlaps</span>
     </div>
 
-    <!-- Sidebar tabs: Overview / Reservations / Berth requests -->
+    <!-- Sidebar tabs: Overview / Reservations / Berth requests / Saved ships / History -->
     <nav class="tabs" id="sidebarTabs">
       <button type="button" class="tab active" data-tab="overview">Overview</button>
       <button type="button" class="tab" data-tab="reservations">Reservations</button>
       <button type="button" class="tab" data-tab="requests">Berth requests</button>
+      <button type="button" class="tab" data-tab="ships">Saved ships</button>
       <button type="button" class="tab" data-tab="history">History</button>
     </nav>
 
@@ -1040,8 +1054,11 @@
 
         <fieldset>
           <legend>Vessel</legend>
-          <label>Vessel <span class="req">*</span></label>
-          <input type="text" name="vessel" required />
+          <label>IMO Number <span class="req">*</span></label>
+          <input type="number" name="imo" required />
+          <div class="hint" style="margin:2px 0 8px">Enter the IMO first — vessel name and dimensions auto-fill from on-file AIS data when the ship is known. Everything else is optional.</div>
+          <label>Vessel</label>
+          <input type="text" name="vessel" />
           <div class="grid2">
             <div><label>S/S Line</label><input type="text" name="ss_line" /></div>
             <div><label>Flag</label><input type="text" name="flag" /></div>
@@ -1049,12 +1066,11 @@
           <label>Destinations</label>
           <input type="text" name="destinations" />
           <div class="grid3">
-            <div><label>IMO Number <span class="req">*</span></label><input type="number" name="imo" required /></div>
-            <div><label>LOA (ft) <span class="req">*</span></label><input type="number" step="any" name="length_ft" /></div>
+            <div><label>LOA (ft)</label><input type="number" step="any" name="length_ft" /></div>
             <div><label>Beam (ft)</label><input type="number" step="any" name="beam_ft" /></div>
+            <div><label>Draft (ft)</label><input type="number" step="any" name="draft_ft" /></div>
           </div>
-          <div class="grid3">
-            <div><label>Draft (ft) <span class="req">*</span></label><input type="number" step="any" name="draft_ft" required /></div>
+          <div class="grid2">
             <div><label>Deadweight (lbs)</label><input type="number" step="any" name="deadweight_lbs" /></div>
             <div class="check"><input type="checkbox" name="bunkers" id="bunkers" /><label for="bunkers" style="margin:0">Taking bunkers</label></div>
           </div>
@@ -1079,7 +1095,7 @@
           <legend>Schedule</legend>
           <div class="grid2">
             <div><label>Due from</label><input type="text" name="due_from" /></div>
-            <div><label>Arrival (ETB) <span class="req">*</span></label><input type="datetime-local" name="etb" /></div>
+            <div><label>Arrival (ETB) <span class="req">*</span></label><input type="datetime-local" name="etb" required /></div>
           </div>
           <div class="grid2">
             <div><label>To sail for</label><input type="text" name="sail_for" /></div>
@@ -1161,6 +1177,20 @@
     </section>
     <!-- ===== /Reservations tab ===== -->
 
+    <!-- ===== Saved ships tab ===== -->
+    <section class="tab-panel" data-panel="ships">
+    <details class="section" open>
+      <summary>Saved ships <i class="info" title="Every vessel on file — learned from AIS static data and manual berth-request entry. Edit a ship's particulars; for an AIS-tracked ship you can override the feed's LOA/beam/draft when it's wrong (pinned), or revert to AIS.">i</i></summary>
+    <div class="filter-bar">
+      <label for="shipSearch">IMO</label>
+      <input type="text" id="shipSearch" placeholder="Search saved ships by IMO…" inputmode="numeric" autocomplete="off" />
+    </div>
+    <div id="vessels"><div class="empty">loading…</div></div>
+    <div id="vesselEditor"></div>
+    </details>
+    </section>
+    <!-- ===== /Saved ships tab ===== -->
+
     <!-- ===== Overview tab ===== -->
     <section class="tab-panel active" data-panel="overview">
     <!-- Vessel-outlines and ship-dots toggles now live on the map, in the
@@ -1192,12 +1222,6 @@
     <div id="alongside"><div class="empty">loading…</div></div>
     </details>
     <!-- ===== /Alongside now ===== -->
-
-    <details class="section" open>
-      <summary>Recent vessels</summary>
-    <div id="vessels"><div class="empty">loading…</div></div>
-    <div id="vesselEditor"></div>
-    </details>
 
     <!-- ===== Depth surveys (controlling-depth data layer for the draft gate) ===== -->
     <details class="section" id="depthPanel">
@@ -1396,10 +1420,13 @@
       <ul>
         <li><b>Overview</b> — the live picture: what’s alongside now, verification of planned
           arrivals against AIS, and depth-survey status.</li>
-        <li><b>Reservations</b> — every booking. Create, edit, cancel, delete; assign a berth
-          from the catalog; promote a row to <b>Confirmed</b>.</li>
+        <li><b>Reservations</b> — every booking. Create, edit, cancel, delete; place a row by
+          bow + heading; promote it to <b>Confirmed</b>.</li>
         <li><b>Berth requests</b> — incoming requests (phone/email/operator entry, plus the
           optional AI channel). Each becomes a <code>requested</code> row you later place.</li>
+        <li><b>Saved ships</b> — every vessel on file, learned from AIS static data and manual
+          entry. Edit a ship’s particulars; for an AIS-tracked ship, <b>override</b> the feed’s
+          LOA/beam/draft when it’s wrong (pinned), or <b>revert to AIS</b>.</li>
         <li><b>History</b> — the full log of every booking and AIS-observed berthing. Use
           <b>Filters</b> to search by vessel, IMO, status, or date. <b>Hover</b> a row for a
           full ship dossier (record + reservation log + latest AIS fix).</li>
@@ -1417,9 +1444,9 @@
 
       <h3><span class="tut-num">6</span> Placing &amp; confirming a booking</h3>
       <ul>
-        <li>Open a reservation’s <b>Edit</b> form to set its position. Assign a
-          <b>berth</b> from the catalog (fills the station range for you) or type the Dock No.
-          stern/bow feet directly.</li>
+        <li>Open a reservation’s <b>Edit placement</b> form to set its position: type where the
+          <b>bow</b> sits (Dock No. feet, read off the yellow quay markers) and the
+          <b>heading</b>; the stern follows from the vessel’s LOA.</li>
         <li>Not sure where it fits? Use <b>Find berth</b> — the feasibility picker lists the
           discrete, vessel-sized <b>candidate berths</b> that are actually free in the window
           (free space minus everything occupying the wharf, padded by the 75 ft mooring gap,
@@ -1436,10 +1463,12 @@
       <p>
         For AIS-tracked ships (those with an MMSI) the <b>AIS feed is authoritative</b> on
         LOA/beam/draft — a manual edit to those is dropped so the feed can’t be clobbered.
-        When AIS itself is wrong, tick <b>“Override AIS dimensions”</b> on the vessel edit
-        form (or the red <b>Manual override</b> button on a request) to <b>pin</b> a corrected
-        value; the ingestor then stops reverting it until you un-tick. Manual-only vessels
-        (no MMSI) own all their dimensions normally.
+        When AIS itself is wrong, just edit the dimension on the vessel edit form and
+        confirm when prompted (or use the red <b>Manual override</b> button on a request) to
+        <b>pin</b> a corrected value; the ingestor then stops reverting it. A pinned ship
+        shows an <b>Edited</b> badge and a <b>Revert to AIS</b> button that hands the
+        dimensions back to the feed. Manual-only vessels (no MMSI) own all their dimensions
+        normally.
       </p>
 
       <h3><span class="tut-num">8</span> The occupancy timeline (drawer under the map)</h3>

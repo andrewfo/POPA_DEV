@@ -48,9 +48,14 @@ in [`../CLAUDE.md`](../CLAUDE.md). Ordered by value/effort.
 **Shipped (Tier 1).** The create form's IMO field now looks the ship up **before
 submit** via `GET /vessels/lookup?imo=` (`app/routers/read_only.py` →
 `app/vessel_lookup.py`) and pre-fills name + LOA/beam/draft from the on-file
-`vessel` row (AIS-populated). AIS-authoritative dims overwrite + go read-only;
-non-AIS dims fill only when blank; a manual override still routes through the
-`dims_locked` path (no back door). Covered by `tests/test_vessels_lookup.py`.
+`vessel` row (AIS-populated). AIS-authoritative dims fill + flag as editable
+(tinted, no longer read-only); non-AIS dims fill only when blank. Correcting a
+wrong autofill is now a one-confirm motion: overtyping an AIS dim arms a
+**confirm-to-pin** on save (`offerOverrideConfirm` → `PATCH /vessels/{id}` with
+`dims_locked: true`) across the intake create/edit forms and the vessel editor —
+the server authority rule is unchanged (an un-pinned typed value is still
+dropped), only the escape hatch got easier. Covered by
+`tests/test_vessels_lookup.py`.
 
 **Tier-2 seam left wired, not implemented.** `vessel_lookup.lookup()` calls
 `lookup_onfile` then falls through to `lookup_external` (a stub returning `None`).

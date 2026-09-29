@@ -172,6 +172,17 @@ class Vessel(Base):
         Boolean, nullable=False, server_default=func.false(), default=False
     )
 
+    # Shadow of the last dimensions AIS reported (migration 0016). Maintained by
+    # the ingestor on every ShipStaticData even while ``dims_locked`` freezes the
+    # live loa/beam/draft, so clearing the lock ("revert to AIS") can restore the
+    # true AIS value immediately (app/edit.update_vessel) instead of waiting for
+    # the next broadcast. NULL when unknown (no static seen, or a lock predating
+    # these columns). loa/beam only — dim_a/dim_b are effectively constant per
+    # hull and refill on the next broadcast after unlock.
+    ais_loa: Mapped[float | None] = mapped_column(Numeric(8, 2))
+    ais_beam: Mapped[float | None] = mapped_column(Numeric(8, 2))
+    ais_draft: Mapped[float | None] = mapped_column(Numeric(6, 2))
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

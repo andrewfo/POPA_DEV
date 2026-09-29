@@ -78,6 +78,14 @@ class Ingestor:
             "dim_b": msg.dim_b,
             "draft": msg.draft,
             "destination": msg.destination,
+            # Shadow of the AIS-reported dims (migration 0016). Kept current even
+            # while ``dims_locked`` freezes the live loa/beam/draft — it is NOT in
+            # ``_LOCKED_DIMS`` — so a later revert can restore the true AIS value at
+            # once (app/edit.update_vessel). COALESCE below preserves the last known
+            # when a message omits a field.
+            "ais_loa": msg.loa,
+            "ais_beam": msg.beam,
+            "ais_draft": msg.draft,
         }
         ins = pg_insert(Vessel).values(**values)
         # COALESCE(new, existing): keep prior detail if the new field is null.

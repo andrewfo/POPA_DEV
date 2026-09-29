@@ -316,6 +316,73 @@ def test_ingestor_updates_unlocked_dims(db_session):
     assert float(draft) == 9.4       # feed value applied
 
 
+def test_ingestor_shadows_ais_dims_while_locked(db_session):
+    # The AIS shadow (migration 0016) tracks the feed even while the live dims are
+    # pinned, so a later revert has the true AIS value to restore.
+    from app.ais.ingest import Ingestor
+    from app.ais.messages import AISStatic
+
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft, dims_locked) "
+             "VALUES (636000231, 'PINNED', 6.1, TRUE) RETURNING id")
+    ).scalar_one()
+    ing = Ingestor(db_session)
+    ing._upsert_vessel_static(
+        AISStatic(mmsi=636000231, name="PINNED", draft=9.4, loa=200.0, beam=30.0)
+    )
+    row = db_session.execute(
+        text("SELECT draft, loa, ais_draft, ais_loa, ais_beam "
+             "FROM vessel WHERE id = :id"),
+        {"id": vid},
+    ).one()
+    assert float(row.draft) == 6.1     # live dims still pinned
+    assert row.loa is None             # ...loa too (locked, feed ignored)
+    assert float(row.ais_draft) == 9.4  # but the shadow follows AIS
+    assert float(row.ais_loa) == 200.0
+    assert float(row.ais_beam) == 30.0
+
+
+def test_revert_to_ais_restores_shadow_dims(client, db_session):
+    # Reverting an override (clearing the lock) restores the live dims from the AIS
+    # shadow immediately — the whole point of migration 0016.
+    vid = db_session.execute(
+        text("INSERT INTO vessel "
+             "(mmsi, name, loa, beam, draft, ais_loa, ais_beam, ais_draft, dims_locked) "
+             "VALUES (636000230, 'PINNED', 60.0, 10.0, 6.1, 200.0, 30.0, 9.4, TRUE) "
+             "RETURNING id")
+    ).scalar_one()
+    r = client.patch(f"/vessels/{vid}", json={"dims_locked": False})
+    assert r.status_code == 200
+    warns = " ".join(r.json().get("warnings", []))
+    assert "restored AIS dimensions" in warns
+    row = db_session.execute(
+        text("SELECT loa, beam, draft, dims_locked FROM vessel WHERE id = :id"),
+        {"id": vid},
+    ).one()
+    assert float(row.loa) == 200.0     # live dims now match the AIS shadow
+    assert float(row.beam) == 30.0
+    assert float(row.draft) == 9.4
+    assert row.dims_locked is False
+
+
+def test_revert_without_shadow_falls_back_to_unlock(client, db_session):
+    # A lock predating the shadow columns has no AIS value to restore: revert just
+    # unlocks and says so, leaving the pinned value until the next broadcast.
+    vid = db_session.execute(
+        text("INSERT INTO vessel (mmsi, name, draft, dims_locked) "
+             "VALUES (636000232, 'OLD PIN', 6.1, TRUE) RETURNING id")
+    ).scalar_one()
+    r = client.patch(f"/vessels/{vid}", json={"dims_locked": False})
+    assert r.status_code == 200
+    warns = " ".join(r.json().get("warnings", []))
+    assert "no stored AIS dimensions to restore" in warns
+    row = db_session.execute(
+        text("SELECT draft, dims_locked FROM vessel WHERE id = :id"), {"id": vid}
+    ).one()
+    assert float(row.draft) == 6.1     # pinned value stands (nothing to restore)
+    assert row.dims_locked is False
+
+
 def test_patch_manual_vessel_dimension_does_not_warn(client, db_session):
     # A manual-only vessel (no MMSI) owns its dimensions — no warning.
     vid = db_session.execute(

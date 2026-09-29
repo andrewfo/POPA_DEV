@@ -19,12 +19,33 @@ import { loadHistory } from "./history.js";
 // caller — can flip the form into edit mode. Replaces the old window.* bridge.
 export let editBerthRequest;
 
+// Current saved-ships IMO search term (substring match), set by the search bar.
+let vesselImoFilter = "";
+
 export async function loadVessels() {
   const el = document.getElementById("vessels");
   try {
-    const vs = await api("/vessels?limit=25");
+    // Fetch a wide slice so the IMO search reaches beyond the most-recent few;
+    // the render step trims to the current filter client-side.
+    const vs = await api("/vessels?limit=500");
     state.vessels = vs;
-    if (!vs.length) { el.innerHTML = '<div class="empty">no vessels yet, run AIS ingestion</div>'; return; }
+    renderVessels();
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+  }
+}
+
+// Render state.vessels into the table, applying the IMO search filter. Split from
+// the fetch so the search bar can re-render without re-hitting the API.
+function renderVessels() {
+  const el = document.getElementById("vessels");
+  if (!el) return;
+  const all = state.vessels || [];
+  if (!all.length) { el.innerHTML = '<div class="empty">no vessels yet, run AIS ingestion</div>'; return; }
+  const q = vesselImoFilter.trim();
+  const vs = q ? all.filter((v) => v.imo != null && String(v.imo).includes(q)) : all;
+  if (!vs.length) { el.innerHTML = `<div class="empty">no saved ship with IMO matching “${esc(q)}”</div>`; return; }
+  {
     el.innerHTML = `<table id="vesselsTbl"><thead><tr>` +
       `<th>Name</th><th>MMSI</th><th>IMO</th><th>Call</th>` +
       `<th title="AIS nav-status code (ITU-R M.1371)">Nav</th>` +
@@ -44,12 +65,17 @@ export async function loadVessels() {
         const locatable = v.mmsi != null;
         if (locatable) tip.unshift("Click to locate on the chart");
         const loc = locatable ? ` class="locatable" data-locate-mmsi="${v.mmsi}"` : "";
+        if (v.dims_locked) tip.push("AIS dimensions overridden (pinned)");
         const title = tip.length ? ` title="${esc(tip.join(" · "))}"` : "";
         const sog = v.sog != null ? Number(v.sog).toFixed(1) : "—";
         const cog = v.cog != null ? Math.round(Number(v.cog)) + "°" : "—";
         const drft = v.draft != null ? Math.round(Number(v.draft) * FT_PER_M) : "—";
+        // Flag a pinned (overridden) ship right in the list so the operator sees it
+        // without opening the editor. Same amber "Edited" badge as the edit form.
+        const edited = v.dims_locked
+          ? ` <span class="status-badge" style="color:var(--amber)" title="AIS dimensions overridden — pinned">Edited</span>` : "";
         return `<tr${loc}${title}>` +
-          `<td>${v.name ? esc(v.name) : "<i>unknown</i>"}</td>` +
+          `<td>${v.name ? esc(v.name) : "<i>unknown</i>"}${edited}</td>` +
           `<td class="num">${v.mmsi ?? "—"}</td>` +
           `<td class="num">${v.imo ?? "—"}</td>` +
           `<td>${v.callsign ? esc(v.callsign) : "—"}</td>` +
@@ -73,10 +99,15 @@ export async function loadVessels() {
           tr.classList.add("locate-miss");
         }
       }));
-  } catch (e) {
-    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
 }
+
+// Wire the saved-ships IMO search box: filter the loaded list on each keystroke.
+(function () {
+  const box = document.getElementById("shipSearch");
+  if (!box) return;
+  box.addEventListener("input", () => { vesselImoFilter = box.value; renderVessels(); });
+})();
 
 // Inline editor for one vessel (dimensions in metres — the canonical store).
 function openVesselEditor(id) {
@@ -84,6 +115,11 @@ function openVesselEditor(id) {
   const box = document.getElementById("vesselEditor");
   if (!v) { box.innerHTML = ""; return; }
   const val = (x) => (x == null ? "" : x);
+  // Dimensions are stored in metres but the Saved-ships surface shows feet (what
+  // an operator reads off the quay). Display rounded feet; convert back to metres
+  // on save. `data-init-ft` stashes the shown value so an untouched field isn't
+  // round-tripped (which would drift the precise stored metres).
+  const ft = (m) => (m == null ? "" : Math.round(Number(m) * FT_PER_M));
   box.innerHTML = `
     <div class="card">
       <div class="name">Edit vessel #${v.id}</div>
@@ -94,17 +130,20 @@ function openVesselEditor(id) {
           <div><label>MMSI</label><input type="number" name="mmsi" value="${val(v.mmsi)}" /></div>
         </div>
         <div class="grid2">
-          <div><label>LOA (m)</label><input type="number" step="any" name="loa" value="${val(v.loa)}" /></div>
-          <div><label>Beam (m)</label><input type="number" step="any" name="beam" value="${val(v.beam)}" /></div>
+          <div><label>LOA (ft)</label><input type="number" step="any" name="loa" value="${ft(v.loa)}" data-init-ft="${ft(v.loa)}" /></div>
+          <div><label>Beam (ft)</label><input type="number" step="any" name="beam" value="${ft(v.beam)}" data-init-ft="${ft(v.beam)}" /></div>
         </div>
         <div class="grid2">
-          <div><label>Draft (m)</label><input type="number" step="any" name="draft" value="${val(v.draft)}" /></div>
+          <div><label>Draft (ft)</label><input type="number" step="any" name="draft" value="${ft(v.draft)}" data-init-ft="${ft(v.draft)}" /></div>
           <div><label>Callsign</label><input name="callsign" value="${esc(val(v.callsign))}" /></div>
         </div>
-        ${v.mmsi != null ? `
-        <div class="check"><input type="checkbox" name="dims_locked" id="dimsLocked" ${v.dims_locked ? "checked" : ""} /><label for="dimsLocked" style="margin:0">Override AIS dimensions</label></div>
-        <div class="hint" style="margin:-2px 0 6px">This vessel is AIS-tracked, so LOA/beam/draft come from the live feed and manual edits are normally ignored. Tick this only when AIS itself is wrong — the values above are then pinned and the feed stops reverting them. Untick to hand them back to AIS.</div>
-        ` : ""}
+        ${v.mmsi != null ? (v.dims_locked ? `
+        <div class="edited-note"><span class="status-badge" style="color:var(--amber)">Edited</span> AIS dimensions have been overridden — pinned to the values above; the live feed won't revert them.</div>
+        <div class="hint" style="margin:-2px 0 6px">Use “Revert to AIS” to unpin and hand the dimensions back to the feed.</div>
+        <div class="row-actions"><button type="button" class="btn-sm" id="revertAis">Revert to AIS</button></div>
+        ` : `
+        <div class="hint" style="margin:-2px 0 6px">This vessel is AIS-tracked, so LOA/beam/draft come from the live feed. Just edit a value and save — you'll be asked to confirm before it's pinned.</div>
+        `) : ""}
         <label>Destination</label><input name="destination" value="${esc(val(v.destination))}" />
         <div class="row-actions">
           <button type="submit" class="btn-sm primary">Save</button>
@@ -116,17 +155,64 @@ function openVesselEditor(id) {
   const form = document.getElementById("vesselEditForm");
   const res = document.getElementById("vesselEditResult");
   document.getElementById("vesselEditCancel").addEventListener("click", () => { box.innerHTML = ""; });
+  // Revert to AIS: undo a manual dimension override. Unlocks (dims_locked →
+  // false) and the server restores LOA/beam/draft from the AIS shadow it kept
+  // current while the row was pinned (migration 0016) — so the real AIS value is
+  // back at once, not on the next broadcast. (If the shadow is unknown — a lock
+  // predating the feature — the feed refills on the next ShipStaticData instead;
+  // the returned warning says which happened.) Shown only when currently pinned.
+  const revertBtn = document.getElementById("revertAis");
+  if (revertBtn) revertBtn.addEventListener("click", async () => {
+    if (!confirm(
+      `Revert ${v.name || "this vessel"} to AIS dimensions?\n\n` +
+      `This unpins the manual override and restores the last dimensions AIS ` +
+      `reported; the live feed then keeps them updated.`
+    )) return;
+    const w = await apiWrite("PATCH", `/vessels/${id}`, { dims_locked: false });
+    if (w.ok) {
+      const warns = (w.data && w.data.warnings) || [];
+      res.className = "mini-result ok";
+      res.textContent = "Reverted to AIS. " + warns.join(" ");
+      loadVessels(); loadPositions();
+      setTimeout(() => { box.innerHTML = ""; }, 2200);
+    } else {
+      res.className = "mini-result err";
+      res.textContent = "Failed: " + writeError(w);
+    }
+  });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     res.className = "mini-result";
     // Blank fields are skipped (not cleared) — a manual edit overwrites only what
     // it sets, mirroring the server's exclude_unset partial update.
     const payload = formPayload(form, ["imo", "mmsi", "loa", "beam", "draft"]);
-    // The AIS-dimension override checkbox only exists for AIS-tracked vessels;
-    // send its explicit true/false so unticking hands dimensions back to AIS
-    // (FormData omits an unchecked box, so it can't ride through formPayload).
-    const lockChk = form.elements.dims_locked;
-    if (lockChk) payload.dims_locked = lockChk.checked;
+    // loa/beam/draft are ENTERED in feet on this surface but stored in metres.
+    // Convert only fields the operator actually changed from the shown value —
+    // an untouched (rounded) field is dropped so it can't overwrite the precise
+    // stored metres with a round-tripped one.
+    for (const k of ["loa", "beam", "draft"]) {
+      const el = form.elements[k];
+      const raw = String(el.value || "").trim();
+      if (raw === "" || raw === el.dataset.initFt) { delete payload[k]; continue; }
+      payload[k] = Number(raw) / FT_PER_M;   // feet -> metres (canonical store)
+    }
+    // Easy-override: on an AIS-tracked vessel that isn't already pinned, a changed
+    // dimension would be dropped server-side (AIS stays authoritative). Offer one
+    // confirm to pin it — the sole way to override now that the checkbox is gone.
+    // Declining leaves the server's drop-and-warn behavior intact. An already-
+    // pinned vessel (dims_locked) just applies the edit, so no prompt is needed.
+    if (v.mmsi != null && !v.dims_locked) {
+      const dimChanged = ["loa", "beam", "draft"].some(
+        (k) => k in payload && Number(payload[k]) !== Number(v[k])
+      );
+      if (dimChanged && confirm(
+        `You changed AIS-reported dimensions on ${v.name || "this vessel"}.\n\n` +
+        `Pin your values and stop the AIS feed from reverting them? ` +
+        `Only do this if AIS itself is wrong.`
+      )) {
+        payload.dims_locked = true;
+      }
+    }
     const w = await apiWrite("PATCH", `/vessels/${id}`, payload);
     if (w.ok) {
       const warns = w.data && w.data.warnings;
@@ -153,16 +239,101 @@ function warnHtml(warnings) {
   return (warnings && warnings.length) ? `<span class="warn">▲ ${esc(warnings.join("; "))}</span>` : "";
 }
 
-// When a berth request dropped the operator's entered dimensions because the
-// vessel is AIS-tracked (AIS is authoritative), offer a red "Manual override"
-// button in the result area. Clicking it pins the ENTERED value onto the vessel
-// (`dims_locked`, migration 0015) — the escape hatch for when AIS itself is
-// wrong — reusing the same vessel PATCH the edit surface uses. `data` is the
+// --- AIS-authoritative dimension override (the easy manual-correction path) ---
+// AIS is authoritative for an AIS-tracked vessel's LOA/beam/draft: a typed value
+// is dropped server-side unless the operator pins it with `dims_locked` (migration
+// 0015). To make correcting a wrong autofill easy, the intake + vessel forms show
+// AIS dims as EDITABLE (tinted, not read-only); overtyping one arms a single
+// confirm on save that pins the entered value via these helpers — instead of the
+// value being silently dropped and the operator hunting for a button.
+
+// Flag a dim input as carrying an AIS-authoritative value: tint it (`.ais-dim`)
+// and stash the shown value (feet) on the element so an edit away from it is
+// detectable. Left editable on purpose — the confirm-to-pin flow handles intent.
+function markAisDim(el, ft) {
+  if (!el) return;
+  el.readOnly = false;
+  el.dataset.aisFt = String(ft);
+  el.classList.add("ais-dim");
+  el.classList.remove("ais-dim-edited");
+}
+// Clear the AIS flag from a dim input (a fresh lookup, a miss, or a form reset).
+function unmarkAisDim(el) {
+  if (!el) return;
+  el.readOnly = false;
+  delete el.dataset.aisFt;
+  el.classList.remove("ais-dim", "ais-dim-edited");
+}
+// Wire live tinting: an AIS dim flips amber -> green (`.ais-dim-edited`) the
+// moment its value differs from the stashed AIS value, so a pending override is
+// visible before save. No-op for a field that carries no AIS value.
+function wireAisDimEdit(el) {
+  if (!el) return;
+  el.addEventListener("input", () => {
+    if (!("aisFt" in el.dataset)) return;
+    const changed = String(el.value || "").trim() !== String(el.dataset.aisFt);
+    el.classList.toggle("ais-dim-edited", changed);
+    el.classList.toggle("ais-dim", !changed);
+  });
+}
+
+// Pin the operator's ENTERED dimensions onto an AIS-tracked vessel: PATCH it with
+// `dims_locked` + the entered metres values (the migration-0015 escape hatch).
+// Shared by the confirm-on-save flow and the fallback "Manual override" button.
+async function applyManualOverride(vesselId, overrides) {
+  const patch = { dims_locked: true };
+  for (const o of overrides) patch[o.field] = o.entered_m;
+  return apiWrite("PATCH", `/vessels/${vesselId}`, patch);
+}
+// Human summary of an ais_overrides list: "draft 20 ft (AIS 30 ft), ...".
+function overrideSummary(overrides) {
+  return overrides.map((o) => `${o.label.toLowerCase()} ${o.entered_ft} ft (AIS ${o.ais_ft} ft)`).join(", ");
+}
+
+// After an intake save DROPPED the operator's entered AIS-tracked dims, offer to
+// pin them with a single confirm ("confirm after" — the easy override). On accept,
+// PATCH the vessel (dims_locked + entered values) and report it in `container`. On
+// decline, keep AIS authoritative but leave the red "Manual override" button so it
+// can still be pinned later. `data` is the intake response (needs `vessel_id` +
+// non-empty `ais_overrides`). Returns true iff the override was applied.
+async function offerOverrideConfirm(container, data) {
+  const ov = data && data.ais_overrides;
+  if (!data || !data.vessel_id || !ov || !ov.length) return false;
+  const entered = overrideSummary(ov);
+  if (!confirm(
+    `You changed AIS-reported dimensions: ${entered}.\n\n` +
+    `Pin your entered value onto vessel #${data.vessel_id} and stop the AIS feed ` +
+    `from reverting it? Only do this if AIS itself is wrong.`
+  )) {
+    renderManualOverride(container, data);   // declined — leave the escape button
+    return false;
+  }
+  const w = await applyManualOverride(data.vessel_id, ov);
+  if (w.ok) {
+    const flipped = w.data && w.data.override_cancelled;
+    container.className = "result ok";
+    container.innerHTML =
+      `Manual override applied — entered dimensions (${esc(entered)}) pinned on ` +
+      `vessel #${data.vessel_id}; the AIS feed will no longer revert them ` +
+      `(clear the lock on the vessel to hand them back to AIS).` +
+      (flipped ? ` AIS override → cancelled on ${flipped} reservation${flipped === 1 ? "" : "s"}.` : "");
+    loadVessels(); loadRequests(); loadBerthRequests(); loadPositions();
+    return true;
+  }
+  container.className = "result err";
+  container.innerHTML = `Override failed: ${esc(writeError(w))}`;
+  renderManualOverride(container, data);   // let them retry via the button
+  return false;
+}
+
+// Fallback red "Manual override" button in the result area — the decline path of
+// offerOverrideConfirm (and any later correction). Clicking it pins the ENTERED
+// value onto the vessel (`dims_locked`) via the same shared PATCH. `data` is the
 // intake response; it must carry `vessel_id` and a non-empty `ais_overrides`.
 function renderManualOverride(container, data) {
   const ov = data && data.ais_overrides;
   if (!data || !data.vessel_id || !ov || !ov.length) return;
-  const entered = ov.map((o) => `${o.label} ${o.entered_ft} ft`).join(", ");
+  const entered = overrideSummary(ov);
   const wrap = document.createElement("div");
   wrap.style.marginTop = "6px";
   const btn = document.createElement("button");
@@ -171,11 +342,7 @@ function renderManualOverride(container, data) {
   btn.textContent = "Manual override";
   btn.addEventListener("click", async () => {
     btn.disabled = true;
-    // Revert to whatever was entered: pin the entered metres value + lock so the
-    // AIS ingestor stops reverting it.
-    const patch = { dims_locked: true };
-    for (const o of ov) patch[o.field] = o.entered_m;
-    const w = await apiWrite("PATCH", `/vessels/${data.vessel_id}`, patch);
+    const w = await applyManualOverride(data.vessel_id, ov);
     if (w.ok) {
       const flipped = w.data && w.data.override_cancelled;
       container.className = "result ok";
@@ -253,12 +420,13 @@ function resCard(r) {
   // the berth is unassigned.
   const bowDock = r.station_unassigned ? ""
     : (r.direction === "downstream" ? r.station_lo_dock : r.station_hi_dock);
-  // Show notes on the card face (not just in the edit form), highlighting an
-  // "[AIS override]" line so a dropped manual dimension stays apparent.
-  const notesHtml = r.notes
-    ? esc(r.notes).split("\n").map((ln) =>
-        ln.includes("[AIS override]") ? `<span class="note-ais">▲ ${ln}</span>` : ln
-      ).join("<br>")
+  // Card face stays minimal: show ONLY an "[AIS override]" note line (a dropped
+  // manual dimension the operator must still see), not the rest of the notes.
+  const overrideHtml = r.notes
+    ? esc(r.notes).split("\n")
+        .filter((ln) => ln.includes("[AIS override]"))
+        .map((ln) => `<span class="note-ais">▲ ${ln}</span>`)
+        .join("<br>")
     : "";
   return `
     <div class="card req-card" data-res="${r.id}" style="border-left-color:${color}">
@@ -266,7 +434,7 @@ function resCard(r) {
         <span class="status-badge" style="color:${color}">${esc(r.status)}</span></div>
       <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(r.source)}</div>
       <div class="meta">${sta}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
-      ${notesHtml ? `<div class="meta">${notesHtml}</div>` : ""}
+      ${overrideHtml ? `<div class="meta">${overrideHtml}</div>` : ""}
       <div class="row-actions">
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
         ${["requested", "tentative", "confirmed"].includes(r.status) ? '<button class="btn-sm" data-act="find-berth">Find berth</button>' : ""}
@@ -304,10 +472,6 @@ function resCard(r) {
             <div><label>Bow (Dock No.)</label><input type="number" step="any" name="bow_dock" value="${bowDock}" /></div>
             <div><label>Direction</label><select name="direction">${dirSel}</select></div>
           </div>
-          <label style="margin-top:6px">Or assign a named berth</label>
-          <select name="berth_id" data-berth="${r.berth_id ?? ""}"><option value="">— pick a berth (no LOA needed) —</option></select>
-          <div class="hint" style="margin:2px 0 0">Fills the berth's full station range — works even without the vessel's LOA or a depth survey. Leave blank to place by bow + heading above.</div>
-          <div class="check"><input type="checkbox" name="unassigned" ${r.station_unassigned ? "checked" : ""} /><label style="margin:0">Berth unassigned</label></div>
         </fieldset>
         <div class="check"><input type="checkbox" name="depth_override" /><label style="margin:0">Override depth check</label></div>
         <div class="hint" style="margin:-2px 0 6px">Confirming validates the vessel's draft against the latest depth survey. Tick to confirm anyway when too deep (logged as a warning).</div>
@@ -435,35 +599,6 @@ async function confirmCandidate(resId, c, requiredFt, result, close) {
   }
 }
 
-// The named berth catalog, fetched once and reused across cards. Assigning a
-// berth to a reservation copies its station range onto the row (server-side),
-// which is why this is the LOA-free / survey-free way to always place a ship.
-let _berthCatalog = null;
-async function loadBerthCatalog() {
-  if (!_berthCatalog) _berthCatalog = await api("/berths");
-  return _berthCatalog;
-}
-// Fill each card's berth <select> (rendered with just a placeholder) from the
-// catalog, marking the row's current berth. Names only — POPA->Dock conversion
-// stays server-side (the crosswalk), never in the UI. Best-effort: on failure
-// the dropdown stays empty but the bow+heading path is unaffected.
-async function populateBerthSelects(container) {
-  const selects = container.querySelectorAll('select[name="berth_id"]');
-  if (!selects.length) return;
-  let berths;
-  try { berths = await loadBerthCatalog(); } catch { return; }
-  selects.forEach((sel) => {
-    const cur = sel.dataset.berth;
-    for (const b of berths) {
-      const o = document.createElement("option");
-      o.value = String(b.id);
-      o.textContent = b.name;
-      if (cur && String(b.id) === cur) o.selected = true;
-      sel.appendChild(o);
-    }
-  });
-}
-
 function wireResCards(container) {
   container.querySelectorAll(".req-card[data-res]").forEach((card) => {
     const id = Number(card.dataset.res);
@@ -511,7 +646,6 @@ function wireResCards(container) {
     if (confirmBtn) confirmBtn.addEventListener("click", () => {
       form.classList.add("open");
       form.elements.status.value = "confirmed";
-      form.elements.unassigned.checked = false;
       form.scrollIntoView({ behavior: "smooth", block: "nearest" });
       form.elements.bow_dock.focus();
     });
@@ -571,16 +705,12 @@ function wireResCards(container) {
       // Only bow + heading place the vessel; the schedule stays as set by the
       // berth request (no ETB/ETD here). The stern is derived server-side from
       // the bow, the heading, and the vessel's LOA.
-      const payload = formPayload(form, ["bow_dock", "priority", "berth_id"]);
-      payload.unassigned = form.elements.unassigned.checked;
+      const payload = formPayload(form, ["bow_dock", "priority"]);
       payload.depth_override = form.elements.depth_override.checked;
       // Placing needs both bow + heading. If the heading isn't set, leave the
       // station range untouched (this is a plain status/cargo edit) rather than
       // sending a half-placement the server would reject.
       if (!form.elements.direction.value) delete payload.bow_dock;
-      // Picking a named berth places by its catalog range (no LOA / no survey
-      // needed) — override the "unassigned" box so the pick actually takes effect.
-      if (payload.berth_id) payload.unassigned = false;
       const w = await apiWrite("PATCH", `/reservations/${id}`, payload);
       if (w.ok) {
         res.className = "mini-result ok";
@@ -597,7 +727,6 @@ function wireResCards(container) {
       }
     });
   });
-  populateBerthSelects(container);   // fill the berth dropdowns from the catalog (async, best-effort)
 }
 
 // An IMO number is 7 digits + a check digit (the 7th): the trailing digit
@@ -633,9 +762,26 @@ function isValidImo(imo) {
     cancelBtn.style.display = id ? "" : "none";
   }
 
+  // Today's calendar date as YYYY-MM-DD for the <input type=date> default. Uses
+  // the operator's local (Central, at the port) calendar day — request_date is
+  // just "when we took the request", not an absolute instant.
+  function todayLocalDate() {
+    const d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  }
+
+  // Default the "Date" (request_date) field to today when it's blank, so a new
+  // request is stamped without the operator typing it. Skipped when already set
+  // (e.g. an edit prefilled it from the raw payload).
+  function setDefaultDate() {
+    const el = form.elements.request_date;
+    if (el && !el.value) el.value = todayLocalDate();
+  }
+
   function resetForm() {
     form.reset();
     clearAutofill();
+    setDefaultDate();
     setMode(null);
   }
 
@@ -671,14 +817,17 @@ function isValidImo(imo) {
         const el = form.elements[name];
         if (ft == null || !el) continue;
         el.value = ft;
+        // Tint the AIS value + arm confirm-to-pin on change (skip when already
+        // operator-pinned: those are the operator's own values, not AIS's).
+        if (!vessel.dims_locked) markAisDim(el, ft);
         shown.push(`${name.replace("_ft", "")} ${ft} ft`);
       }
       if (shown.length) {
         aisNote = vessel.dims_locked
           // Already pinned via Manual override: the shown dims are the operator's
-          // own, managed on the vessel — not AIS's, and still not editable here.
-          ? ` Dimensions are operator-pinned via manual override (${shown.join(", ")}); edits here still won't apply — change or unlock them on the vessel.`
-          : ` AIS-authoritative dimensions shown (${shown.join(", ")}); edits to these won't apply — correct them at the AIS source, or use Manual override after saving.`;
+          // own, managed on the vessel — editing here re-pins them on save.
+          ? ` Dimensions are operator-pinned via manual override (${shown.join(", ")}); edit any and save to re-pin, or unlock them on the vessel.`
+          : ` AIS-reported dimensions shown (${shown.join(", ")}); edit any to override — you'll confirm before it's pinned.`;
       }
     }
     setMode(id);
@@ -701,11 +850,14 @@ function isValidImo(imo) {
   let lastLookup = null;   // IMO we last resolved, so re-blur doesn't re-query
 
   function clearAutofill() {
-    // Hand the dim fields back to the operator (undo an AIS lock from a prior
-    // lookup); leaves any typed values in place.
-    dimInputs.forEach((el) => { if (el) el.readOnly = false; });
+    // Drop the AIS flag/tint from the dim fields (undo a prior lookup); leaves any
+    // typed values in place.
+    dimInputs.forEach((el) => unmarkAisDim(el));
     lastLookup = null;
   }
+  // Live tinting: an AIS dim flips to "edited" the moment its value differs from
+  // the AIS value, so a pending confirm-to-pin override is visible before save.
+  dimInputs.forEach((el) => wireAisDimEdit(el));
 
   async function autofillFromImo() {
     if (editingId) return;                              // create mode only
@@ -738,16 +890,18 @@ function isValidImo(imo) {
       else if (typed.toLowerCase() !== data.name.toLowerCase())
         notes.push(`IMO is on file as “${esc(data.name)}” (kept your entry “${esc(typed)}”)`);
     }
-    // Dims: AIS-authoritative ones overwrite + lock; others fill only when blank.
+    // Dims: AIS-authoritative ones fill + flag (editable — overtyping arms a
+    // confirm-to-pin override on save); others fill only when blank.
     const shownLock = [];
     for (const [name, ft] of [["length_ft", data.loa_ft], ["beam_ft", data.beam_ft], ["draft_ft", data.draft_ft]]) {
       const el = form.elements[name];
       if (!el) continue;
       if (data.ais_tracked && ft != null) {
-        el.readOnly = true; el.value = ft;
+        el.value = ft;
+        markAisDim(el, ft);
         shownLock.push(`${name.replace("_ft", "")} ${ft} ft`);
       } else {
-        el.readOnly = false;
+        unmarkAisDim(el);
         if (ft != null && !String(el.value || "").trim()) el.value = ft;
       }
     }
@@ -755,24 +909,35 @@ function isValidImo(imo) {
     let msg = `Filled from on-file data for IMO ${esc(raw)}.`;
     if (shownLock.length) {
       msg += data.dims_locked
-        ? ` Dimensions are operator-pinned via manual override (${shownLock.join(", ")}); edits here won’t apply — change or unlock them on the vessel.`
-        : ` AIS-authoritative dimensions shown (${shownLock.join(", ")}); edits to these won’t apply — correct them at the AIS source, or use Manual override after saving.`;
+        ? ` Dimensions are operator-pinned via manual override (${shownLock.join(", ")}); edit any and save to re-pin, or unlock them on the vessel.`
+        : ` AIS-reported dimensions shown (${shownLock.join(", ")}); edit any to override — you’ll confirm before it’s pinned.`;
     }
     if (notes.length) msg += ` ${notes.join("; ")}.`;
     result.innerHTML = msg;
   }
 
   let imoTimer = null;
+  let pendingLookup = null;                     // in-flight autofill, so submit can await it
+  function scheduleLookup() { pendingLookup = autofillFromImo(); }
   imoInput.addEventListener("input", () => {
     clearTimeout(imoTimer);
-    imoTimer = setTimeout(autofillFromImo, 350);
+    imoTimer = setTimeout(scheduleLookup, 350);
   });
-  imoInput.addEventListener("blur", autofillFromImo);
+  imoInput.addEventListener("blur", scheduleLookup);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     result.className = "result";
     btn.disabled = true; btn.textContent = editingId ? "Saving…" : "Recording…";
+
+    // Race guard: if the operator typed an IMO and hit Record before the debounced
+    // lookup fired (or while it's still in flight), run/await it now so the
+    // auto-filled name + dims are in the form before we build the payload.
+    if (!editingId) {
+      clearTimeout(imoTimer);
+      if (isValidImo(String(imoInput.value || "").trim())) scheduleLookup();
+      await pendingLookup;
+    }
 
     // Build a typed JSON payload: skip blanks, coerce numbers, checkboxes->bool.
     const numFields = new Set(["imo", "length_ft", "beam_ft", "draft_ft", "deadweight_lbs", "inbound_tons", "outbound_tons", "bunker_qty_mt"]);
@@ -787,12 +952,13 @@ function isValidImo(imo) {
     payload.bunkering_acknowledged = form.elements.bunkering_acknowledged.checked;
 
     const editing = editingId;
-    // Guard a content-empty NEW request: the native `required` attributes
-    // normally block this, but never POST a blank form (which would land a
-    // stray empty berth-request card). Editing in place is always allowed.
-    if (!editing && !payload.vessel) {
+    // Guard a content-empty NEW request: the native `required` on IMO normally
+    // blocks this, but never POST a blank form (which would land a stray empty
+    // berth-request card). IMO is the key field now — a name/dims auto-fill from
+    // it — so require at least an IMO or a vessel name. Editing is always allowed.
+    if (!editing && !payload.imo && !payload.vessel) {
       result.className = "result err";
-      result.textContent = "Enter at least a vessel name before recording a request.";
+      result.textContent = "Enter at least an IMO before recording a request.";
       btn.disabled = false; btn.textContent = "Record berth request";
       return;
     }
@@ -827,9 +993,15 @@ function isValidImo(imo) {
       const warns = (data.warnings && data.warnings.length)
         ? `<span class="warn">▲ ${data.warnings.join("; ")}</span>` : "";
       result.innerHTML = msg + warns;
-      // Dropped an AIS-tracked vessel's entered dims? Offer the red "Manual
-      // override" that pins them (dims_locked) in case AIS itself is wrong.
-      renderManualOverride(result, data);
+      // Dropped an AIS-tracked vessel's entered dims (AIS is authoritative)? If the
+      // operator actually changed a dim in THIS session (a live .ais-dim-edited
+      // field), offer to pin it with a single confirm — the easy override for when
+      // AIS itself is wrong. A persisted prior override that merely rode through an
+      // unrelated edit (e.g. changing only the date) keeps the quiet red button
+      // instead, so the dialog doesn't re-pop. Read the flag before resetForm().
+      const dimEditedNow = !!form.querySelector(".ais-dim-edited");
+      if (dimEditedNow) await offerOverrideConfirm(result, data);
+      else renderManualOverride(result, data);
       if (editing || (!data.duplicate && !data.skipped)) resetForm();
       loadRequests(); loadBerthRequests(); loadVessels(); loadStats();
     } catch (err) {
@@ -840,6 +1012,8 @@ function isValidImo(imo) {
       btn.textContent = editingId ? "Save changes" : "Record berth request";
     }
   });
+
+  setDefaultDate();   // stamp today's date on first render (create mode)
 })();
 
 // Reservations status filter -> reload the list.
@@ -862,6 +1036,9 @@ function isValidImo(imo) {
     // History is a heavier (sessionizing) query, so load it lazily on first
     // activation rather than on boot / in the 15s poll.
     if (name === "history") loadHistory();
+    // Refresh the saved-ships list on activation (it's cheap and not in the 15s
+    // poll), so an override / new AIS vessel shows without a full reload.
+    if (name === "ships") loadVessels();
   }
   nav.querySelectorAll(".tab").forEach((b) =>
     b.addEventListener("click", () => show(b.dataset.tab)));

@@ -75,7 +75,9 @@ ORM):
 - `wharf_segment` — measured geometry (`M` = POPA station), per-system affine
   params, nullable `apron` polygon (the occupancy "alongside" test).
 - `vessel` — IMO/MMSI canonical key (names are non-unique/misspelled), name, LOA,
-  beam, draft, `dims_locked` (operator lock pinning AIS dims when AIS is wrong).
+  beam, draft, `dims_locked` (operator lock pinning AIS dims when AIS is wrong) +
+  `ais_loa`/`ais_beam`/`ais_draft` (shadow of the last AIS-reported dims, kept
+  current even while pinned, so **revert-to-AIS restores the real value at once**).
 - `berth` — named POPA range (`popa_sta_start/end`). Assigning one to a reservation
   copies its range onto `station_range`; conflict detection runs on the range,
   **never on `berth_id`**.
@@ -213,7 +215,11 @@ contract.
   overwrites by MMSI on every `ShipStaticData`. **Escape hatch:** the
   `dims_locked` lock — an operator pins a corrected value; the edit then applies it
   AND the ingestor stops reverting it (loa/beam/draft/dim_a/dim_b freeze together so
-  `loa = dim_a+dim_b` can't drift). Manual-only vessels (no MMSI) own their dims.
+  `loa = dim_a+dim_b` can't drift). **Revert:** clearing the lock restores the live
+  loa/beam/draft from the `ais_*` shadow (migration 0016 — the ingestor keeps that
+  shadow current even while pinned, so it never needs the feed to re-broadcast);
+  the shadow is *not* in the ingestor's locked set. Manual-only vessels (no MMSI)
+  own their dims.
   **One IMO = one ship:** a new request whose IMO is on file under a *different*
   name is refused (422, pre-landing) — don't silently merge/rename.
 - **AI-assisted intake** (`app/intake/llm.py` + `dataverse_run.py`) is a
@@ -259,7 +265,7 @@ app/
   depth/     # controlling-depth + draft gate → reference/depth.md
   seed/·static/                                               # wharf seed; Leaflet UI → reference/frontend.md
 data/gis/·data/surveys/   # geometry build + raw surveys → reference/crosswalk.md, depth.md
-alembic/                  # migrations 0001–0015 → reference/migrations.md
+alembic/                  # migrations 0001–0016 → reference/migrations.md
 tests/                    # → reference/tests.md
 scripts/·Dockerfile·docker-compose*.yml·.env.example·.github/ # → reference/deployment.md
 docs/                     # PLAN.md (roadmap) · DEPLOY.md · reference/ (per-section docs)

@@ -385,6 +385,37 @@ def _vessel_draft_m(session: Session, vessel_id: int | None) -> float | None:
 # 20 ft draft bug.) A manual-only vessel (no MMSI) still owns its dimensions.
 _AIS_EDIT_DIMS = {"loa": "LOA", "beam": "beam", "draft": "draft"}
 
+# The AIS-shadow column backing each live dimension (migration 0016) — the last
+# value AIS reported, kept current by the ingestor even while the row is locked.
+# Used by ``_restore_ais_dims`` to make Revert-to-AIS immediate.
+_AIS_SHADOW = {"loa": "ais_loa", "beam": "ais_beam", "draft": "ais_draft"}
+
+
+def _restore_ais_dims(changes: dict, row) -> list[str]:
+    """Revert-to-AIS: when the override lock is being cleared, overwrite the live
+    loa/beam/draft with the AIS shadow (``ais_loa/ais_beam/ais_draft``) so the
+    dimensions match AIS at once, instead of waiting for the next ``ShipStaticData``.
+
+    Injects the shadow values into ``changes`` in place (they are AIS values, not an
+    operator edit, so this runs *after* ``_strip_ais_dims``). A dim whose shadow is
+    NULL — unknown, e.g. a lock predating the shadow columns — is skipped; the feed
+    still refills it on the next broadcast. Returns an operator-facing note."""
+    restored = []
+    for field, shadow_attr in _AIS_SHADOW.items():
+        shadow = getattr(row, shadow_attr, None)
+        if shadow is not None:
+            changes[field] = float(shadow)
+            restored.append(f"{_AIS_EDIT_DIMS[field]} {float(shadow) * FEET_PER_M:.1f} ft")
+    if restored:
+        return [
+            f"restored AIS dimensions ({', '.join(restored)}); the live feed now "
+            f"keeps them updated."
+        ]
+    return [
+        "no stored AIS dimensions to restore; the feed will refresh them on the "
+        "vessel's next broadcast."
+    ]
+
 
 def _strip_ais_dims(mmsi: int | None, changes: dict) -> list[str]:
     """For an AIS-tracked vessel (has MMSI) that is NOT under an operator override,
@@ -476,10 +507,19 @@ def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict |
     ``_strip_ais_dims``). The **override escape hatch** (``dims_locked``, migration
     0015) lets an operator pin a corrected value when AIS itself is wrong: with the
     lock in force the manual dims apply AND the ingestor stops reverting them (a
-    warning still names the pinned override). Every other field, and every field of
-    a manual-only vessel, overwrites as provided."""
+    warning still names the pinned override). Clearing the lock (**revert to AIS**)
+    restores the live loa/beam/draft from the AIS shadow (``ais_*``, migration 0016)
+    immediately, so a corrected-back-to-real value doesn't wait for the next
+    broadcast. Every other field, and every field of a manual-only vessel,
+    overwrites as provided."""
     row = session.execute(
-        select(Vessel.mmsi, Vessel.dims_locked).where(Vessel.id == vessel_id)
+        select(
+            Vessel.mmsi,
+            Vessel.dims_locked,
+            Vessel.ais_loa,
+            Vessel.ais_beam,
+            Vessel.ais_draft,
+        ).where(Vessel.id == vessel_id)
     ).first()
     if row is None:
         return None
@@ -495,6 +535,16 @@ def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict |
     else:
         # Default: AIS keeps its dimensions; drop manual dim edits for an MMSI row.
         warnings = _strip_ais_dims(effective_mmsi, changes)
+        # Revert-to-AIS: clearing the lock on an AIS-tracked vessel restores the live
+        # dims from the AIS shadow immediately (kept current by the ingestor even
+        # while pinned), rather than waiting for the next broadcast. Injected after
+        # the strip because these are AIS values, not the operator's edit.
+        if (
+            changes.get("dims_locked") is False
+            and row.dims_locked
+            and row.mmsi is not None
+        ):
+            warnings.extend(_restore_ais_dims(changes, row))
     if changes:
         session.execute(
             update(Vessel)
