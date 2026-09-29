@@ -4,10 +4,22 @@ The single source of truth for berth + dredging scheduling at the Port of Port
 Arthur, replacing hand-maintained spreadsheets and three uncoordinated intake
 channels (online form, dock-operator entry, phone).
 
-**This file is the design contract — the rules that override default behavior.**
-For how each part works today, see [`docs/reference/`](docs/reference/); for the
-roadmap and open issues, see [`docs/PLAN.md`](docs/PLAN.md). When a reference doc
-disagrees with this file, this file wins.
+> ## 📚 Documentation structure
+>
+> Docs are split into three tiers by the question they answer. Put new content in
+> the right one — don't grow this file with how-it-works detail or status.
+>
+> | Tier | Question | File(s) |
+> |------|----------|---------|
+> | **Contract** | *What are the rules?* (invariants that override behavior) | **`CLAUDE.md`** (this file) |
+> | **Roadmap** | *What's left to do?* (plans, open issues, backlog) | [`docs/PLAN.md`](docs/PLAN.md) |
+> | **Reference** | *How does the code work today?* (per-section, cross-referenced) | [`docs/reference/`](docs/reference/) |
+>
+> **This file is the design contract — the rules that override default behavior.**
+> When a reference doc or the roadmap disagrees with this file, **this file wins.**
+> Completed work *leaves* the roadmap and lands in the reference docs; it does not
+> come back here unless it changed a rule. The `update-context` skill keeps all
+> three tiers in sync when code changes.
 
 ## Core model — read this first, it drives everything
 
