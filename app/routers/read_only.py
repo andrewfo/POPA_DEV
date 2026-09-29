@@ -20,8 +20,10 @@ from app.crosswalk import (
     segment_dockno_params,
 )
 from app.db import get_session
+from app.intake.manual import valid_imo
 from app.models import Vessel, WharfSegment
 from app.occupancy.alongside import alongside_sql, nearest_segment_lateral
+from app.vessel_lookup import lookup
 from app.workers import KNOWN_WORKERS, classify
 
 router = APIRouter()
@@ -313,6 +315,33 @@ def reservation_history(
         }
         for r in rows
     ]
+
+
+@router.get("/vessels/lookup")
+def vessel_lookup(
+    imo: int = Query(..., description="7-digit IMO ship-identification number"),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Resolve a vessel's particulars from its IMO for **intake auto-fill**.
+
+    Backs the berth-request form's IMO auto-fill: the operator types an IMO and the
+    name + LOA/beam/draft pre-populate before submit. Reads on-file AIS data first
+    (Tier 1) and falls through to an external reference provider (Tier 2, stubbed) —
+    see ``app/vessel_lookup.py``. Rejects a structurally-invalid IMO (bad length or
+    check digit) with 422, the same guard intake uses. A clean miss is **not** a 404:
+    it returns ``{found: false}`` so the form can prompt for manual entry.
+
+    Dimensions are returned in **feet** (the form's unit; the store is metres).
+    ``ais_tracked`` tells the form the dims are AIS-authoritative (show read-only)."""
+    if not valid_imo(imo):
+        raise HTTPException(
+            status_code=422,
+            detail="not a valid IMO number (must be 7 digits with a correct check digit)",
+        )
+    result = lookup(session, imo)
+    if result is None:
+        return {"found": False, "source": "none"}
+    return result.to_payload()
 
 
 @router.get("/vessels")

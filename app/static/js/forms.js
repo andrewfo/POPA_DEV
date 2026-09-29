@@ -635,6 +635,7 @@ function isValidImo(imo) {
 
   function resetForm() {
     form.reset();
+    clearAutofill();
     setMode(null);
   }
 
@@ -686,6 +687,87 @@ function isValidImo(imo) {
     result.className = "result";
     result.textContent = `Editing berth request #${id}.` + aisNote;
   };
+
+  // --- IMO auto-fill (Tier 1) ----------------------------------------------
+  // In CREATE mode, a structurally-valid IMO looks the ship up (GET
+  // /vessels/lookup) and pre-fills name + dims before submit — the biggest lever
+  // for "input ships with minimal info". Fill only blank fields, EXCEPT an
+  // AIS-tracked vessel's LOA/beam/draft, which are AIS-authoritative: overwrite
+  // and lock them (a typed value wouldn't apply — the ingestor owns them; a dim
+  // AIS lacks stays editable). A miss prompts manual entry; the same call will
+  // one day answer from an external provider (Tier 2) with no change here.
+  const imoInput = form.elements.imo;
+  const dimInputs = ["length_ft", "beam_ft", "draft_ft"].map((n) => form.elements[n]);
+  let lastLookup = null;   // IMO we last resolved, so re-blur doesn't re-query
+
+  function clearAutofill() {
+    // Hand the dim fields back to the operator (undo an AIS lock from a prior
+    // lookup); leaves any typed values in place.
+    dimInputs.forEach((el) => { if (el) el.readOnly = false; });
+    lastLookup = null;
+  }
+
+  async function autofillFromImo() {
+    if (editingId) return;                              // create mode only
+    const raw = String(imoInput.value || "").trim();
+    if (!isValidImo(raw)) { clearAutofill(); return; } // wait for a real IMO
+    if (raw === lastLookup) return;
+    lastLookup = raw;
+    let data;
+    try {
+      data = await api(`/vessels/lookup?imo=${encodeURIComponent(raw)}`);
+    } catch { lastLookup = null; return; }             // stay silent; submit-time guard still applies
+    // Drop a stale result if the operator moved on or opened an edit meanwhile.
+    if (editingId || String(imoInput.value || "").trim() !== raw) return;
+
+    if (!data || !data.found) {
+      clearAutofill();
+      lastLookup = raw;
+      result.className = "result";
+      result.innerHTML = `<span class="warn">▲ IMO ${esc(raw)} not on file — enter the vessel’s dimensions manually.</span>`;
+      return;
+    }
+
+    const notes = [];
+    // Name: fill if blank; never overwrite a typed name — flag a mismatch instead
+    // (pre-empts the server's one-IMO-one-ship 422).
+    const nameEl = form.elements.vessel;
+    if (data.name) {
+      const typed = String(nameEl.value || "").trim();
+      if (!typed) nameEl.value = data.name;
+      else if (typed.toLowerCase() !== data.name.toLowerCase())
+        notes.push(`IMO is on file as “${esc(data.name)}” (kept your entry “${esc(typed)}”)`);
+    }
+    // Dims: AIS-authoritative ones overwrite + lock; others fill only when blank.
+    const shownLock = [];
+    for (const [name, ft] of [["length_ft", data.loa_ft], ["beam_ft", data.beam_ft], ["draft_ft", data.draft_ft]]) {
+      const el = form.elements[name];
+      if (!el) continue;
+      if (data.ais_tracked && ft != null) {
+        el.readOnly = true; el.value = ft;
+        shownLock.push(`${name.replace("_ft", "")} ${ft} ft`);
+      } else {
+        el.readOnly = false;
+        if (ft != null && !String(el.value || "").trim()) el.value = ft;
+      }
+    }
+    result.className = "result ok";
+    let msg = `Filled from on-file data for IMO ${esc(raw)}.`;
+    if (shownLock.length) {
+      msg += data.dims_locked
+        ? ` Dimensions are operator-pinned via manual override (${shownLock.join(", ")}); edits here won’t apply — change or unlock them on the vessel.`
+        : ` AIS-authoritative dimensions shown (${shownLock.join(", ")}); edits to these won’t apply — correct them at the AIS source, or use Manual override after saving.`;
+    }
+    if (notes.length) msg += ` ${notes.join("; ")}.`;
+    result.innerHTML = msg;
+  }
+
+  let imoTimer = null;
+  imoInput.addEventListener("input", () => {
+    clearTimeout(imoTimer);
+    imoTimer = setTimeout(autofillFromImo, 350);
+  });
+  imoInput.addEventListener("blur", autofillFromImo);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();

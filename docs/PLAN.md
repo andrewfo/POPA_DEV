@@ -28,6 +28,90 @@ capture, the edit surface, and the read-only feasibility oracle.
 
 ---
 
+## Active feature batch (director demo)
+
+A prioritized set of operator-facing improvements ahead of the director demo. All
+build on surfaces that already exist; none change the core model or the invariants
+in [`../CLAUDE.md`](../CLAUDE.md). Ordered by value/effort.
+
+| # | Item | Effort | Value | Touches |
+|---|------|--------|-------|---------|
+| A | IMO auto-fill on intake | ✅ done | High | [routers.md](./reference/routers.md), [frontend.md](./reference/frontend.md) |
+| B | Test & harden the reservation form | ~1 h | High | [tests.md](./reference/tests.md), [scheduling.md](./reference/scheduling.md) |
+| C | UI simplification pass | ~3 h | High | [frontend.md](./reference/frontend.md) |
+| D | Manual vs. agent write precedence (provenance badge) | ~1 h | High | [frontend.md](./reference/frontend.md), [scheduling.md](./reference/scheduling.md) |
+| E | Projected / preview vessel view (no reservation) | ~2 h | Med–High | [frontend.md](./reference/frontend.md), [scheduling.md](./reference/scheduling.md) |
+| F | Dredge GPS information layer | ~4 h | High | [frontend.md](./reference/frontend.md), [occupancy.md](./reference/occupancy.md) |
+| G | Dredging XYZ survey analytics | ~6–10 h | Highest | [depth.md](./reference/depth.md) |
+
+### A — IMO auto-fill on intake ✅
+**Shipped (Tier 1).** The create form's IMO field now looks the ship up **before
+submit** via `GET /vessels/lookup?imo=` (`app/routers/read_only.py` →
+`app/vessel_lookup.py`) and pre-fills name + LOA/beam/draft from the on-file
+`vessel` row (AIS-populated). AIS-authoritative dims overwrite + go read-only;
+non-AIS dims fill only when blank; a manual override still routes through the
+`dims_locked` path (no back door). Covered by `tests/test_vessels_lookup.py`.
+
+**Tier-2 seam left wired, not implemented.** `vessel_lookup.lookup()` calls
+`lookup_onfile` then falls through to `lookup_external` (a stub returning `None`).
+Adding an external provider (MarineTraffic / VesselFinder / Datalastic / Equasis)
+for a not-yet-on-AIS ship touches only `lookup_external` + a `VESSEL_REF_*` setting
+in `app/config.py` — the endpoint and form don't change (same source-agnostic
+contract as `AISSource`). Flag/callsign auto-fill also belongs to Tier 2 (`vessel`
+has no `flag` column and the form no callsign field).
+
+### B — Test & harden the reservation form
+This is the form directors will see demoed — it must be reliable end to end. The
+create/edit/promote-to-confirmed/unconfirm flows and AIS-override handling exist;
+add coverage and fix the edges surfaced. Cover create, edit, promote-to-confirmed,
+and the **409 conflict** path (a `confirmed`-overlap `IntegrityError` surfacing as
+409 — never pre-empted by blocking `observed`/`tentative`). Test through
+`TestClient`, not by committing rows.
+
+### C — UI simplification pass
+Tighten the operator screens so the primary actions are obvious and noise is
+hidden. Tabs, filters, and map-layer toggles are in place. Reduce clutter, group
+the common actions, and collapse advanced fields behind disclosure. Keep the UI
+**thin and over the API** — presentation only, no stationing/precedence logic
+moving client-side.
+
+### D — Manual vs. agent write precedence
+Answer "if we fill it manually and then the agent fills it, which version wins?"
+with one clear rule and a **visible provenance badge** on each record. The AI
+channel is already a normalizer that proposes but never places, and manual edits
+are authoritative for manual vessels. Make precedence explicit in the UI
+(`source` tag + last-writer) so operators trust what they see. Provenance is the
+existing `reservation.source` (`ais|form|phone|operator|email|ai`); editability is
+the separate `EDITABLE_SOURCES` axis — surface both, don't conflate them.
+
+### E — Projected / preview vessel view (no reservation)
+Let an operator sketch a vessel onto the map for planning — without all required
+fields and **without creating a reservation row** (a what-if view). The map
+already has a "Planned" outline mode for confirmed bookings; add a lightweight,
+**non-persisted** projected footprint (likely its own tab). Reuse the read-only
+feasibility oracle (`app/feasibility.py`) for the footprint math — it **proposes,
+never places**, which is exactly this. Nothing lands in `reservation`.
+
+### F — Dredge GPS information layer
+Surface dredging activity by GPS location on the map so directors can see where
+work is happening against the berths. A `dredge` reservation type and dredge/feet
+marker layers already exist; extend them to carry and display **GPS positions for
+active dredging**. Positions reconcile to station through the one crosswalk, same
+as vessels; a dredge op is still a `[station]×[time]` rectangle (the conflict
+primitive is unchanged).
+
+### G — Dredging XYZ survey analytics
+Turn the hydrographic `.XYZ` surveys into **trend analytics** — shoaling vs.
+dredging over time, controlling-depth change per station, before/after
+comparisons. The highest long-term value item. Versioned depth surveys are already
+ingested and reduced to per-station controlling depth in PostGIS
+([depth.md](./reference/depth.md)); the data to compare across dates exists. Build
+the **diffing, charts, and reporting** on top. Read the latest `active` for the
+gate as today — analytics diff *across* survey versions, they don't change which
+survey the draft gate reads.
+
+---
+
 ## Open work
 
 ### Step 7 — remaining
@@ -115,6 +199,10 @@ Not tied to one step; pick up as the system matures.
 ---
 
 ## Near-term sequence
+
+> Ahead of the director demo, the **Active feature batch (A–G)** above takes
+> precedence — the sequence below is the underlying-reliability track to resume
+> after (or interleave with) it.
 
 1. Bring PostGIS up and run the db-marked tests to exercise the apron seed +
    `ST_Contains` predicate (closes a carried-forward gap with zero new code).

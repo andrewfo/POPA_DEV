@@ -35,6 +35,7 @@ The `app/routers/` package is the HTTP surface of the POPA data layer. It splits
 | `GET /history` | Reservation log (all statuses), newest-arrival-first. Accepts `name` / `imo` / `status` / `from` / `to` filters. |
 | `GET /berths` | Named berth catalog ordered by station. |
 | `GET /vessels` | Vessel list with latest AIS fix per vessel (LATERAL join). |
+| `GET /vessels/lookup?imo=` | IMO auto-fill for intake: resolve a vessel's name + LOA/beam/draft (**feet**) from its IMO. Rejects an invalid IMO with 422; a clean miss returns `{found:false}` (not 404). Reads on-file AIS data (Tier 1) via `app/vessel_lookup.py`, falling through to an external provider (Tier 2, stubbed). Registered **before** `/vessels/{id}` so it isn't shadowed. |
 | `GET /vessels/{id}` | Full vessel detail: record + reservation log + latest AIS position. |
 | `GET /stats` | Sidebar headline counts (vessels present, arrivals in 24h, berth requests, reservations by status, moored now, confirmed). |
 | `GET /geo-to-station` | Project lat/lon → POPA station + Corps + Dock No. equivalents. |
