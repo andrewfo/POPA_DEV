@@ -1,0 +1,38 @@
+[
+  {
+    "_comment": "Row 1 — clean, complete submission. Uses the real Dataverse column names. NOTE beam/draft live in popa_beamm/popa_draftm but are FEET (the 'm' suffix is a mislabel). A good model should copy 106.0 / 39.5 straight through as feet and NOT narrate a metre conversion.",
+    "popa_vesselname": "Stena Impeccable",
+    "popa_imo": "9412036",
+    "popa_flag": "Marshall Islands",
+    "popa_loa": "600",
+    "popa_beamm": "106.0",
+    "popa_draftm": "39.5",
+    "popa_ssline": "Stena Bulk",
+    "popa_requestorname": "Maria Gutierrez",
+    "popa_requestoremail": "m.gutierrez@gulfagency.com",
+    "popa_requestorphone": "409-555-0142",
+    "popa_requestedetb": "2026-10-14T06:00:00Z",
+    "popa_requestedetd": "2026-10-17T18:00:00Z",
+    "popa_cargo": "clean petroleum products",
+    "popa_outboundcargotype": "naphtha",
+    "popa_outboundcargoweightnettons": "28500",
+    "popa_deadweightlbs": "165000000",
+    "popa_destinations": "Rotterdam",
+    "popa_duefrom": "Houston",
+    "popa_tosailfor": "Rotterdam",
+    "popa_takingbunkers": true,
+    "popa_bunkeringacknowledged": true
+  },
+  {
+    "_comment": "Row 2 — messy / partial. Free-text notes, an ambiguous 'or', a TBA departure, and a BAD IMO (fails checksum). A tolerant model should: extract 607 ft, null the ETD with a note, drop/flag the bad IMO, and NOT invent missing fields.",
+    "popa_vesselname": "Chem Orchard",
+    "popa_imo": "1234567",
+    "popa_requestedetb": "",
+    "popa_cargo": "sulphur ~9000 mt inbound, maybe caustic out",
+    "popa_ssline": "",
+    "popa_requestorname": "J. Alvarado (agent)",
+    "popa_requestorphone": "(409) 926-6162",
+    "popa_destinations": "Beaumont or Port Arthur",
+    "popa_notes": "abt 607' loa, beam ~90ft, due from Beaumont 6/16 am, sail TBA. draft to confirm."
+  }
+]

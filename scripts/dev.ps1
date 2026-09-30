@@ -135,11 +135,14 @@ if (-not $NoAis -and [string]::IsNullOrWhiteSpace($aisKey)) {
     Write-Warn2 "Get a free key at https://aisstream.io, set it in .env, and re-run."
 }
 
-# AI intake worker: needs OpenRouter + the Dataverse app-registration creds.
-# (The worker itself also validates the status option-set ints; here we just
-# check the connection creds so we don't spawn a window that immediately exits.)
+# AI intake worker: needs OpenRouter + the Dataverse app-registration creds +
+# the Request Status option-set ints (NEW/TRIAGED). All are startup preconditions
+# — the worker exits without any one of them — so we check them all here, else we
+# spawn a window that immediately exits. The worker still validates that the two
+# ints differ; that equal-values misconfig is its own guard, not re-checked here.
 $intakeVars = @('OPENROUTER_API_KEY', 'DATAVERSE_URL', 'DATAVERSE_TENANT_ID',
-                'DATAVERSE_CLIENT_ID', 'DATAVERSE_CLIENT_SECRET')
+                'DATAVERSE_CLIENT_ID', 'DATAVERSE_CLIENT_SECRET',
+                'DATAVERSE_STATUS_NEW', 'DATAVERSE_STATUS_TRIAGED')
 $intakeMissing = @($intakeVars | Where-Object { [string]::IsNullOrWhiteSpace((Get-DotEnv $_)) })
 $runIntake = (-not $NoIntake) -and ($intakeMissing.Count -eq 0)
 if (-not $NoIntake -and $intakeMissing.Count -gt 0) {

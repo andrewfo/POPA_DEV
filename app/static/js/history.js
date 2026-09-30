@@ -2,6 +2,7 @@
 // (every status, observed berthings included), newest arrival first.
 import {
   api, esc, fmtCentral, FT_PER_M, RES_STATUS_COLOR, BADGE_COLORS, shipTypeLabel, isTugType, NAV_STATUS,
+  sourceLabel,
 } from "./api.js";
 
 function histCard(h) {
@@ -137,7 +138,7 @@ function shipResRow(r) {
     <div class="dossier-res">
       <span class="dot" style="background:${color}"></span>
       <div class="rbody">
-        <div class="rhead"><b>${esc(r.status)}</b> · ${esc(r.type)} · via ${esc(r.source)}</div>
+        <div class="rhead"><b>${esc(r.status)}</b> · ${esc(r.type)} · via ${esc(sourceLabel(r.source))}</div>
         <div class="rmeta">ETB ${fmtCentral(r.t_start)}${r.t_end ? " → ETD " + fmtCentral(r.t_end) : ""}</div>
         <div class="rmeta">${bits.join(" · ")}</div>
         ${renderResNotes(r.notes)}

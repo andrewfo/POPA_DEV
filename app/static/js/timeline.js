@@ -1,7 +1,7 @@
 // Berth occupancy timeline (Gantt drawer). Renders reservations from
 // /reservations as bars in discrete berth lanes over a time axis, with a
 // draggable time cursor that drives the map's vessel outlines.
-import { api, fmtSta, esc, PAL, STATUS_COLORS, centralParts, CENTRAL_TZ } from "./api.js";
+import { api, fmtSta, esc, PAL, STATUS_COLORS, centralParts, CENTRAL_TZ, sourceLabel } from "./api.js";
 import { state } from "./state.js";
 import { map, renderOutlines } from "./map.js";
 
@@ -248,7 +248,7 @@ export const loadTimeline = (function () {
     const sta = r.station_unassigned ? "unassigned" : `POPA ${fmtSta(r.station_lo)}–${fmtSta(r.station_hi)}`;
     tip.innerHTML =
       `<b>${esc(r.vessel_name || "(unnamed)")}</b>${r.vessel_imo ? ` <span class="k">IMO ${esc(r.vessel_imo)}</span>` : ""}<br>` +
-      `<span class="k">${esc(r.type)} · ${esc(r.status)} · via ${esc(r.source)}</span><br>` +
+      `<span class="k">${esc(r.type)} · ${esc(r.status)} · via ${esc(sourceLabel(r.source))}</span><br>` +
       `${fmtDT(r.t_start)} → ${r.t_end ? fmtDT(r.t_end) : "open"}<br>` +
       `<span class="k">${esc(sta)}</span>` +
       (r.cargo ? `<br>${esc(r.cargo)}` : "") + (r.notes ? `<br><span class="k" style="white-space:pre-line">${esc(r.notes)}</span>` : "");

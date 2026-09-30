@@ -141,13 +141,17 @@ if ! $NO_AIS; then
   fi
 fi
 
-# AI intake worker: needs OpenRouter + the Dataverse app-registration creds.
-# (The worker also validates the status option-set ints; here we just check the
-# connection creds so we don't background a process that immediately exits.)
+# AI intake worker: needs OpenRouter + the Dataverse app-registration creds +
+# the Request Status option-set ints (NEW/TRIAGED). All are startup preconditions
+# — the worker raise SystemExit()s without any one of them — so we check them all
+# here, otherwise we'd background a process that immediately exits (and in this
+# script that death is silent). The worker still validates that the two ints
+# differ; an equal-values misconfig is its own guard, not re-checked here.
 RUN_INTAKE=false
 if ! $NO_INTAKE; then
   INTAKE_MISSING=""
-  for v in OPENROUTER_API_KEY DATAVERSE_URL DATAVERSE_TENANT_ID DATAVERSE_CLIENT_ID DATAVERSE_CLIENT_SECRET; do
+  for v in OPENROUTER_API_KEY DATAVERSE_URL DATAVERSE_TENANT_ID DATAVERSE_CLIENT_ID \
+           DATAVERSE_CLIENT_SECRET DATAVERSE_STATUS_NEW DATAVERSE_STATUS_TRIAGED; do
     [[ -n "$(dotenv "$v")" ]] || INTAKE_MISSING+="$v "
   done
   if [[ -z "$INTAKE_MISSING" ]]; then

@@ -96,6 +96,16 @@ export function shipTypeLabel(t) {
   return c ? `${c.label} (${t})` : `type ${t}`;
 }
 
+// Human-facing label for a reservation's `source` provenance. The AI-assisted
+// intake channel lands as source='ai' (its own provenance + EDITABLE_SOURCES
+// axis — unchanged in the DB), but it originates from the Power Pages online
+// berth-request form; the LLM only normalizes it. Operators think of that as
+// "form", not the "ai" implementation detail, so we relabel it for display only.
+// Every other source shows as-is. (The legacy Adobe Sign feed also used the
+// literal source='form'; it is retired, so there is no live collision.)
+export const SOURCE_LABELS = { ai: "form" };
+export const sourceLabel = (s) => SOURCE_LABELS[s] || s || "—";
+
 // AIS nav-status code -> label (ITU-R M.1371); only the codes we actually see.
 export const NAV_STATUS = {
   0: "under way (engine)", 1: "at anchor", 2: "not under command",

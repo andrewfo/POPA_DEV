@@ -3,7 +3,7 @@
 // audit list, and the sidebar tab switcher.
 import {
   api, apiWrite, errorDetail, esc, fmtCentral, formPayload, isoToLocalInput, localInputToIso,
-  centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, BADGE_COLORS,
+  centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, BADGE_COLORS, sourceLabel,
 } from "./api.js";
 import { state } from "./state.js";
 import {
@@ -432,7 +432,7 @@ function resCard(r) {
     <div class="card req-card" data-res="${r.id}" style="border-left-color:${color}">
       <div class="name">${esc(r.vessel_name || "(unnamed)")} ${imo}
         <span class="status-badge" style="color:${color}">${esc(r.status)}</span></div>
-      <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(r.source)}</div>
+      <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(sourceLabel(r.source))}</div>
       <div class="meta">${sta}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
       ${overrideHtml ? `<div class="meta">${overrideHtml}</div>` : ""}
       <div class="row-actions">

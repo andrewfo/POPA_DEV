@@ -67,6 +67,12 @@ class LlmExtraction(BaseModel):
     vessel: str | None = None
     imo: int | None = None
     # Dimensions in FEET (the form is feet/lbs; the prompt forbids unit conversion).
+    # NB: the Dataverse source columns are named popa_beamm / popa_draftm — the
+    # trailing "m" reads like "metres" but is a MISLABEL. Confirmed 2026-09: the
+    # Power Pages form asks the submitter for feet, and Dataverse stores the number
+    # verbatim (it runs no unit conversion), so those columns genuinely hold feet.
+    # The prompt tells the model to ignore that "m" (see SYSTEM_PROMPT). Do NOT add
+    # a metre→feet conversion here on the strength of the column name.
     length_ft: float | None = None
     beam_ft: float | None = None
     draft_ft: float | None = None
