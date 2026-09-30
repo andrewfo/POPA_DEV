@@ -432,8 +432,10 @@ function resCard(r) {
     <div class="card req-card" data-res="${r.id}" style="border-left-color:${color}">
       <div class="name">${esc(r.vessel_name || "(unnamed)")} ${imo}
         <span class="status-badge" style="color:${color}">${esc(r.status)}</span></div>
-      <div class="meta">${esc(r.type)} · ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""} · via ${esc(sourceLabel(r.source))}</div>
-      <div class="meta">${sta}${r.cargo ? " · " + esc(r.cargo) : ""}</div>
+      <div class="meta">${esc(r.type)} · via ${esc(sourceLabel(r.source))}</div>
+      <div class="meta">ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""}</div>
+      <div class="meta">${sta}</div>
+      ${r.cargo ? `<div class="meta">cargo · ${esc(r.cargo)}</div>` : ""}
       ${overrideHtml ? `<div class="meta">${overrideHtml}</div>` : ""}
       <div class="row-actions">
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
@@ -1103,6 +1105,82 @@ function rawField(raw, keys) {
   return null;
 }
 
+// Friendly labels for the known berth-request fields, in display order. Each
+// entry lists the raw keys it can appear under — the manual/AI form's lowercase
+// keys first, then any legacy online-form row's capitalized keys — so both intake
+// shapes render identically. `dt` marks a datetime instant (shown Central); `bool`
+// marks a checkbox (only rendered when true).
+const REQ_INFO_FIELDS = [
+  { keys: ["request_date"], label: "Request date" },
+  { keys: ["vessel", "Vessel"], label: "Vessel" },
+  { keys: ["imo", "IMO Number"], label: "IMO" },
+  { keys: ["ss_line"], label: "S/S Line" },
+  { keys: ["flag"], label: "Flag" },
+  { keys: ["destinations"], label: "Destinations" },
+  { keys: ["length_ft"], label: "LOA (ft)" },
+  { keys: ["beam_ft"], label: "Beam (ft)" },
+  { keys: ["draft_ft"], label: "Draft (ft)" },
+  { keys: ["deadweight_lbs"], label: "Deadweight (lbs)" },
+  { keys: ["bunkers"], label: "Taking bunkers", bool: true },
+  { keys: ["bunker_type"], label: "Bunker type" },
+  { keys: ["bunker_qty_mt"], label: "Bunker fuel (metric tons)" },
+  { keys: ["bunkering_acknowledged"], label: "Bunkering acknowledged", bool: true },
+  { keys: ["due_from"], label: "Due from" },
+  { keys: ["etb", "Port Arrival Date"], label: "Arrival (ETB)", dt: true },
+  { keys: ["sail_for"], label: "To sail for" },
+  { keys: ["etd", "Port Departure Date"], label: "Departure (ETD)", dt: true },
+  { keys: ["inbound_cargo", "Inbound Cargo"], label: "Inbound cargo" },
+  { keys: ["inbound_tons"], label: "Inbound weight (net tons)" },
+  { keys: ["outbound_cargo", "Outbound Cargo"], label: "Outbound cargo" },
+  { keys: ["outbound_tons"], label: "Outbound weight (net tons)" },
+  { keys: ["outbound_cargo_start"], label: "Begin receiving outbound" },
+  { keys: ["Assigned Berth"], label: "Assigned berth" },
+  { keys: ["agency", "Agency/Owner"], label: "Agency / Owner" },
+  { keys: ["requestor_name"], label: "Requestor" },
+  { keys: ["requestor_email"], label: "Email" },
+  { keys: ["requestor_phone"], label: "Phone" },
+];
+
+// Render everything present in a raw intake payload as a readable label/value
+// list — operators can't (and shouldn't have to) read the JSON. Known fields come
+// first in a sensible order; any unrecognized key is still shown (prettified) so
+// nothing is silently hidden. Empty values are skipped.
+function allInfoRows(raw) {
+  if (!raw || typeof raw !== "object") {
+    return `<div class="meta">No details.</div>`;
+  }
+  const seen = new Set();
+  const rows = [];
+  const has = (v) => v !== undefined && v !== null && v !== "";
+  const pushRow = (label, valueHtml) =>
+    rows.push(`<span class="rk">${esc(label)}</span><span class="rv">${valueHtml}</span>`);
+
+  for (const f of REQ_INFO_FIELDS) {
+    f.keys.forEach((k) => seen.add(k));
+    let v = null;
+    for (const k of f.keys) { if (has(raw[k])) { v = raw[k]; break; } }
+    if (!has(v)) continue;
+    if (f.bool) { if (v) pushRow(f.label, "Yes"); continue; }
+    if (f.dt) { pushRow(f.label, esc(fmtCentral(v)) + " CT"); continue; }
+    pushRow(f.label, esc(String(v)));
+  }
+  // Anything we don't have a label for — show it rather than drop it, except:
+  //  - `source_raw`: the verbatim upstream row (e.g. a full Dataverse record) is a
+  //    JSON blob operators shouldn't have to read — its fields already surface above.
+  //  - `source`: already shown as the card's channel badge (mapped through
+  //    sourceLabel, so 'ai' reads as "form"); the raw value here would be unmapped.
+  seen.add("source_raw");
+  seen.add("source");
+  for (const k of Object.keys(raw)) {
+    if (seen.has(k) || !has(raw[k])) continue;
+    const v = raw[k];
+    const label = k.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    pushRow(label, esc(typeof v === "object" ? JSON.stringify(v) : String(v)));
+  }
+  if (!rows.length) return `<div class="meta">No details.</div>`;
+  return `<div class="req-info">${rows.join("")}</div>`;
+}
+
 function reqCard(r) {
   const raw = r.raw || {};
   const vessel = rawField(raw, ["vessel", "Vessel"]);
@@ -1113,16 +1191,19 @@ function reqCard(r) {
   const berth = rawField(raw, ["Assigned Berth"]);
   const cargo = rawField(raw, ["inbound_cargo", "Inbound Cargo"]) || rawField(raw, ["outbound_cargo", "Outbound Cargo"]);
   const received = r.received_at ? fmtCentral(r.received_at) + " CT" : "—";
-  // Link to the reservation this request produced (status shows reconciliation
-  // state); an unprocessed request (no arrival date) never made one.
-  const resLink = r.reservation_id
-    ? `→ reservation #${r.reservation_id}${r.reservation_status ? " (" + esc(r.reservation_status) + ")" : ""}`
-    : (r.processed ? "no reservation" : "<span style=\"color:var(--warn)\">unprocessed</span>");
+  // Processing state (no reservation number — operators only need the state):
+  // reconciled reservations show their status, a processed request with none says
+  // so, and an unprocessed request (no arrival date) is flagged as needing action.
+  const state = r.reservation_id
+    ? esc(r.reservation_status || "reserved")
+    : (r.processed ? "no reservation" : `<span style="color:var(--warn)">unprocessed</span>`);
   const lines = [];
   if (etb || etd) lines.push(`ETB <b>${etb ? fmtCentral(etb) : "—"}</b>${etd ? ` → ETD <b>${fmtCentral(etd)}</b>` : ""}`);
   if (berth) lines.push(`berth ${esc(berth)}`);
   if (agency) lines.push(esc(agency));
   if (cargo) lines.push(esc(cargo));
+  lines.push(`received ${esc(received)}`);
+  lines.push(state);
   // Editable channels (phone/email/operator + the AI-parsed 'ai' channel) carry
   // this form's lowercase keys, so they can be re-edited here. Editability is a
   // separate axis from provenance: 'ai' is a distinct source tag but still
@@ -1132,13 +1213,12 @@ function reqCard(r) {
     <div class="card req-card">
       <div class="name">${esc(vessel || "(no vessel name)")}
         ${imo ? `<span class="imo">IMO ${esc(imo)}</span>` : ""}
-        <span class="status-badge" style="color:var(--muted)">${esc(r.source)}</span></div>
-      ${lines.length ? `<div class="meta">${lines.join(" · ")}</div>` : ""}
-      <div class="meta">received ${esc(received)} · ${resLink}</div>
+        <span class="status-badge" style="color:var(--muted)">${esc(sourceLabel(r.source))}</span></div>
+      ${lines.map((l) => `<div class="meta">${l}</div>`).join("")}
       ${editable ? `<div class="row-actions"><button class="btn-sm" data-edit-req="${r.id}">Edit</button><button class="btn-sm" data-delete-req="${r.id}">Delete</button></div>` : ""}
       <details style="margin-top:6px">
-        <summary style="cursor:pointer;color:var(--muted);font-family:var(--font-mono);font-size:10px;letter-spacing:1px;text-transform:uppercase">raw payload</summary>
-        <pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--muted);margin:6px 0 0">${esc(JSON.stringify(raw, null, 2))}</pre>
+        <summary style="cursor:pointer;color:var(--muted);font-family:var(--font-mono);font-size:10px;letter-spacing:1px;text-transform:uppercase">all info</summary>
+        ${allInfoRows(raw)}
       </details>
     </div>`;
 }

@@ -368,6 +368,17 @@
   .card .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .card .meta b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 500; }
   .card .meta .note-ais { color: var(--warn); }
+  /* "All info" disclosure on a berth-request card: a friendly label/value list
+     (operators can't read the raw JSON payload). */
+  .card details .req-info {
+    display: grid; grid-template-columns: auto 1fr; gap: 2px 10px;
+    margin: 6px 0 0; font-size: 11px;
+  }
+  .card details .req-info .rk { color: var(--muted); white-space: nowrap; }
+  .card details .req-info .rv {
+    color: var(--ink); word-break: break-word;
+    font-variant-numeric: tabular-nums;
+  }
   /* Empty / no-data states read as a console readout, not apologetic italics. */
   .empty {
     color: var(--muted); padding: 12px 8px; margin: 2px 0;
