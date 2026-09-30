@@ -229,12 +229,13 @@
      scrolling aside. */
   nav.tabs {
     display: flex; gap: 0; margin: 0 0 var(--s4);
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none;
   }
+  nav.tabs::-webkit-scrollbar { display: none; }
   nav.tabs .tab {
-    flex: 1; padding: 8px 4px 7px; border: none; background: none; cursor: pointer;
+    flex: 1 1 auto; white-space: nowrap; padding: 8px 3px 7px; border: none; background: none; cursor: pointer;
     color: var(--muted); font-family: var(--font-ui); font-size: 10px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 1px;
+    text-transform: uppercase; letter-spacing: .4px;
     border-bottom: 1px solid transparent; margin-bottom: -1px;
     transition: color .12s ease;
   }
@@ -368,17 +369,6 @@
   .card .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .card .meta b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 500; }
   .card .meta .note-ais { color: var(--warn); }
-  /* "All info" disclosure on a berth-request card: a friendly label/value list
-     (operators can't read the raw JSON payload). */
-  .card details .req-info {
-    display: grid; grid-template-columns: auto 1fr; gap: 2px 10px;
-    margin: 6px 0 0; font-size: 11px;
-  }
-  .card details .req-info .rk { color: var(--muted); white-space: nowrap; }
-  .card details .req-info .rv {
-    color: var(--ink); word-break: break-word;
-    font-variant-numeric: tabular-nums;
-  }
   /* Empty / no-data states read as a console readout, not apologetic italics. */
   .empty {
     color: var(--muted); padding: 12px 8px; margin: 2px 0;
@@ -386,6 +376,129 @@
     text-transform: uppercase; text-align: center; border: 1px dashed var(--line);
   }
   .hint { color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+  /* ===== Berth-request cards ================================================
+     All rules scoped under .req-card / .req-seg so the shared .card (reservations,
+     saved ships) is untouched. Hierarchy is surface steps + 1px borders, never
+     shadows (the one kebab-menu popover is the sanctioned exception, as with the
+     feasibility popup). Tokens only — no literal colours. */
+  .req-seg {
+    display: flex; margin: 0 0 var(--s3);
+    border: 1px solid var(--line); border-top-color: var(--topedge);
+    border-radius: var(--r-int); overflow: hidden;
+  }
+  .req-seg button {
+    flex: 1 1 0; min-width: 0; display: flex; align-items: baseline;
+    justify-content: center; gap: 4px; cursor: pointer;
+    background: var(--panel); color: var(--muted); border: 0;
+    border-left: 1px solid var(--line); padding: 5px 4px;
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .6px; white-space: nowrap;
+  }
+  .req-seg button:first-child { border-left: 0; }
+  .req-seg button:hover { color: var(--ink); }
+  .req-seg button .c { font-variant-numeric: tabular-nums; opacity: .6; }
+  .req-seg button.active { background: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .req-seg button.active .c { opacity: .8; }
+
+  /* Header: name leads, ids in muted mono, status + channel badges pinned right. */
+  .req-card .req-head { display: flex; align-items: flex-start; gap: 6px; }
+  .req-card .req-idwrap { flex: 1; min-width: 0; }
+  .req-card .req-name {
+    font-family: var(--font-ui); font-weight: 600; font-size: 13px; letter-spacing: .2px;
+    color: var(--ink); line-height: 1.15; word-break: break-word;
+  }
+  .req-card .req-id {
+    display: block; margin-top: 1px; font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums; font-size: 10px; color: var(--muted); letter-spacing: .3px;
+  }
+  .req-card .req-badges {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+    gap: 3px 4px; max-width: 55%;
+  }
+  .req-card .req-time {
+    font-family: var(--font-mono); font-size: 9.5px; color: var(--muted);
+    letter-spacing: .4px; white-space: nowrap; cursor: default;
+  }
+
+  /* Schedule strip: ETB -> ETD as a compact mono timeline + from/to ports. */
+  .req-card .req-sched {
+    margin-top: 7px; padding: 5px 8px; background: var(--panel);
+    border: 1px solid var(--line); border-left: 2px solid var(--line-2);
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+  }
+  .req-card .req-sched .t { font-variant-numeric: tabular-nums; color: var(--ink); }
+  .req-card .req-sched .arw { color: var(--muted); margin: 0 3px; }
+  .req-card .req-sched .dur { color: var(--muted); }
+  .req-card .req-sched .ports {
+    display: block; margin-top: 2px; color: var(--muted); font-size: 10px; letter-spacing: .3px;
+  }
+
+  /* Dims stat strip — mirrors the .stats/.stat tile grid. */
+  .req-card .req-dims {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-top-color: var(--topedge);
+    margin-top: 7px;
+  }
+  .req-card .req-dim { background: var(--panel); padding: 5px 7px 6px; min-width: 0; }
+  .req-card .req-dim .l {
+    display: block; font-family: var(--font-mono); font-size: 8px; text-transform: uppercase;
+    letter-spacing: 1.1px; color: var(--muted);
+  }
+  .req-card .req-dim .n {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 15px; font-weight: 400; line-height: 1.1; color: var(--ink); margin-top: 2px;
+  }
+  .req-card .req-dim .u { font-size: 9px; color: var(--muted); margin-left: 2px; }
+  .req-card .req-dim.blank .n { color: var(--muted); }
+
+  /* Actions: EDIT secondary (reuses .btn-sm), DELETE behind a kebab. */
+  .req-card .req-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; position: relative; }
+  .req-card .req-actions .sp { flex: 1; }
+  .req-card .req-kebab {
+    width: 24px; height: 22px; display: flex; align-items: center; justify-content: center;
+    background: var(--panel); color: var(--ink-dim); border: 1px solid var(--line);
+    border-radius: var(--r-int); cursor: pointer; font-size: 14px; line-height: 1;
+  }
+  .req-card .req-kebab:hover { border-color: var(--line-2); color: var(--ink); }
+  .req-card .req-menu {
+    position: absolute; right: 0; top: calc(100% + 2px); z-index: 50; min-width: 130px;
+    background: var(--panel); border: 1px solid var(--line-2);
+    box-shadow: 0 6px 20px rgba(0,0,0,.5); display: none;
+  }
+  .req-card .req-menu.open { display: block; }
+  .req-card .req-menu button {
+    display: block; width: 100%; text-align: left; background: none; border: 0; cursor: pointer;
+    padding: 6px 10px; font-family: var(--font-mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .8px; color: var(--bad);
+  }
+  .req-card .req-menu button:hover { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+
+  /* Collapsed "all info": grouped label-over-value sections. */
+  .req-card details.req-all { margin-top: 8px; }
+  .req-card summary.req-more {
+    cursor: pointer; list-style: none; color: var(--muted); font-family: var(--font-mono);
+    font-size: 9.5px; letter-spacing: 1px; text-transform: uppercase;
+  }
+  .req-card summary.req-more::-webkit-details-marker { display: none; }
+  .req-card summary.req-more::before { content: "▸ "; color: var(--line-2); }
+  .req-card details.req-all[open] summary.req-more::before { content: "▾ "; }
+  .req-card .req-groups { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
+  .req-card .req-group > h4 {
+    margin: 0 0 3px; font-family: var(--font-mono); font-size: 8.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted);
+    border-bottom: 1px solid var(--line); padding-bottom: 2px;
+  }
+  .req-card .req-kv {
+    display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 11px;
+  }
+  .req-card .req-kv .k { color: var(--muted); white-space: nowrap; }
+  .req-card .req-kv .v { color: var(--ink); word-break: break-word; font-variant-numeric: tabular-nums; }
+  .req-card .req-kv .v .u { color: var(--muted); font-size: 9px; margin-left: 2px; }
+  .req-card .req-cargo2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 4px 10px; }
+  .req-card .req-copy { cursor: pointer; border-bottom: 1px dotted var(--line-2); }
+  .req-card .req-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .req-card .req-copy.copied { color: var(--good); border-bottom-color: var(--good); }
 
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 4px 7px; border-bottom: 1px solid var(--line); }
@@ -1052,7 +1165,7 @@
           <div>
             <label>Received via</label>
             <select name="source">
-              <option value="phone">Phone</option>
+              <option value="phone">Phone call</option>
               <option value="email">Email</option>
               <option value="operator">Operator entry</option>
             </select>
@@ -1153,16 +1266,7 @@
 
     <details class="section" open>
       <summary>All berth requests</summary>
-    <div class="filter-bar">
-      <label for="reqSource">Channel</label>
-      <select id="reqSource">
-        <option value="">All</option>
-        <option value="phone">Phone</option>
-        <option value="email">Email</option>
-        <option value="operator">Operator</option>
-        <option value="ai">AI-parsed</option>
-      </select>
-    </div>
+    <div class="seg req-seg" id="reqSourceSeg" role="tablist" aria-label="Received via"></div>
     <div id="berthRequests"><div class="empty">loading…</div></div>
     </details>
     </section>

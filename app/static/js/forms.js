@@ -1051,26 +1051,69 @@ function isValidImo(imo) {
 // --- Berth requests (raw intake_event audit trail) -------------------------
 // The actual inbound requests as received (phone / email / operator),
 // distinct from the reservations they project into. Read-only.
-let _berthRequestRows = [];   // last-loaded rows, keyed for the delegated Edit handler
+let _berthRequestRows = [];   // last-loaded rows (unfiltered), keyed for the delegated handlers
+
+// The channel a request reads as: phone/email/operator ride through as themselves,
+// but the AI-normalized online form (source='ai') and the retired legacy online
+// form (source='form') both read as one "form" channel — a worker never picks
+// "form" as a received-via (Dataverse pulls it), so it is display/filter only.
+function reqChannel(source) {
+  if (source === "ai" || source === "form") return "form";
+  if (source === "phone" || source === "email" || source === "operator") return source;
+  return "operator";
+}
+// Short uppercase badge for the card header. sourceLabel already maps ai->form.
+const channelBadge = (source) => sourceLabel(source).toUpperCase();
+
+// The four filter segments. One is active at a time (there is no "all"); the
+// selection persists so the tab reopens where the operator left it.
+const REQ_CHANNELS = [
+  { key: "phone", label: "Phone" },
+  { key: "email", label: "Email" },
+  { key: "operator", label: "Operator" },
+  { key: "form", label: "Form" },
+];
+let _reqChannel = localStorage.getItem("reqChannel") || "form";
 
 export async function loadBerthRequests() {
   const el = document.getElementById("berthRequests");
   if (!el) return;
-  const sel = document.getElementById("reqSource");
-  const channel = sel ? sel.value : "";
+  el.innerHTML = '<div class="empty">loading…</div>';
+  let rows;
   try {
-    let rows = await api("/intake/berth-requests?limit=200");
-    if (channel) rows = rows.filter((r) => r.source === channel);
-    _berthRequestRows = rows;
-    if (!rows.length) { el.innerHTML = '<div class="empty">no berth requests on file</div>'; return; }
-    el.innerHTML = rows.map(reqCard).join("");
+    rows = await api("/intake/berth-requests?limit=200");
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+    const seg = document.getElementById("reqSourceSeg");
+    if (seg) seg.innerHTML = "";
+    return;
   }
+  _berthRequestRows = rows;
+  renderReqSeg(rows);
+  const shown = rows.filter((r) => reqChannel(r.source) === _reqChannel);
+  if (!shown.length) {
+    const lbl = (REQ_CHANNELS.find((c) => c.key === _reqChannel) || {}).label || _reqChannel;
+    el.innerHTML = `<div class="empty">no ${esc(lbl.toLowerCase())} requests on file</div>`;
+    return;
+  }
+  el.innerHTML = shown.map(reqCard).join("");
 }
 
-// Cards are re-rendered via innerHTML, so delegate the Edit/Delete clicks to the
-// container and look the row up by id to hand its raw payload to the form.
+// Segmented channel filter: a button per channel with its live count, the active
+// one highlighted. Rebuilt on every load so counts track the data.
+function renderReqSeg(rows) {
+  const seg = document.getElementById("reqSourceSeg");
+  if (!seg) return;
+  const counts = {};
+  for (const r of rows) { const c = reqChannel(r.source); counts[c] = (counts[c] || 0) + 1; }
+  seg.innerHTML = REQ_CHANNELS.map((c) =>
+    `<button type="button" data-seg="${c.key}" class="${c.key === _reqChannel ? "active" : ""}" ` +
+    `role="tab" aria-selected="${c.key === _reqChannel}">${c.label}<span class="c">${counts[c.key] || 0}</span></button>`
+  ).join("");
+}
+
+// Cards are re-rendered via innerHTML, so delegate the Edit / kebab / copy / Delete
+// clicks to the container and look the row up by id to hand its raw payload to the form.
 (function () {
   const el = document.getElementById("berthRequests");
   if (!el) return;
@@ -1082,6 +1125,25 @@ export async function loadBerthRequests() {
       if (row) editBerthRequest(id, row.raw || {}, row.vessel || null);
       return;
     }
+    // Kebab toggles its own menu (Delete lives there); only one menu open at a time.
+    const kebab = e.target.closest("[data-kebab]");
+    if (kebab) {
+      const menu = el.querySelector(`[data-menu="${kebab.dataset.kebab}"]`);
+      const wasOpen = menu && menu.classList.contains("open");
+      el.querySelectorAll(".req-menu.open").forEach((m) => m.classList.remove("open"));
+      if (menu && !wasOpen) menu.classList.add("open");
+      return;
+    }
+    // Copy-on-click for contact fields.
+    const copyEl = e.target.closest("[data-copy]");
+    if (copyEl) {
+      try {
+        await navigator.clipboard.writeText(copyEl.dataset.copy);
+        copyEl.classList.add("copied");
+        setTimeout(() => copyEl.classList.remove("copied"), 1200);
+      } catch (_) { /* clipboard blocked — no-op */ }
+      return;
+    }
     const delBtn = e.target.closest("[data-delete-req]");
     if (delBtn) {
       const id = Number(delBtn.dataset.deleteReq);
@@ -1090,6 +1152,11 @@ export async function loadBerthRequests() {
       if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); }
       else alert("Failed: " + writeError(w));
     }
+  });
+  // Dismiss any open kebab menu on an outside click.
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-kebab]") || e.target.closest(".req-menu")) return;
+    el.querySelectorAll(".req-menu.open").forEach((m) => m.classList.remove("open"));
   });
 })();
 
@@ -1105,126 +1172,251 @@ function rawField(raw, keys) {
   return null;
 }
 
-// Friendly labels for the known berth-request fields, in display order. Each
-// entry lists the raw keys it can appear under — the manual/AI form's lowercase
-// keys first, then any legacy online-form row's capitalized keys — so both intake
-// shapes render identically. `dt` marks a datetime instant (shown Central); `bool`
-// marks a checkbox (only rendered when true).
-const REQ_INFO_FIELDS = [
-  { keys: ["request_date"], label: "Request date" },
-  { keys: ["vessel", "Vessel"], label: "Vessel" },
-  { keys: ["imo", "IMO Number"], label: "IMO" },
-  { keys: ["ss_line"], label: "S/S Line" },
-  { keys: ["flag"], label: "Flag" },
-  { keys: ["destinations"], label: "Destinations" },
-  { keys: ["length_ft"], label: "LOA (ft)" },
-  { keys: ["beam_ft"], label: "Beam (ft)" },
-  { keys: ["draft_ft"], label: "Draft (ft)" },
-  { keys: ["deadweight_lbs"], label: "Deadweight (lbs)" },
-  { keys: ["bunkers"], label: "Taking bunkers", bool: true },
-  { keys: ["bunker_type"], label: "Bunker type" },
-  { keys: ["bunker_qty_mt"], label: "Bunker fuel (metric tons)" },
-  { keys: ["bunkering_acknowledged"], label: "Bunkering acknowledged", bool: true },
-  { keys: ["due_from"], label: "Due from" },
-  { keys: ["etb", "Port Arrival Date"], label: "Arrival (ETB)", dt: true },
-  { keys: ["sail_for"], label: "To sail for" },
-  { keys: ["etd", "Port Departure Date"], label: "Departure (ETD)", dt: true },
-  { keys: ["inbound_cargo", "Inbound Cargo"], label: "Inbound cargo" },
-  { keys: ["inbound_tons"], label: "Inbound weight (net tons)" },
-  { keys: ["outbound_cargo", "Outbound Cargo"], label: "Outbound cargo" },
-  { keys: ["outbound_tons"], label: "Outbound weight (net tons)" },
-  { keys: ["outbound_cargo_start"], label: "Begin receiving outbound" },
-  { keys: ["Assigned Berth"], label: "Assigned berth" },
-  { keys: ["agency", "Agency/Owner"], label: "Agency / Owner" },
-  { keys: ["requestor_name"], label: "Requestor" },
-  { keys: ["requestor_email"], label: "Email" },
-  { keys: ["requestor_phone"], label: "Phone" },
-];
+// --- card render helpers ---------------------------------------------------
 
-// Render everything present in a raw intake payload as a readable label/value
-// list — operators can't (and shouldn't have to) read the JSON. Known fields come
-// first in a sensible order; any unrecognized key is still shown (prettified) so
-// nothing is silently hidden. Empty values are skipped.
-function allInfoRows(raw) {
-  if (!raw || typeof raw !== "object") {
-    return `<div class="meta">No details.</div>`;
+// Processing state -> {label, colour}. A reconciled reservation shows its own
+// status in the matching palette; a processed request with no reservation says so;
+// an unprocessed request (no arrival date yet) is flagged for action. These are the
+// system's real statuses — not invented approve/reject states.
+function statusInfo(r) {
+  if (r.reservation_id) {
+    const s = r.reservation_status || "reserved";
+    return { label: s, color: BADGE_COLORS[s] || "var(--ink-dim)" };
   }
-  const seen = new Set();
-  const rows = [];
-  const has = (v) => v !== undefined && v !== null && v !== "";
-  const pushRow = (label, valueHtml) =>
-    rows.push(`<span class="rk">${esc(label)}</span><span class="rv">${valueHtml}</span>`);
+  if (r.processed) return { label: "no reservation", color: "var(--muted)" };
+  return { label: "unprocessed", color: "var(--warn)" };
+}
 
-  for (const f of REQ_INFO_FIELDS) {
-    f.keys.forEach((k) => seen.add(k));
+// Compact relative age ("30m ago", "3h ago", "2d ago") off the browser clock; the
+// card carries the absolute Central instant in a title for hover.
+function relTime(iso) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "";
+  const future = Date.now() < t;
+  let s = Math.abs(Date.now() - t) / 1000;
+  let out;
+  if (s < 45) return "just now";
+  if (s < 3600) out = `${Math.round(s / 60)}m`;
+  else if (s < 86400) out = `${Math.round(s / 3600)}h`;
+  else if (s < 86400 * 30) out = `${Math.round(s / 86400)}d`;
+  else out = `${Math.round(s / (86400 * 30))}mo`;
+  return future ? `in ${out}` : `${out} ago`;
+}
+
+// The AI channel stamps "AI-parsed (confidence 99%)" into notes; pull the percent
+// back out for a discreet header pill. Null when absent (operator/phone/email).
+function parseConfidence(notes) {
+  if (!notes) return null;
+  const m = String(notes).match(/confidence\s+(\d+(?:\.\d+)?)\s*%/i);
+  return m ? Math.round(parseFloat(m[1])) : null;
+}
+
+const has = (v) => v !== undefined && v !== null && v !== "";
+function fmtNum(n, dp) {
+  return Number(n).toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+function rawNum(raw, keys) {
+  const v = rawField(raw, keys);
+  return has(v) && !isNaN(Number(v)) ? Number(v) : null;
+}
+
+// ETB -> ETD as a compact mono timeline with duration, plus from/to ports. Empty
+// string when there's nothing to show (so the strip is omitted entirely).
+function durLabel(etb, etd) {
+  if (!etb || !etd) return null;
+  const a = new Date(etb).getTime(), b = new Date(etd).getTime();
+  if (isNaN(a) || isNaN(b)) return null;
+  const h = Math.round((b - a) / 3600000);
+  if (h < 48) return `${h}h`;
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh ? `${d}d ${rh}h` : `${d}d`;
+}
+function schedStrip(raw) {
+  const etb = rawField(raw, ["etb", "Port Arrival Date"]);
+  const etd = rawField(raw, ["etd", "Port Departure Date"]);
+  const from = rawField(raw, ["due_from"]);
+  const to = rawField(raw, ["sail_for"]);
+  const dest = rawField(raw, ["destinations"]);
+  const ports = (from || to)
+    ? `${esc(from || "?")} <span class="arw">→</span> ${esc(to || "?")}`
+    : (dest ? esc(String(dest)) : "");
+  if (!etb && !etd && !ports) return "";
+  let time = "";
+  if (etb || etd) {
+    const a = `<span class="t">${esc(etb ? fmtCentral(etb) : "—")}</span>`;
+    const b = etd ? ` <span class="arw">→</span> <span class="t">${esc(fmtCentral(etd))}</span>` : "";
+    const dur = durLabel(etb, etd);
+    time = `${a}${b}${dur ? ` <span class="dur">· ${dur}</span>` : ""}`;
+  }
+  return `<div class="req-sched">${time}${ports ? `<span class="ports">${ports}</span>` : ""}</div>`;
+}
+
+// Four dimension tiles (LOA/BEAM/DRAFT/DWT). LOA/beam/draft prefer the linked
+// vessel's effective feet (AIS-authoritative); DWT is the request's own figure.
+function dimStrip(r) {
+  const raw = r.raw || {}, v = r.vessel || {};
+  const loa = v.loa_ft != null ? v.loa_ft : rawNum(raw, ["length_ft"]);
+  const beam = v.beam_ft != null ? v.beam_ft : rawNum(raw, ["beam_ft"]);
+  const draft = v.draft_ft != null ? v.draft_ft : rawNum(raw, ["draft_ft"]);
+  const dwt = rawNum(raw, ["deadweight_lbs"]);
+  return `<div class="req-dims">${[
+    dimCell("LOA", loa, "ft", 0),
+    dimCell("Beam", beam, "ft", 0),
+    dimCell("Draft", draft, "ft", 1),
+    dimCell("DWT", dwt, "lb", 0),
+  ].join("")}</div>`;
+}
+function dimCell(label, val, unit, dp) {
+  const ok = val != null && !isNaN(Number(val));
+  const body = ok ? `${fmtNum(val, dp)}<span class="u">${unit}</span>` : "—";
+  return `<div class="req-dim${ok ? "" : " blank"}"><span class="l">${esc(label)}</span><span class="n">${body}</span></div>`;
+}
+
+// The collapsed "all info" as grouped label-over-value sections. Known fields are
+// placed into Vessel / Schedule / Cargo / Contact / Meta; any unrecognized key
+// still surfaces under "Other" (nothing silently dropped), except source_raw (a
+// JSON blob) and source (already the header badge). Units ride with the value.
+function groupedInfo(raw, r) {
+  if (!raw || typeof raw !== "object") return `<div class="meta">No details.</div>`;
+  const seen = new Set(["source_raw", "source", "vessel", "Vessel", "imo", "IMO Number", "notes"]);
+  const pick = (keys, opt = {}) => {
+    keys.forEach((k) => seen.add(k));
     let v = null;
-    for (const k of f.keys) { if (has(raw[k])) { v = raw[k]; break; } }
-    if (!has(v)) continue;
-    if (f.bool) { if (v) pushRow(f.label, "Yes"); continue; }
-    if (f.dt) { pushRow(f.label, esc(fmtCentral(v)) + " CT"); continue; }
-    pushRow(f.label, esc(String(v)));
-  }
-  // Anything we don't have a label for — show it rather than drop it, except:
-  //  - `source_raw`: the verbatim upstream row (e.g. a full Dataverse record) is a
-  //    JSON blob operators shouldn't have to read — its fields already surface above.
-  //  - `source`: already shown as the card's channel badge (mapped through
-  //    sourceLabel, so 'ai' reads as "form"); the raw value here would be unmapped.
-  seen.add("source_raw");
-  seen.add("source");
+    for (const k of keys) { if (has(raw[k])) { v = raw[k]; break; } }
+    if (!has(v)) return null;
+    if (opt.bool) return v ? "Yes" : null;
+    if (opt.dt) return esc(fmtCentral(v)) + " CT";
+    let s = esc(String(v));
+    if (opt.copy) s = `<span class="req-copy" data-copy="${esc(String(v))}">${s}</span>`;
+    if (opt.unit) s += ` <span class="u">${opt.unit}</span>`;
+    return s;
+  };
+  const rows = (pairs) => pairs
+    .filter((p) => p && has(p[1]))
+    .map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${v}</span>`).join("");
+  const kv = (pairs) => { const inner = rows(pairs); return inner ? `<div class="req-kv">${inner}</div>` : ""; };
+  const group = (title, inner) => inner ? `<div class="req-group"><h4>${title}</h4>${inner}</div>` : "";
+
+  const vessel = group("Vessel", kv([
+    ["S/S Line", pick(["ss_line"])],
+    ["Flag", pick(["flag"])],
+    ["Destinations", pick(["destinations"])],
+    ["LOA", pick(["length_ft"], { unit: "ft" })],
+    ["Beam", pick(["beam_ft"], { unit: "ft" })],
+    ["Draft", pick(["draft_ft"], { unit: "ft" })],
+    ["Deadweight", pick(["deadweight_lbs"], { unit: "lb" })],
+    ["Taking bunkers", pick(["bunkers"], { bool: true })],
+    ["Bunker type", pick(["bunker_type"])],
+    ["Bunker fuel", pick(["bunker_qty_mt"], { unit: "mt" })],
+    ["Bunkering ack.", pick(["bunkering_acknowledged"], { bool: true })],
+  ]));
+  const schedule = group("Schedule", kv([
+    ["Request date", pick(["request_date"])],
+    ["Due from", pick(["due_from"])],
+    ["Arrival (ETB)", pick(["etb", "Port Arrival Date"], { dt: true })],
+    ["To sail for", pick(["sail_for"])],
+    ["Departure (ETD)", pick(["etd", "Port Departure Date"], { dt: true })],
+    ["Outbound starts", pick(["outbound_cargo_start"])],
+    ["Assigned berth", pick(["Assigned Berth"])],
+  ]));
+  const inb = kv([
+    ["Inbound", pick(["inbound_cargo", "Inbound Cargo"])],
+    ["In weight", pick(["inbound_tons"], { unit: "nt" })],
+  ]);
+  const outb = kv([
+    ["Outbound", pick(["outbound_cargo", "Outbound Cargo"])],
+    ["Out weight", pick(["outbound_tons"], { unit: "nt" })],
+  ]);
+  const cargo = (inb || outb) ? group("Cargo", `<div class="req-cargo2">${inb}${outb}</div>`) : "";
+  const contact = group("Contact", kv([
+    ["Agency / Owner", pick(["agency", "Agency/Owner"])],
+    ["Requestor", pick(["requestor_name"])],
+    ["Email", pick(["requestor_email"], { copy: true })],
+    ["Phone", pick(["requestor_phone"], { copy: true })],
+  ]));
+  const conf = parseConfidence(raw.notes);
+  const meta = group("Meta", kv([
+    ["Received via", esc(channelBadge(r.source))],
+    ["Source tag", esc(r.source || "")],
+    ["Confidence", conf != null ? conf + "%" : null],
+    ["Notes", has(raw.notes) ? esc(String(raw.notes)) : null],
+    ["Received", r.received_at ? esc(fmtCentral(r.received_at)) + " CT" : null],
+  ]));
+
+  const others = [];
   for (const k of Object.keys(raw)) {
     if (seen.has(k) || !has(raw[k])) continue;
     const v = raw[k];
     const label = k.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-    pushRow(label, esc(typeof v === "object" ? JSON.stringify(v) : String(v)));
+    others.push([label, esc(typeof v === "object" ? JSON.stringify(v) : String(v))]);
   }
-  if (!rows.length) return `<div class="meta">No details.</div>`;
-  return `<div class="req-info">${rows.join("")}</div>`;
+  const other = others.length ? group("Other", `<div class="req-kv">${rows(others)}</div>`) : "";
+
+  const html = [vessel, schedule, cargo, contact, meta, other].filter(Boolean).join("");
+  return html ? `<div class="req-groups">${html}</div>` : `<div class="meta">No details.</div>`;
 }
 
 function reqCard(r) {
   const raw = r.raw || {};
   const vessel = rawField(raw, ["vessel", "Vessel"]);
   const imo = rawField(raw, ["imo", "IMO Number"]);
-  const etb = rawField(raw, ["etb", "Port Arrival Date"]);
-  const etd = rawField(raw, ["etd", "Port Departure Date"]);
-  const agency = rawField(raw, ["agency", "Agency/Owner"]);
-  const berth = rawField(raw, ["Assigned Berth"]);
-  const cargo = rawField(raw, ["inbound_cargo", "Inbound Cargo"]) || rawField(raw, ["outbound_cargo", "Outbound Cargo"]);
-  const received = r.received_at ? fmtCentral(r.received_at) + " CT" : "—";
-  // Processing state (no reservation number — operators only need the state):
-  // reconciled reservations show their status, a processed request with none says
-  // so, and an unprocessed request (no arrival date) is flagged as needing action.
-  const state = r.reservation_id
-    ? esc(r.reservation_status || "reserved")
-    : (r.processed ? "no reservation" : `<span style="color:var(--warn)">unprocessed</span>`);
-  const lines = [];
-  if (etb || etd) lines.push(`ETB <b>${etb ? fmtCentral(etb) : "—"}</b>${etd ? ` → ETD <b>${fmtCentral(etd)}</b>` : ""}`);
-  if (berth) lines.push(`berth ${esc(berth)}`);
-  if (agency) lines.push(esc(agency));
-  if (cargo) lines.push(esc(cargo));
-  lines.push(`received ${esc(received)}`);
-  lines.push(state);
+  const flag = rawField(raw, ["flag"]);
+  const st = statusInfo(r);
+  const rel = relTime(r.received_at);
   // Editable channels (phone/email/operator + the AI-parsed 'ai' channel) carry
   // this form's lowercase keys, so they can be re-edited here. Editability is a
   // separate axis from provenance: 'ai' is a distinct source tag but still
   // operator-correctable; a legacy online-form ('form') row stays immutable.
   const editable = ["phone", "email", "operator", "ai"].includes(r.source);
+
+  const idbits = [];
+  if (imo) idbits.push(`IMO ${esc(imo)}`);
+  if (flag) idbits.push(esc(String(flag).toUpperCase()));
+  const idLine = idbits.length ? `<span class="req-id">${idbits.join(" · ")}</span>` : "";
+
+  const badges = [
+    `<span class="status-badge" style="color:${st.color}">${esc(st.label)}</span>`,
+    `<span class="status-badge" style="color:var(--muted)">${esc(channelBadge(r.source))}</span>`,
+  ];
+  if (rel) badges.push(`<span class="req-time" title="${esc(fmtCentral(r.received_at))} CT">${esc(rel)}</span>`);
+
+  const actions = editable ? `
+      <div class="req-actions">
+        <button class="btn-sm" data-edit-req="${r.id}">Edit</button>
+        <span class="sp"></span>
+        <button class="req-kebab" data-kebab="${r.id}" aria-label="More actions" aria-haspopup="true">⋮</button>
+        <div class="req-menu" data-menu="${r.id}"><button data-delete-req="${r.id}">Delete request</button></div>
+      </div>` : "";
+
   return `
     <div class="card req-card">
-      <div class="name">${esc(vessel || "(no vessel name)")}
-        ${imo ? `<span class="imo">IMO ${esc(imo)}</span>` : ""}
-        <span class="status-badge" style="color:var(--muted)">${esc(sourceLabel(r.source))}</span></div>
-      ${lines.map((l) => `<div class="meta">${l}</div>`).join("")}
-      ${editable ? `<div class="row-actions"><button class="btn-sm" data-edit-req="${r.id}">Edit</button><button class="btn-sm" data-delete-req="${r.id}">Delete</button></div>` : ""}
-      <details style="margin-top:6px">
-        <summary style="cursor:pointer;color:var(--muted);font-family:var(--font-mono);font-size:10px;letter-spacing:1px;text-transform:uppercase">all info</summary>
-        ${allInfoRows(raw)}
+      <div class="req-head">
+        <div class="req-idwrap">
+          <div class="req-name">${esc(vessel || "(no vessel name)")}</div>
+          ${idLine}
+        </div>
+        <div class="req-badges">${badges.join("")}</div>
+      </div>
+      ${schedStrip(raw)}
+      ${dimStrip(r)}
+      ${actions}
+      <details class="req-all">
+        <summary class="req-more">All info</summary>
+        ${groupedInfo(raw, r)}
       </details>
     </div>`;
 }
 
-// Channel filter -> re-filter the list.
+// Segmented channel filter -> set the active channel and re-render.
 (function () {
-  const sel = document.getElementById("reqSource");
-  if (sel) sel.addEventListener("change", loadBerthRequests);
+  const seg = document.getElementById("reqSourceSeg");
+  if (!seg) return;
+  seg.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-seg]");
+    if (!b || b.dataset.seg === _reqChannel) return;
+    _reqChannel = b.dataset.seg;
+    localStorage.setItem("reqChannel", _reqChannel);
+    loadBerthRequests();
+  });
 })();
