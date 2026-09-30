@@ -116,6 +116,8 @@ before a reservation can be confirmed.
 
 ## Conventions
 
+- **Git:** commit and push directly to `main` — no feature branches (solo-owner
+  repo). Don't branch before committing.
 - Migrations only via Alembic; never edit the DB by hand.
 - All position I/O goes through the one crosswalk module (`app/crosswalk.py`) — no
   scattered stationing math, server-side only (the UI never converts).
