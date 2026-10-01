@@ -663,6 +663,16 @@
     border: 1px solid color-mix(in srgb, currentColor 50%, transparent);
     background: color-mix(in srgb, currentColor 12%, transparent);
   }
+  /* Craft status bar: a type label (tug/tow/pilot vs cargo/tanker/…), not a
+     status — so natural case + no tracking set it apart from the status chips
+     it sits beside. Colour comes from the per-category --ship-* token inline. */
+  .craft-badge { text-transform: none; letter-spacing: .2px; font-weight: 500; }
+  /* Sub-heading inside a section (e.g. "Future planned" under Alongside now). */
+  .subhead {
+    margin: 14px 0 6px; font-family: var(--font-mono); font-size: 10px;
+    font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase;
+    color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px;
+  }
   /* "Edited" notice on a vessel whose AIS dimensions are pinned (overridden). */
   .edited-note { margin: 8px 0 2px; font-size: 12px; color: var(--ink-dim); display: flex; align-items: baseline; gap: 7px; }
   .row-actions { display: flex; gap: 4px; margin-top: 7px; flex-wrap: wrap; }
@@ -1321,6 +1331,14 @@
     <!-- Vessel-outlines and ship-dots toggles now live on the map, in the
          layer-toggle box (top-right) — see the L.control.layers overlays in JS. -->
 
+    <!-- Global harbor-craft filter. Off by default: tugs/towboats/pilots are
+         hidden from Conflicts AND Alongside now (+ its future-planned list).
+         On reveals them, labeled by the craft status bar. One toggle, read by
+         every Overview loader (wired in panels.js). -->
+    <label class="tl-chk" style="display:block;margin:0 0 10px">
+      <input type="checkbox" id="svcCraftToggle" /> show harbor craft (tugs · tows · pilots)
+    </label>
+
     <!-- ===== Conflicts (time × station overlaps) ===== -->
     <details class="section" open>
       <summary>Conflicts <i class="info" title="Reservations overlapping in both time and station — current and upcoming only (resolved past overlaps live in History). Click one to highlight the contested stretch.">i</i></summary>
@@ -1328,23 +1346,12 @@
     </details>
     <!-- ===== /Conflicts ===== -->
 
-    <!-- ===== AIS verification (plan vs observed reality) ===== -->
+    <!-- ===== Alongside now (live AIS + verification + future planned) ===== -->
     <details class="section" open>
-      <summary>AIS verification <i class="info" title="Operator placements checked against observed AIS: arrived / no-show / awaiting, plus any unplanned arrival currently alongside. Read-only; AIS never places.">i</i></summary>
-    <!-- Harbor craft (tugs/towboats/pilots) are filtered out of this panel AND
-         the conflicts feed server-side; this one toggle re-fetches both with
-         service_craft=1 (wired in panels.js). -->
-    <label class="tl-chk" style="display:block;margin:0 0 8px">
-      <input type="checkbox" id="svcCraftToggle" /> show harbor craft (tugs · towboats · pilots)
-    </label>
-    <div id="verification"><div class="empty">none</div></div>
-    </details>
-    <!-- ===== /AIS verification ===== -->
-
-    <!-- ===== Alongside now (currently berthed, from live AIS) ===== -->
-    <details class="section" open>
-      <summary>Alongside now <i class="info" title="Vessels physically at the wharf right now, from live AIS. Click one to locate it on the chart.">i</i></summary>
+      <summary>Alongside now <i class="info" title="Vessels physically at the wharf right now (live AIS), each checked against its booking — arrived / berthed elsewhere / unplanned — and labeled by craft type. Click one to locate it on the chart; hover for the dossier. Below: bookings not yet arrived.">i</i></summary>
     <div id="alongside"><div class="empty">loading…</div></div>
+    <h4 id="futurePlannedHdr" class="subhead" style="display:none">Future planned</h4>
+    <div id="futurePlanned"></div>
     </details>
     <!-- ===== /Alongside now ===== -->
 

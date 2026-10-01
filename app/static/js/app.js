@@ -5,7 +5,7 @@
 import { CENTRAL_TZ } from "./api.js";
 import { map, loadBbox, loadReferenceGeo, loadWharfGeometry, loadPositions } from "./map.js";
 import { loadTimeline } from "./timeline.js";
-import { loadStats, loadConflicts, loadVerification, loadAlongside, loadWorkers } from "./panels.js";
+import { loadStats, loadConflicts, loadAlongside, loadWorkers } from "./panels.js";
 import { loadVessels, loadRequests, loadBerthRequests } from "./forms.js";
 import { loadDepthSurveys } from "./depth.js";
 
@@ -96,8 +96,7 @@ loadRequests();
 loadBerthRequests();
 loadPositions();
 loadConflicts();
-loadVerification();
 loadAlongside();
 loadWorkers();
 loadDepthSurveys();
-setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); loadVerification(); loadAlongside(); loadWorkers(); }, 15000);
+setInterval(() => { loadStats(); loadPositions(); loadTimeline(); loadConflicts(); loadAlongside(); loadWorkers(); }, 15000);

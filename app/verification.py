@@ -134,7 +134,7 @@ _PLANNED_SQL = text(
         isempty(p.station_range) AS p_sta_empty,
         lower(p.station_range) AS p_sta_lo, upper(p.station_range) AS p_sta_hi,
         p.berth_id AS p_berth_id, pb.name AS p_berth_name,
-        pv.name AS p_vessel_name, pv.imo AS p_vessel_imo,
+        pv.id AS p_vessel_id, pv.name AS p_vessel_name, pv.imo AS p_vessel_imo,
         o.obs_id, o.obs_t_start, o.obs_t_end, o.obs_sta_lo, o.obs_sta_hi
     FROM reservation p
     JOIN vessel pv ON pv.id = p.vessel_id
@@ -178,7 +178,7 @@ _UNPLANNED_SQL = text(
         lower(o.time_range)    AS o_t_start, upper(o.time_range)    AS o_t_end,
         lower(o.station_range) AS o_sta_lo,  upper(o.station_range) AS o_sta_hi,
         o.berth_id AS o_berth_id, ob.name AS o_berth_name,
-        ov.name AS o_vessel_name, ov.imo AS o_vessel_imo
+        ov.id AS o_vessel_id, ov.name AS o_vessel_name, ov.imo AS o_vessel_imo
     FROM reservation o
     JOIN vessel ov ON ov.id = o.vessel_id
     LEFT JOIN berth ob ON ob.id = o.berth_id
@@ -263,6 +263,7 @@ def verify(
                 "id": r.p_id,
                 "type": r.p_type,
                 "status": r.p_status,
+                "vessel_id": r.p_vessel_id,
                 "vessel_name": r.p_vessel_name,
                 "vessel_imo": r.p_vessel_imo,
                 "berth_id": r.p_berth_id,
@@ -295,6 +296,7 @@ def verify(
     unplanned = [
         {
             "id": r.o_id,
+            "vessel_id": r.o_vessel_id,
             "vessel_name": r.o_vessel_name,
             "vessel_imo": r.o_vessel_imo,
             "berth_id": r.o_berth_id,

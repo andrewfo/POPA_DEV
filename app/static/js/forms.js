@@ -11,7 +11,7 @@ import {
   renderFeasibility, clearFeasibility, highlightFeasSlot, clearFeasHighlight,
 } from "./map.js";
 import { loadTimeline } from "./timeline.js";
-import { loadStats, loadConflicts, loadVerification } from "./panels.js";
+import { loadStats, loadConflicts, loadAlongside } from "./panels.js";
 import { loadHistory } from "./history.js";
 
 // Assigned by the berth-request form IIFE below (it closes over the form's local
@@ -619,7 +619,7 @@ async function confirmCandidate(resId, c, requiredFt, result, close) {
   }
   if (w.ok) {
     close();
-    loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification();
+    loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadAlongside();
   } else {
     result.className = "feas-pop-result err";
     result.textContent = "Failed: " + writeError(w);
@@ -681,7 +681,7 @@ function wireResCards(container) {
         loadTimeline();
         loadStats();   // status change may move the confirmed / reservation counts
         loadConflicts();   // ...and may create or resolve a conflict
-        loadVerification();
+        loadAlongside();
         setTimeout(loadRequests, 1200);   // let the confirmation show first
       } else {
         reqRes.className = "mini-result err";
@@ -711,7 +711,7 @@ function wireResCards(container) {
     if (unconfirmBtn) unconfirmBtn.addEventListener("click", async () => {
       if (!confirm("Unconfirm this reservation? It returns to a pending request — placement is kept and you can re-confirm it.")) return;
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "requested" });
-      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); } else alert("Failed: " + writeError(w));
+      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadAlongside(); } else alert("Failed: " + writeError(w));
     });
     // Cancel: clear the placement and return the row to a blank, pending
     // request. Sends status=requested + unassigned=true (no bow/heading), so the
@@ -726,7 +726,7 @@ function wireResCards(container) {
     if (cancelBtn) cancelBtn.addEventListener("click", async () => {
       if (!confirm("Cancel this placement? It clears the berth, station range, and timeline bar and returns the row to a pending request (blank, unconfirmed) so you can re-place it. The arrival/departure stay.")) return;
       const w = await apiWrite("PATCH", `/reservations/${id}`, { status: "requested", unassigned: true });
-      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); } else alert("Failed: " + writeError(w));
+      if (w.ok) { loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadAlongside(); } else alert("Failed: " + writeError(w));
     });
 
     // Find berth: ask the feasibility oracle where this vessel fits in its window
@@ -771,7 +771,7 @@ function wireResCards(container) {
         loadTimeline();
         loadStats();   // status change may move the confirmed / reservation counts
         loadConflicts();   // ...and may create or resolve a conflict
-        loadVerification();
+        loadAlongside();
         setTimeout(loadRequests, 1500);   // let the confirmation (and any warning) show first
       } else {
         res.className = "mini-result err";
@@ -1199,7 +1199,7 @@ function renderReqSeg(rows) {
       const id = Number(delBtn.dataset.deleteReq);
       if (!confirm("Delete this berth request and its requested reservation?")) return;
       const w = await apiWrite("DELETE", `/intake/berth-requests/${id}`);
-      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadVerification(); }
+      if (w.ok) { loadBerthRequests(); loadRequests(); loadTimeline(); loadStats(); loadConflicts(); loadAlongside(); }
       else alert("Failed: " + writeError(w));
     }
   });

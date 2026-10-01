@@ -690,6 +690,7 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
             )
             SELECT l.mmsi, l.lat, l.lon, l.sog, l.msg_ts,
                    v.id AS vessel_id, v.name AS vessel_name,
+                   v.imo AS vessel_imo, v.ship_type,
                    COALESCE(obs.since, l.msg_ts) AS since
             FROM latest l
             LEFT JOIN vessel v ON v.id = l.vessel_id
@@ -741,6 +742,10 @@ def occupancy_moored(session: Session = Depends(get_session)) -> list[dict]:
                 # an AIS contact not yet upserted into the vessel table.
                 "vessel_id": r.vessel_id,
                 "vessel_name": r.vessel_name,
+                "imo": r.vessel_imo,
+                # AIS numeric ship-type code → the UI's craft status bar
+                # (tug/tow/pilot vs cargo/tanker/…). NULL for an untyped contact.
+                "ship_type": r.ship_type,
                 "sog": float(r.sog) if r.sog is not None else None,
                 "msg_ts": r.msg_ts.isoformat() if r.msg_ts else None,
                 # When the vessel went alongside (observed-berthing start), else

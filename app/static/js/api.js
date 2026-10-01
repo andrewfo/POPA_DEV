@@ -88,6 +88,13 @@ export function shipTypeCategory(t) {
 }
 // Kept as a thin alias so the history log's tug tagging stays one definition.
 export const isTugType = (t) => shipTypeCategory(t) === "tug";
+// Harbor service craft (tug/tow/pilot) — the client mirror of the server's
+// SERVICE_CRAFT_TYPES {31,32,50,52,56,57} (app/shiptypes.py), expressed through
+// the one category table so it can't drift: tug + pilot, dredgers excluded. Used
+// to honour the global "show harbor craft" toggle on the (unfiltered) /occupancy/
+// moored feed client-side. A NULL/unknown type is NOT service craft — stay shown.
+export const isServiceCraftType = (t) =>
+  t != null && (shipTypeCategory(t) === "tug" || shipTypeCategory(t) === "pilot");
 // AIS ship-type code -> a readable label ("Tanker (80)"), reusing the same
 // category table the map dots / legend use. null when no type is on file.
 export function shipTypeLabel(t) {

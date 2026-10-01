@@ -1,5 +1,9 @@
-// Sidebar panels: status / stats, conflicts, AIS verification, and "alongside now".
-import { api, apiWrite, esc, fmtCentral, fmtSta, PAL } from "./api.js";
+// Sidebar panels: status / stats, conflicts, and the merged "alongside now"
+// (who's at the wharf + AIS verification + future planned arrivals).
+import {
+  api, esc, fmtCentral, fmtSta, PAL,
+  shipTypeCategory, SHIP_CATEGORIES, isServiceCraftType,
+} from "./api.js";
 import { map, stationToLatLon, locateVesselOnMap } from "./map.js";
 import { showShipHover, hideShipHover } from "./history.js";
 
@@ -92,9 +96,11 @@ export async function loadWorkers() {
 const conflictLayer = L.layerGroup().addTo(map);
 let CONFLICTS = [];
 
-// Both live panels hide harbor craft (tugs/towboats/pilots) server-side by
-// default; one toggle (#svcCraftToggle, in the verification section) re-fetches
-// both with service_craft=1. State lives here because both loaders read it.
+// The live Overview panels hide harbor craft (tugs/towboats/pilots) by default;
+// one global toggle (#svcCraftToggle, at the top of the Overview tab) reveals
+// them. Conflicts and the verification half of "alongside" re-fetch with
+// service_craft=1; the moored feed (unfiltered server-side) is filtered
+// client-side in loadAlongside. State lives here because every loader reads it.
 let SHOW_SERVICE_CRAFT = false;
 const svcQS = () => (SHOW_SERVICE_CRAFT ? "?service_craft=1" : "");
 (function () {
@@ -102,7 +108,7 @@ const svcQS = () => (SHOW_SERVICE_CRAFT ? "?service_craft=1" : "");
   if (t) t.addEventListener("change", () => {
     SHOW_SERVICE_CRAFT = t.checked;
     loadConflicts();
-    loadVerification();
+    loadAlongside();
   });
 })();
 
@@ -178,113 +184,100 @@ export async function loadConflicts() {
   }
 }
 
-// --- AIS verification (plan vs observed reality) ---------------------------
-// Read-only: surfaces how operator placements line up with observed AIS. Never
-// mutates status (and AIS can't place — see /verification). Reuses the conflict
-// highlight layer to draw a "berthed elsewhere" observed range on click.
+// --- Alongside now + AIS verification + future planned ---------------------
+// One merged panel. "Alongside now" is who's physically at the wharf right now
+// (live AIS: /occupancy/moored — the per-vessel form of the "Moored now" stat,
+// each projected to a berth server-side; populates without the occupancy worker).
+// Each alongside ship carries its AIS-verification badge — how the operator's
+// booking lines up with observed reality (arrived / berthed elsewhere /
+// unplanned) — joined by vessel_id to the read-only GET /verification payload,
+// plus a craft status bar (tug/tow/pilot vs cargo/tanker/…). "Future planned"
+// below lists bookings not yet alongside (awaiting; a lapsed one shows no-show).
+// Read-only throughout: the sweep that archives stale rows is the occupancy
+// worker's job (app/occupancy/run.py), never this panel's.
 const VERIFY_STATE = {
   arrived:  { label: "arrived",  color: PAL.green },
   no_show:  { label: "no-show",  color: PAL.red },
   awaiting: { label: "awaiting", color: PAL.muted },
 };
 
-function verifyPlannedCard(p, i) {
-  const st = VERIFY_STATE[p.state] || { label: p.state, color: PAL.muted };
-  const name = esc(p.vessel_name || "(unnamed)");
-  const win = `${fmtCentral(p.t_start)} → ${fmtCentral(p.t_end)}`;
-  // "berthed elsewhere" only when we have both a planned and an observed range.
-  const elsewhere = p.where_planned === false
-    ? ` <span class="status-badge" style="color:${PAL.amber}">berthed elsewhere</span>` : "";
-  const clickable = p.observed && p.where_planned === false;
-  return `
-    <div class="card${clickable ? " verify-card" : ""}" data-verify="${i}" style="border-left-color:${st.color}${clickable ? ";cursor:pointer" : ""}">
-      <div class="name">${name}
-        <span class="status-badge" style="color:${st.color}">${st.label}</span>${elsewhere}</div>
-      <div class="meta">${esc(p.status)}${p.berth_name ? " · " + esc(p.berth_name) : ""} · plan <b>${win}</b></div>
-    </div>`;
+// The verification badge for a moored ship, from its verification entry (joined
+// by vessel_id). No entry (contact not upserted / worker cold / plan absent) ->
+// the plain "moored" it showed before this merge.
+function verifyBadge(vinfo) {
+  if (!vinfo) return { label: "moored", color: PAL.green };
+  if (vinfo.kind === "unplanned") return { label: "unplanned", color: PAL.amber };
+  // planned: it's physically here, so the only discrepancy is wrong station.
+  if (vinfo.where_planned === false) return { label: "berthed elsewhere", color: PAL.amber };
+  return VERIFY_STATE.arrived;
 }
 
-function verifyUnplannedCard(u) {
-  const name = esc(u.vessel_name || "(unnamed)");
-  const since = fmtCentral(u.t_start);
-  return `
-    <div class="card" style="border-left-color:${PAL.amber}">
-      <div class="name">${name}
-        <span class="status-badge" style="color:${PAL.amber}">unplanned</span></div>
-      <div class="meta">observed${u.berth_name ? " · " + esc(u.berth_name) : ""} · since ${since}${u.ongoing ? " · ongoing" : ""}</div>
-    </div>`;
-}
-
-let VERIFY_PLANNED = [];
-
-export async function loadVerification() {
-  const el = document.getElementById("verification");
-  if (!el) return;
-  try {
-    // POST /verification/sweep first auto-archives stale planned rows (a no-show
-    // or arrived past its window + grace period -> cancelled/completed), so they
-    // drop out of this panel into History, then returns the fresh payload. The
-    // read-only GET /verification is still there for clients that must not mutate.
-    const w = await apiWrite("POST", "/verification/sweep" + svcQS());
-    if (!w.ok) throw new Error("sweep failed");
-    const v = w.data || {};
-    VERIFY_PLANNED = v.planned || [];
-    // Surface the actionable rows first: discrepancies (no-show / berthed
-    // elsewhere) and unplanned arrivals; quietly arrived/awaiting rows follow.
-    const flagged = VERIFY_PLANNED
-      .map((p, i) => ({ p, i }))
-      .filter(({ p }) => p.state === "no_show" || p.where_planned === false);
-    const ok = VERIFY_PLANNED
-      .map((p, i) => ({ p, i }))
-      .filter(({ p }) => !(p.state === "no_show" || p.where_planned === false));
-    const unplanned = v.unplanned || [];
-    const parts = [];
-    for (const { p, i } of flagged) parts.push(verifyPlannedCard(p, i));
-    for (const u of unplanned) parts.push(verifyUnplannedCard(u));
-    for (const { p, i } of ok) parts.push(verifyPlannedCard(p, i));
-    el.innerHTML = parts.length ? parts.join("") : '<div class="empty">nothing to verify</div>';
-    // A "berthed elsewhere" card maps to its observed range via the conflict layer.
-    el.querySelectorAll(".verify-card").forEach((card) => {
-      card.addEventListener("click", () => {
-        const p = VERIFY_PLANNED[Number(card.dataset.verify)];
-        if (p && p.observed) highlightConflict({ overlap: p.observed });
-      });
-    });
-  } catch (e) {
-    VERIFY_PLANNED = [];
-    el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
-  }
-}
-
-// --- Alongside now (currently berthed) -------------------------------------
-// Who is physically at the wharf right now, from live AIS: /occupancy/moored is
-// the per-vessel form of the "Moored now" stat (latest fix alongside + slow),
-// each projected to a berth server-side. Reads live positions, so it populates
-// without the occupancy-derivation worker. Click a row to locate its AIS contact;
-// hover for the full ship dossier (the same floating panel History uses — vessel
-// record + dimensions + latest AIS fix + booking log), shown when the contact has
-// been upserted into the vessel table (vessel_id present).
-function alongsideCard(r) {
+function alongsideCard(r, vinfo) {
   const name = esc(r.vessel_name || "(unnamed)");
   const where = r.berth_name ? esc(r.berth_name)
     : (r.popa_station != null ? "POPA " + fmtSta(r.popa_station) : "berth —");
   const clickable = r.mmsi != null;
   const hoverable = r.vessel_id != null;
+  const vb = verifyBadge(vinfo);
+  const craft = SHIP_CATEGORIES[shipTypeCategory(r.ship_type)];
   return `
-    <div class="card${clickable ? " along-card" : ""}${hoverable ? " hist-card" : ""}" data-along-mmsi="${r.mmsi ?? ""}" data-vessel-id="${r.vessel_id ?? ""}" style="border-left-color:${PAL.green}${clickable ? ";cursor:pointer" : ""}"${hoverable ? ' title="Hover for the ship dossier"' : ""}>
+    <div class="card${clickable ? " along-card" : ""}${hoverable ? " hist-card" : ""}" data-along-mmsi="${r.mmsi ?? ""}" data-vessel-id="${r.vessel_id ?? ""}" style="border-left-color:${vb.color}${clickable ? ";cursor:pointer" : ""}"${hoverable ? ' title="Hover for the ship dossier"' : ""}>
       <div class="name">${name}
-        <span class="status-badge" style="color:${PAL.green}">moored</span></div>
+        <span class="status-badge" style="color:${vb.color}">${vb.label}</span>
+        <span class="status-badge craft-badge" style="color:${craft.color}">${esc(craft.label)}</span></div>
       <div class="meta">${where} · since <b>${fmtCentral(r.since ?? r.msg_ts)}</b></div>
+    </div>`;
+}
+
+// A booking not yet alongside — "awaiting" (upcoming), or "no-show" (window
+// lapsed, never arrived; flagged red until the worker archives it to History).
+function futurePlannedCard(p) {
+  const st = VERIFY_STATE[p.state] || { label: p.state, color: PAL.muted };
+  const name = esc(p.vessel_name || "(unnamed)");
+  const win = `${fmtCentral(p.t_start)} → ${fmtCentral(p.t_end)}`;
+  return `
+    <div class="card" style="border-left-color:${st.color}">
+      <div class="name">${name}
+        <span class="status-badge" style="color:${st.color}">${st.label}</span></div>
+      <div class="meta">${esc(p.status)}${p.berth_name ? " · " + esc(p.berth_name) : ""} · plan <b>${win}</b></div>
     </div>`;
 }
 
 export async function loadAlongside() {
   const el = document.getElementById("alongside");
+  const fel = document.getElementById("futurePlanned");
+  const fhdr = document.getElementById("futurePlannedHdr");
   if (!el) return;
   try {
-    const rs = await api("/occupancy/moored");
-    el.innerHTML = rs.length
-      ? rs.map(alongsideCard).join("")
+    // Who's alongside now (live positions, unfiltered server-side) + the
+    // read-only verification payload. Pass svcQS() so a revealed tug can still
+    // match an unplanned entry; the mutating POST /verification/sweep is NOT
+    // called here — the occupancy worker owns stale-row archiving.
+    const moored = await api("/occupancy/moored");
+    let v = { planned: [], unplanned: [] };
+    try { v = await api("/verification" + svcQS()); } catch (_) { /* degrade to moored-only */ }
+
+    // vessel_id -> verification info; a planned entry wins over an unplanned one.
+    const vmap = new Map();
+    for (const p of (v.planned || [])) {
+      if (p.vessel_id != null && !vmap.has(p.vessel_id)) {
+        vmap.set(p.vessel_id, { kind: "planned", state: p.state, where_planned: p.where_planned });
+      }
+    }
+    for (const u of (v.unplanned || [])) {
+      if (u.vessel_id != null && !vmap.has(u.vessel_id)) {
+        vmap.set(u.vessel_id, { kind: "unplanned" });
+      }
+    }
+
+    // The global "show harbor craft" toggle governs this unfiltered feed too:
+    // hide tug/tow/pilot client-side (by ship_type) unless the toggle is on.
+    const rows = SHOW_SERVICE_CRAFT
+      ? moored
+      : moored.filter((r) => !isServiceCraftType(r.ship_type));
+
+    el.innerHTML = rows.length
+      ? rows.map((r) => alongsideCard(r, vmap.get(r.vessel_id))).join("")
       : '<div class="empty">nothing alongside</div>';
     el.querySelectorAll(".along-card").forEach((card) => {
       card.addEventListener("click", () => {
@@ -300,7 +293,23 @@ export async function loadAlongside() {
       card.addEventListener("mouseenter", () => showShipHover(card, vid));
       card.addEventListener("mouseleave", hideShipHover);
     });
+
+    // Future planned: bookings not yet alongside (awaiting / no-show), minus any
+    // vessel already in the moored list; no-shows (flagged) sort first.
+    const mooredIds = new Set(rows.map((r) => r.vessel_id).filter((x) => x != null));
+    const future = (v.planned || [])
+      .filter((p) => (p.state === "awaiting" || p.state === "no_show") && !mooredIds.has(p.vessel_id))
+      .sort((a, b) => (b.state === "no_show") - (a.state === "no_show"));
+    if (future.length) {
+      if (fhdr) fhdr.style.display = "";
+      if (fel) fel.innerHTML = future.map(futurePlannedCard).join("");
+    } else {
+      if (fhdr) fhdr.style.display = "none";
+      if (fel) fel.innerHTML = "";
+    }
   } catch (e) {
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
+    if (fhdr) fhdr.style.display = "none";
+    if (fel) fel.innerHTML = "";
   }
 }
