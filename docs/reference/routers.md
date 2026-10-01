@@ -94,7 +94,9 @@ The audit callback returns `None` to skip logging a no-op (deduped re-submission
 
 **Live-alert defaults on `GET /conflicts` and `GET /verification`.** Both endpoints default to `current=true` (drop pairs/rows whose overlap ended before now) and `service_craft=false` (hide harbor tug/towboat/pilot pairs). An explicit `from`/`to` window turns `current_only` off (a historical query means the past on purpose). These are filtering conveniences at the query layer; the underlying rows are never suppressed at ingest or derivation.
 
-**`POST /verification/sweep` is the write companion to `GET /verification`.** The UI calls the sweep endpoint instead of the GET so the panel self-heals on each refresh. The occupancy worker also calls it. Pure read clients use the GET. The sweep records a single `audit_log` row only when it actually moved rows; no-op sweeps are not logged.
+**`POST /verification/sweep` is the write companion to `GET /verification`.** The **occupancy worker** calls the sweep to self-heal (auto-archive stale planned rows on evidence); the UI's "Alongside now" panel reads the plain `GET /verification` (stale archiving is already covered by the worker, so the panel stays read-only). The sweep records a single `audit_log` row only when it actually moved rows; no-op sweeps are not logged.
+
+`GET /verification` includes `vessel_id` on both the `planned` and `unplanned` entries so the "Alongside now" panel can join its moored feed to a plan-vs-observed badge by vessel. `GET /occupancy/moored` likewise carries `imo` and `ship_type` for that panel's per-ship craft status bar, and `GET /reservations` carries read-only display extras (`created_at`, the linked vessel's effective dims via `_vessel_dims`, and the linked `intake_event.raw`) so the reservation cards reuse the berth-request card layout. All additive and null-safe.
 
 **Station bounds in responses are always dual: POPA + Dock No.** `station_lo`/`station_hi` are canonical POPA feet; `station_lo_dock`/`station_hi_dock` are Dock No. feet, converted server-side through the wharf segment's affine params. The UI never does stationing math.
 

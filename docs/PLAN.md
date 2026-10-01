@@ -73,12 +73,24 @@ and the **409 conflict** path (a `confirmed`-overlap `IntegrityError` surfacing 
 409 — never pre-empted by blocking `observed`/`tentative`). Test through
 `TestClient`, not by committing rows.
 
-### C — UI simplification pass
+### C — UI simplification pass 🟡 in progress
 Tighten the operator screens so the primary actions are obvious and noise is
 hidden. Tabs, filters, and map-layer toggles are in place. Reduce clutter, group
 the common actions, and collapse advanced fields behind disclosure. Keep the UI
 **thin and over the API** — presentation only, no stationing/precedence logic
 moving client-side.
+
+**Landed so far** (all presentation-only, over read-only additive API fields):
+- Berth-request tab redesigned into grouped cards + a segmented channel filter.
+- Reservation cards restyled to **mirror** the berth-request card layout
+  (structured header, boxed schedule strip, dim grid, kebab overflow, collapsible
+  ALL INFO) — reuses `dimStrip`/`groupedInfo`.
+- **AIS verification folded into "Alongside now"**: each moored ship carries a
+  plan-vs-observed badge + craft status bar, with a "Future planned" sub-section;
+  the standalone verification section is gone and the harbor-craft toggle is now a
+  single global Overview filter. The panel reads the read-only `GET /verification`
+  (archiving stays in the occupancy worker).
+- Saved-ships roster trimmed to name/dims, searchable by name or IMO.
 
 ### D — Manual vs. agent write precedence
 Answer "if we fill it manually and then the agent fills it, which version wins?"
