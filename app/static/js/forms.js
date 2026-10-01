@@ -407,10 +407,25 @@ function resCard(r) {
     return d.toLocaleString(undefined, opts);
   };
   const color = BADGE_COLORS[r.status] || "#8a99a6";
-  const imo = r.vessel_imo ? `<span class="imo">IMO ${esc(r.vessel_imo)}</span>` : "";
-  const sta = r.station_unassigned
-    ? "berth unassigned"
-    : `Dock <b>${Math.round(Math.min(r.station_lo_dock, r.station_hi_dock))}–${Math.round(Math.max(r.station_lo_dock, r.station_hi_dock))}</b>`;
+  // Header: name + IMO subline, with status / channel / relative-age badges —
+  // mirrors reqCard so the two tabs scan the same way.
+  const idLine = r.vessel_imo ? `<span class="req-id">IMO ${esc(r.vessel_imo)}</span>` : "";
+  const rel = relTime(r.created_at);
+  const badges = [
+    `<span class="status-badge" style="color:${color}">${esc(r.status)}</span>`,
+    `<span class="status-badge" style="color:var(--muted)">${esc(channelBadge(r.source))}</span>`,
+  ];
+  if (rel) badges.push(`<span class="req-time" title="${esc(fmtCentral(r.created_at))} CT">${esc(rel)}</span>`);
+  // Schedule strip: ETB -> ETD · duration from the reservation's own (normalized)
+  // window, then the placed berth (or an amber "Unassigned" pill) on the next line.
+  const schedTimes = (r.t_start || r.t_end)
+    ? `<span class="t">${esc(fmtDate(r.t_start))}</span>` +
+      (r.t_end ? ` <span class="arw">→</span> <span class="t">${esc(fmtDate(r.t_end))}</span>` : "") +
+      (durLabel(r.t_start, r.t_end) ? ` <span class="dur">· ${durLabel(r.t_start, r.t_end)}</span>` : "")
+    : `<span class="t" style="color:var(--muted)">Not scheduled</span>`;
+  const berthLine = r.station_unassigned
+    ? `<span class="status-badge" style="color:var(--amber)">Unassigned</span>`
+    : `Dock <span class="t">${Math.round(Math.min(r.station_lo_dock, r.station_hi_dock))}–${Math.round(Math.max(r.station_lo_dock, r.station_hi_dock))}</span>`;
   const opt = (cur, v, lbl) => `<option value="${v}"${(cur || "") === v ? " selected" : ""}>${lbl}</option>`;
   const statusSel = ["requested", "confirmed", "completed", "cancelled"].map((s) => opt(r.status, s, s)).join("");
   const typeSel = ["vessel", "dredge", "layberth"].map((t) => opt(r.type, t, t)).join("");
@@ -430,21 +445,32 @@ function resCard(r) {
     : "";
   return `
     <div class="card req-card" data-res="${r.id}" style="border-left-color:${color}">
-      <div class="name">${esc(r.vessel_name || "(unnamed)")} ${imo}
-        <span class="status-badge" style="color:${color}">${esc(r.status)}</span></div>
-      <div class="meta">${esc(r.type)} · via ${esc(sourceLabel(r.source))}</div>
-      <div class="meta">ETB <b>${fmtDate(r.t_start)}</b>${r.t_end ? ` → ETD <b>${fmtDate(r.t_end)}</b>` : ""}</div>
-      <div class="meta">${sta}</div>
-      ${r.cargo ? `<div class="meta">cargo · ${esc(r.cargo)}</div>` : ""}
+      <div class="req-head">
+        <div class="req-idwrap">
+          <div class="req-name">${esc(r.vessel_name || "(unnamed)")}</div>
+          ${idLine}
+        </div>
+        <div class="req-badges">${badges.join("")}</div>
+      </div>
+      <div class="req-sched">${schedTimes}<span class="ports">${berthLine}</span></div>
+      ${dimStrip(r)}
       ${overrideHtml ? `<div class="meta">${overrideHtml}</div>` : ""}
-      <div class="row-actions">
+      <div class="req-actions">
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
         ${["requested", "tentative", "confirmed"].includes(r.status) ? '<button class="btn-sm" data-act="find-berth">Find berth</button>' : ""}
-        <button class="btn-sm" data-act="edit-request">Edit request</button>
-        <button class="btn-sm" data-act="edit">Edit placement</button>
-        ${r.status === "confirmed" ? '<button class="btn-sm" data-act="unconfirm">Unconfirm</button>' : ""}
-        ${r.status !== "cancelled" ? '<button class="btn-sm" data-act="cancel">Cancel</button>' : ""}
+        <span class="sp"></span>
+        <button class="req-kebab" aria-label="More actions" aria-haspopup="true">⋮</button>
+        <div class="req-menu">
+          <button class="menu-item" data-act="edit-request">Edit request</button>
+          <button class="menu-item" data-act="edit">Edit placement</button>
+          ${r.status === "confirmed" ? '<button class="menu-item" data-act="unconfirm">Unconfirm</button>' : ""}
+          ${r.status !== "cancelled" ? '<button class="menu-item danger" data-act="cancel">Cancel</button>' : ""}
+        </div>
       </div>
+      <details class="req-all">
+        <summary class="req-more">All info</summary>
+        ${resAllInfo(r)}
+      </details>
       <form class="edit-form" data-edit-request>
         <fieldset>
           <legend>Berth request</legend>
@@ -497,6 +523,10 @@ function resCard(r) {
 // closes the old). Hovering a row highlights that berth on the map; clicking it
 // CONFIRMS the placement straight away.
 let closeFeasPicker = null;
+
+// Guard so the one document-level "click outside closes the kebab menu" listener
+// is attached once, not re-added on every loadRequests() re-render.
+let _resMenuWired = false;
 
 function openFeasPicker(anchorBtn, resId, payload) {
   if (closeFeasPicker) closeFeasPicker();
@@ -602,10 +632,35 @@ async function confirmCandidate(resId, c, requiredFt, result, close) {
 }
 
 function wireResCards(container) {
+  // One document listener for "click outside closes any open kebab menu" — added
+  // once (the per-card listeners below are fine to re-add since the nodes are fresh
+  // each render, but a document listener would otherwise stack).
+  if (!_resMenuWired) {
+    _resMenuWired = true;
+    document.addEventListener("click", (e) => {
+      if (e.target.closest(".req-kebab") || e.target.closest(".req-menu")) return;
+      container.querySelectorAll(".req-menu.open").forEach((m) => m.classList.remove("open"));
+    });
+  }
   container.querySelectorAll(".req-card[data-res]").forEach((card) => {
     const id = Number(card.dataset.res);
     const form = card.querySelector("[data-edit]");
     const res = form.querySelector(".mini-result");
+    // Kebab overflow: toggle this card's menu (closing any other), and close it
+    // after any item is chosen. The item handlers themselves are wired below by
+    // their [data-act] — they resolve whether on the face or inside the menu.
+    const kebab = card.querySelector(".req-kebab");
+    const menu = card.querySelector(".req-menu");
+    if (kebab && menu) {
+      kebab.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = menu.classList.contains("open");
+        container.querySelectorAll(".req-menu.open").forEach((m) => m.classList.remove("open"));
+        if (!open) menu.classList.add("open");
+      });
+      menu.querySelectorAll("button").forEach((b) =>
+        b.addEventListener("click", () => menu.classList.remove("open")));
+    }
     card.querySelector('[data-act="edit"]').addEventListener("click", () => form.classList.toggle("open"));
     form.querySelector('[data-act="close"]').addEventListener("click", () => form.classList.remove("open"));
 
@@ -1328,7 +1383,12 @@ function groupedInfo(raw, r) {
     ["Outbound", pick(["outbound_cargo", "Outbound Cargo"])],
     ["Out weight", pick(["outbound_tons"], { unit: "nt" })],
   ]);
-  const cargo = (inb || outb) ? group("Cargo", `<div class="req-cargo2">${inb}${outb}</div>`) : "";
+  // Structured in/out when the raw carries it; otherwise fall back to the
+  // reservation's flat one-line `cargo` string (phone/AI rows) so nothing is lost.
+  const cargoFlat = (!inb && !outb && has(r && r.cargo))
+    ? group("Cargo", kv([["Cargo", esc(String(r.cargo))]]))
+    : "";
+  const cargo = (inb || outb) ? group("Cargo", `<div class="req-cargo2">${inb}${outb}</div>`) : cargoFlat;
   const contact = group("Contact", kv([
     ["Agency / Owner", pick(["agency", "Agency/Owner"])],
     ["Requestor", pick(["requestor_name"])],
@@ -1355,6 +1415,28 @@ function groupedInfo(raw, r) {
 
   const html = [vessel, schedule, cargo, contact, meta, other].filter(Boolean).join("");
   return html ? `<div class="req-groups">${html}</div>` : `<div class="meta">No details.</div>`;
+}
+
+// The reservation card's "all info": a small Reservation group (scheduling fields
+// that aren't on the face) followed by the grouped raw intake details — the same
+// groupedInfo() the berth-requests tab uses. Raw is absent for an AIS/dredge row,
+// so skip it then rather than showing a bare "No details."
+function resAllInfo(r) {
+  const dock = r.station_unassigned ? null
+    : `${Math.round(Math.min(r.station_lo_dock, r.station_hi_dock))}–${Math.round(Math.max(r.station_lo_dock, r.station_hi_dock))}`;
+  const rows = [
+    ["Type", r.type],
+    ["Direction", r.direction || null],
+    ["Priority", r.priority != null ? String(r.priority) : null],
+    ["Berth", r.berth_name || null],
+    ["Dock No.", dock],
+  ].filter(([, v]) => has(v))
+    .map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(String(v))}</span>`).join("");
+  const resGroup = rows
+    ? `<div class="req-groups"><div class="req-group"><h4>Reservation</h4><div class="req-kv">${rows}</div></div></div>`
+    : "";
+  const hasRaw = r.raw && typeof r.raw === "object" && Object.keys(r.raw).length > 0;
+  return resGroup + (hasRaw ? groupedInfo(r.raw, r) : "");
 }
 
 function reqCard(r) {
@@ -1386,7 +1468,7 @@ function reqCard(r) {
         <button class="btn-sm" data-edit-req="${r.id}">Edit</button>
         <span class="sp"></span>
         <button class="req-kebab" data-kebab="${r.id}" aria-label="More actions" aria-haspopup="true">⋮</button>
-        <div class="req-menu" data-menu="${r.id}"><button data-delete-req="${r.id}">Delete request</button></div>
+        <div class="req-menu" data-menu="${r.id}"><button class="danger" data-delete-req="${r.id}">Delete request</button></div>
       </div>` : "";
 
   return `

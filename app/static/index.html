@@ -220,6 +220,9 @@
   aside {
     overflow-y: auto; padding: var(--s4); border-right: 1px solid var(--line);
     background: var(--panel);
+    /* Resizable panel: size card internals off the panel's own width, not the
+       viewport (see the .req-dims container query below). */
+    container-type: inline-size; container-name: sidebar;
   }
   #sidebarResize { cursor: col-resize; background: var(--line); }
   #sidebarResize:hover { background: var(--accent); }
@@ -451,9 +454,13 @@
   }
   .req-card .req-dim .u { font-size: 9px; color: var(--muted); margin-left: 2px; }
   .req-card .req-dim.blank .n { color: var(--muted); }
+  /* Narrow panel: collapse the 4-up stat grid to 2x2 so the numbers stay legible. */
+  @container sidebar (max-width: 300px) {
+    .req-card .req-dims { grid-template-columns: repeat(2, 1fr); }
+  }
 
   /* Actions: EDIT secondary (reuses .btn-sm), DELETE behind a kebab. */
-  .req-card .req-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; position: relative; }
+  .req-card .req-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; position: relative; }
   .req-card .req-actions .sp { flex: 1; }
   .req-card .req-kebab {
     width: 24px; height: 22px; display: flex; align-items: center; justify-content: center;
@@ -470,9 +477,12 @@
   .req-card .req-menu button {
     display: block; width: 100%; text-align: left; background: none; border: 0; cursor: pointer;
     padding: 6px 10px; font-family: var(--font-mono); font-size: 10px;
-    text-transform: uppercase; letter-spacing: .8px; color: var(--bad);
+    text-transform: uppercase; letter-spacing: .8px; color: var(--ink-dim);
   }
-  .req-card .req-menu button:hover { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .req-card .req-menu button:hover { background: color-mix(in srgb, var(--line-2) 30%, transparent); color: var(--ink); }
+  /* Destructive items (Cancel, Delete) read red. */
+  .req-card .req-menu button.danger { color: var(--bad); }
+  .req-card .req-menu button.danger:hover { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
 
   /* Collapsed "all info": grouped label-over-value sections. */
   .req-card details.req-all { margin-top: 8px; }

@@ -23,6 +23,7 @@ from app.db import get_session
 from app.intake.manual import valid_imo
 from app.models import Vessel, WharfSegment
 from app.occupancy.alongside import alongside_sql, nearest_segment_lateral
+from app.routers.intake import _vessel_dims
 from app.vessel_lookup import lookup
 from app.workers import KNOWN_WORKERS, classify
 
@@ -797,6 +798,17 @@ def list_reservations(
                        LIMIT 1
                    )) AS vessel_name,
                    v.imo AS vessel_imo,
+                   -- The linked vessel row, for the card's dim grid. Aliased to the
+                   -- attribute names _vessel_dims() expects so it can be reused verbatim.
+                   v.id AS vessel_id, v.mmsi AS vessel_mmsi,
+                   v.dims_locked AS vessel_dims_locked,
+                   v.loa AS vessel_loa, v.beam AS vessel_beam, v.draft AS vessel_draft,
+                   -- The linked intake_event's verbatim payload, for the card's
+                   -- structured cargo / dims / "all info" (same source the berth-
+                   -- requests tab shows). NULL for an AIS/dredge row with no request.
+                   (SELECT e.raw FROM intake_event e
+                    WHERE e.reservation_id = r.id
+                    ORDER BY e.id LIMIT 1) AS raw,
                    r.berth_id, b.name AS berth_name
             FROM reservation r
             LEFT JOIN vessel v ON v.id = r.vessel_id
@@ -836,6 +848,13 @@ def list_reservations(
             "vessel_imo": r.vessel_imo,
             "berth_id": r.berth_id,
             "berth_name": r.berth_name,
+            # Read-only display extras for the reservation card (mirrors the
+            # berth-requests tab): creation time for the relative-age badge, the
+            # linked vessel's effective dims, and the raw intake payload for the
+            # structured cargo / "all info" footer. All null-safe.
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "vessel": _vessel_dims(r),
+            "raw": r.raw,
         }
         for r in rows
     ]
