@@ -43,14 +43,14 @@ function renderVessels() {
   const all = state.vessels || [];
   if (!all.length) { el.innerHTML = '<div class="empty">no vessels yet, run AIS ingestion</div>'; return; }
   const q = vesselImoFilter.trim();
-  const vs = q ? all.filter((v) => v.imo != null && String(v.imo).includes(q)) : all;
-  if (!vs.length) { el.innerHTML = `<div class="empty">no saved ship with IMO matching “${esc(q)}”</div>`; return; }
+  const ql = q.toLowerCase();
+  const vs = q ? all.filter((v) =>
+    (v.imo != null && String(v.imo).includes(q)) ||
+    (v.name && v.name.toLowerCase().includes(ql))) : all;
+  if (!vs.length) { el.innerHTML = `<div class="empty">no saved ship matching “${esc(q)}”</div>`; return; }
   {
     el.innerHTML = `<table id="vesselsTbl"><thead><tr>` +
       `<th>Name</th><th>MMSI</th><th>IMO</th><th>Call</th>` +
-      `<th title="AIS nav-status code (ITU-R M.1371)">Nav</th>` +
-      `<th title="Speed over ground (kn), from the latest AIS fix">SOG</th>` +
-      `<th title="Course over ground (deg)">COG</th>` +
       `<th title="Draught (ft)">Drft</th>` +
       `<th title="Length overall (ft)">LOA</th><th></th>` +
       `</tr></thead><tbody>${
@@ -67,8 +67,6 @@ function renderVessels() {
         const loc = locatable ? ` class="locatable" data-locate-mmsi="${v.mmsi}"` : "";
         if (v.dims_locked) tip.push("AIS dimensions overridden (pinned)");
         const title = tip.length ? ` title="${esc(tip.join(" · "))}"` : "";
-        const sog = v.sog != null ? Number(v.sog).toFixed(1) : "—";
-        const cog = v.cog != null ? Math.round(Number(v.cog)) + "°" : "—";
         const drft = v.draft != null ? Math.round(Number(v.draft) * FT_PER_M) : "—";
         // Flag a pinned (overridden) ship right in the list so the operator sees it
         // without opening the editor. Same amber "Edited" badge as the edit form.
@@ -79,9 +77,6 @@ function renderVessels() {
           `<td class="num">${v.mmsi ?? "—"}</td>` +
           `<td class="num">${v.imo ?? "—"}</td>` +
           `<td>${v.callsign ? esc(v.callsign) : "—"}</td>` +
-          `<td class="num"${navLabel ? ` title="${esc(navLabel)}"` : ""}>${v.nav_status ?? "—"}</td>` +
-          `<td class="num">${sog}</td>` +
-          `<td class="num">${cog}</td>` +
           `<td class="num">${drft}</td>` +
           `<td class="num">${v.loa != null ? Math.round(Number(v.loa) * FT_PER_M) : "—"}</td>` +
           `<td class="act"><button class="btn-sm" data-edit-vessel="${v.id}">Edit</button></td>` +
