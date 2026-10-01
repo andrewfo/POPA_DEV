@@ -178,8 +178,32 @@ _NAME_FALLBACK = (
 #     an observed side's vessel is a service craft. A *planned* row for a tug is
 #     operator-entered and always kept; NULL ship_type is kept (when in doubt,
 #     show it).
+#
+# Effective time range (``eff_range``): an ``observed`` row with an open-ended
+# time_range is a vessel sitting alongside *right now* with an UNKNOWN departure
+# (occupancy derivation leaves the upper bound NULL while it's still here). Left
+# as +infinity, that open end overlaps every future planned window at the same
+# station — so a currently-berthed ship would spuriously "conflict" with a ship
+# planned to arrive weeks later, when in fact we have no idea it'll still be
+# there. We don't presume it stays: for the overlap test we clamp an open-ended
+# OBSERVED row's upper bound to now(), so it conflicts only with plans that reach
+# the present, never with a purely-future one. (Clamp is observed-only: a PLANNED
+# open-ended row genuinely intends to hold the berth indefinitely and must still
+# conflict forward. The ``lower < now()`` guard keeps tstzrange(lo, now) valid
+# and no-ops on the rare observed row whose window is wholly future.)
 _CONFLICTS_SQL = text(
     f"""
+    WITH res AS (
+        SELECT r.*,
+            CASE
+                WHEN r.status::text = 'observed'
+                 AND upper(r.time_range) IS NULL
+                 AND lower(r.time_range) < now()
+                THEN tstzrange(lower(r.time_range), now(), '[)')
+                ELSE r.time_range
+            END AS eff_range
+        FROM reservation r
+    )
     SELECT
         r1.id AS a_id, r1.type AS a_type, r1.status AS a_status,
         lower(r1.time_range)    AS a_t_start, upper(r1.time_range)    AS a_t_end,
@@ -193,15 +217,17 @@ _CONFLICTS_SQL = text(
         r2.berth_id AS b_berth_id, b2.name AS b_berth_name,
         {_NAME_FALLBACK.format(v="v2", r="r2")} AS b_vessel_name,
         v2.imo AS b_vessel_imo,
-        -- The overlap rectangle, straight from Postgres range intersection.
-        lower(r1.time_range * r2.time_range)       AS ov_t_start,
-        upper(r1.time_range * r2.time_range)       AS ov_t_end,
+        -- The overlap rectangle, straight from Postgres range intersection
+        -- (time on the clamped eff_range so an open-ended observed side never
+        -- reports a collision rectangle stretching into the future).
+        lower(r1.eff_range * r2.eff_range)         AS ov_t_start,
+        upper(r1.eff_range * r2.eff_range)         AS ov_t_end,
         lower(r1.station_range * r2.station_range) AS ov_sta_lo,
         upper(r1.station_range * r2.station_range) AS ov_sta_hi
-    FROM reservation r1
-    JOIN reservation r2
+    FROM res r1
+    JOIN res r2
       ON r1.id < r2.id                              -- dedupe pairs, no self-pair
-     AND r1.time_range && r2.time_range             -- time overlap
+     AND r1.eff_range && r2.eff_range               -- time overlap (clamped)
      AND r1.station_range && r2.station_range       -- station overlap (empty ranges
                                                      -- never match -> unassigned
                                                      -- requests drop out for free)
@@ -226,11 +252,15 @@ _CONFLICTS_SQL = text(
            OR r1.status::text = CAST(:status AS text)
            OR r2.status::text = CAST(:status AS text))
       AND ((CAST(:t_from AS timestamptz) IS NULL AND CAST(:t_to AS timestamptz) IS NULL)
-           OR (r1.time_range && tstzrange(:t_from, :t_to, '[]')
-               AND r2.time_range && tstzrange(:t_from, :t_to, '[]')))
+           OR (r1.eff_range && tstzrange(:t_from, :t_to, '[]')
+               AND r2.eff_range && tstzrange(:t_from, :t_to, '[]')))
       AND (NOT CAST(:current_only AS boolean)
-           OR upper(r1.time_range * r2.time_range) IS NULL
-           OR upper(r1.time_range * r2.time_range) > now())
+           OR upper(r1.eff_range * r2.eff_range) IS NULL
+           -- >= (not >) on purpose: an open-ended observed side is clamped so its
+           -- eff_range ends exactly at now(), making a present conflict's overlap
+           -- rectangle close at now(). That still reaches the present and must be
+           -- kept; a truly past-resolved collision ends strictly before now().
+           OR upper(r1.eff_range * r2.eff_range) >= now())
       AND (CAST(:include_service_craft AS boolean)
            OR NOT (r1.status::text = 'observed'
                    AND COALESCE(v1.ship_type, -1) IN ({SERVICE_CRAFT_SQL})))

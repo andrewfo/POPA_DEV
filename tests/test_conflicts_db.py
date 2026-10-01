@@ -171,14 +171,32 @@ def test_past_pair_hidden_by_default(client, db_session):
     assert _pair(out, a, b) is not None
 
 
-def test_ongoing_pair_survives_current_default(client, db_session):
-    # An open-ended observed berthing against a window reaching the future is a
-    # live alert — the current default must keep it.
+def test_ongoing_observed_conflicts_with_plan_overlapping_now(client, db_session):
+    # An open-ended observed berthing (unknown departure) against a plan whose
+    # window reaches the PRESENT is a live alert — a ship is there now and
+    # something is planned for the same stretch now. The current default keeps it.
+    a = _add_reservation(db_session, lo=400, hi=900, t_start=_t_past(10),
+                         t_end=None, status="observed")
+    b = _add_reservation(db_session, lo=800, hi=1200, t_start=_t_past(12),
+                         t_end=_t(16), status="tentative")  # spans past->future (now)
+    assert _pair(client.get("/conflicts").json(), a, b) is not None
+
+
+def test_ongoing_observed_does_not_conflict_with_future_plan(client, db_session):
+    # The core rule: an open-ended observed berthing has an UNKNOWN departure, so
+    # we don't presume it's still there in the future. It must NOT conflict with a
+    # purely-future planned ship — the conflict query clamps its effective upper
+    # bound to now(), so a future-only window no longer overlaps it. (The "test vs
+    # Mary Jane Moran" false alarm this prevents.) Not even widening the filters
+    # (current=false / service_craft=true) brings the false conflict back.
     a = _add_reservation(db_session, lo=400, hi=900, t_start=_t_past(10),
                          t_end=None, status="observed")
     b = _add_reservation(db_session, lo=800, hi=1200, t_start=_t(12),
-                         t_end=_t(16), status="confirmed")
-    assert _pair(client.get("/conflicts").json(), a, b) is not None
+                         t_end=_t(16), status="confirmed")  # wholly future
+    assert _pair(client.get("/conflicts").json(), a, b) is None
+    out = client.get("/conflicts", params={
+        "current": "false", "service_craft": "true"}).json()
+    assert _pair(out, a, b) is None
 
 
 # --- harbor service craft hidden from the live feed --------------------------

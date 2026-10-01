@@ -235,8 +235,11 @@ function futurePlannedCard(p) {
   const st = VERIFY_STATE[p.state] || { label: p.state, color: PAL.muted };
   const name = esc(p.vessel_name || "(unnamed)");
   const win = `${fmtCentral(p.t_start)} → ${fmtCentral(p.t_end)}`;
+  // Hoverable -> the same floating ship dossier History/Alongside use, when the
+  // booking is tied to a vessel record (vessel_id); IMO-less requests stay plain.
+  const hoverable = p.vessel_id != null;
   return `
-    <div class="card" style="border-left-color:${st.color}">
+    <div class="card${hoverable ? " hist-card" : ""}" data-vessel-id="${p.vessel_id ?? ""}" style="border-left-color:${st.color}"${hoverable ? ' title="Hover for the ship dossier"' : ""}>
       <div class="name">${name}
         <span class="status-badge" style="color:${st.color}">${st.label}</span></div>
       <div class="meta">${esc(p.status)}${p.berth_name ? " · " + esc(p.berth_name) : ""} · plan <b>${win}</b></div>
@@ -302,7 +305,17 @@ export async function loadAlongside() {
       .sort((a, b) => (b.state === "no_show") - (a.state === "no_show"));
     if (future.length) {
       if (fhdr) fhdr.style.display = "";
-      if (fel) fel.innerHTML = future.map(futurePlannedCard).join("");
+      if (fel) {
+        fel.innerHTML = future.map(futurePlannedCard).join("");
+        // Same floating ship dossier as Alongside/History (vessel record +
+        // dimensions + latest AIS fix + booking log) on hover.
+        fel.querySelectorAll(".hist-card").forEach((card) => {
+          const vid = Number(card.dataset.vesselId);
+          if (!vid) return;
+          card.addEventListener("mouseenter", () => showShipHover(card, vid));
+          card.addEventListener("mouseleave", hideShipHover);
+        });
+      }
     } else {
       if (fhdr) fhdr.style.display = "none";
       if (fel) fel.innerHTML = "";
