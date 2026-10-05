@@ -74,7 +74,7 @@ def post_reservation(
         )
 
     return do_write(
-        session, lambda: create_reservation(session, req), audit=_audit
+        session, lambda: create_reservation(session, req, actor=actor(request)), audit=_audit
     )
 
 
@@ -101,7 +101,7 @@ def edit_reservation(
         )
 
     result = do_write(
-        session, lambda: update_reservation(session, res_id, upd), audit=_audit
+        session, lambda: update_reservation(session, res_id, upd, actor=actor(request)), audit=_audit
     )
     if result is None:
         raise HTTPException(status_code=404, detail="no such reservation")

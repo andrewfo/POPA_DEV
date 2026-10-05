@@ -667,6 +667,22 @@
      status — so natural case + no tracking set it apart from the status chips
      it sits beside. Colour comes from the per-category --ship-* token inline. */
   .craft-badge { text-transform: none; letter-spacing: .2px; font-weight: 500; }
+  /* Cross-source duplicate hint: a same-ship/overlapping-window twin request
+     exists (agent + operator entered the same visit). Amber like other "needs
+     attention" cues — a prompt to reconcile, not an error. Reuses .status-badge. */
+  .dup-badge {
+    display: inline-block; padding: 0 7px; border-radius: 1px; color: var(--amber);
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600; line-height: 15px;
+    text-transform: uppercase; letter-spacing: 1px; vertical-align: 1px; cursor: default;
+    border: 1px solid color-mix(in srgb, currentColor 50%, transparent);
+    background: color-mix(in srgb, currentColor 12%, transparent);
+  }
+  /* Last-writer line: "edited by X · 2h ago". Muted; the provenance of the
+     current values, so an operator can see a manual edit superseded the agent. */
+  .req-card .req-writer {
+    font-family: var(--font-mono); font-size: 9.5px; color: var(--muted);
+    letter-spacing: .3px; margin-top: 3px;
+  }
   /* Sub-heading inside a section (e.g. "Future planned" under Alongside now). */
   .subhead {
     margin: 14px 0 6px; font-family: var(--font-mono); font-size: 10px;

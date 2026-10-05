@@ -17,6 +17,7 @@ from app.db import get_session
 from app.intake.manual import (
     FEET_PER_M,
     BerthRequestForm,
+    _find_duplicate,
     delete_manual_request,
     normalize_form,
     record_manual_request,
@@ -248,6 +249,102 @@ def test_missing_etb_lands_intake_without_reservation(db_session):
         select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
     ).scalar_one()
     assert ev.processed is False  # left for human follow-up
+
+
+# --- DB: last-writer provenance (migration 0017) ---------------------------
+def test_last_writer_stamped_on_create_and_edit(db_session):
+    # The create stamps the writer onto both the intake_event and its reservation;
+    # a later edit overwrites last_actor with the new writer (manual edit is
+    # authoritative). (updated_at is a transaction timestamp, constant within the
+    # test's single transaction, so we assert it's set, not that it advances.)
+    out = record_manual_request(db_session, _form(imo=9311115), actor="alice")
+    ev = db_session.execute(
+        select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
+    ).scalar_one()
+    res = db_session.execute(
+        select(Reservation).where(Reservation.id == out["reservation_id"])
+    ).scalar_one()
+    assert ev.last_actor == "alice" and ev.updated_at is not None
+    assert res.last_actor == "alice" and res.updated_at is not None
+
+    update_manual_request(
+        db_session, out["intake_event_id"], _form(imo=9311115, inbound_cargo="grain"),
+        actor="bob",
+    )
+    db_session.refresh(ev)
+    db_session.refresh(res)
+    assert ev.last_actor == "bob"
+    assert res.last_actor == "bob"
+
+
+def test_agent_write_has_null_actor(db_session):
+    # The agent/AI channel pulls uncredentialed, so last_actor is NULL — exactly
+    # the "no human touched this" signal.
+    out = record_manual_request(db_session, _form(imo=9322229, source="ai"))
+    ev = db_session.execute(
+        select(IntakeEvent).where(IntakeEvent.id == out["intake_event_id"])
+    ).scalar_one()
+    assert ev.last_actor is None
+    assert ev.updated_at is not None
+
+
+# --- DB: cross-source duplicate detection -----------------------------------
+def _overlapping_pair(db_session):
+    """An agent (ai) request and an operator request for the SAME ship with
+    overlapping windows — the "same visit entered twice" case. Returns both."""
+    agent = record_manual_request(
+        db_session,
+        _form(imo=9340001, vessel="DUP SHIP", source="ai",
+              etb=dt.date(2026, 8, 1), etd=dt.date(2026, 8, 5)),
+    )
+    operator = record_manual_request(
+        db_session,
+        _form(imo=9340001, vessel="DUP SHIP", source="operator",
+              etb=dt.date(2026, 8, 3), etd=dt.date(2026, 8, 7)),
+        actor="alice",
+    )
+    return agent, operator
+
+
+def test_duplicate_warns_on_second_submission(db_session):
+    _, operator = _overlapping_pair(db_session)
+    assert operator["duplicate"] is False  # distinct payload -> a real second row
+    assert any("possible duplicate" in w for w in operator["warnings"])
+
+
+def test_duplicate_not_flagged_when_windows_disjoint(db_session):
+    record_manual_request(
+        db_session,
+        _form(imo=9350006, vessel="LONE A", source="ai",
+              etb=dt.date(2026, 9, 1), etd=dt.date(2026, 9, 5)),
+    )
+    second = record_manual_request(
+        db_session,
+        _form(imo=9350006, vessel="LONE A", source="operator",
+              etb=dt.date(2026, 10, 1), etd=dt.date(2026, 10, 5)),
+    )
+    assert not any("possible duplicate" in w for w in second["warnings"])
+
+
+def test_duplicate_not_flagged_for_different_ships(db_session):
+    record_manual_request(
+        db_session,
+        _form(imo=9360001, vessel="SHIP ONE", source="ai",
+              etb=dt.date(2026, 8, 1), etd=dt.date(2026, 8, 5)),
+    )
+    second = record_manual_request(
+        db_session,
+        _form(imo=9360013, vessel="SHIP TWO", source="operator",
+              etb=dt.date(2026, 8, 1), etd=dt.date(2026, 8, 5)),
+    )
+    assert not any("possible duplicate" in w for w in second["warnings"])
+
+
+def test_duplicate_flag_clears_when_one_side_withdrawn(db_session):
+    agent, operator = _overlapping_pair(db_session)
+    # Withdraw the operator row; the agent row no longer has a live twin.
+    delete_manual_request(db_session, operator["intake_event_id"])
+    assert _find_duplicate(db_session, agent["reservation_id"]) is None
 
 
 # --- DB: in-place edit of a manual request ---------------------------------
@@ -757,6 +854,38 @@ def test_edit_request_endpoint_updates_reservation_view(client, db_session):
     # ...and no phantom berth-request card was created (bug #1).
     ev_after = len(client.get("/intake/berth-requests", params={"limit": 500}).json())
     assert ev_after == ev_before
+
+
+def test_berth_requests_endpoint_surfaces_duplicate_and_writer(client, db_session):
+    # Two requests for the same ship with overlapping windows: the GET flags both
+    # as possible duplicates of each other (derived live), and carries the
+    # last-writer fields the card renders.
+    a = client.post(
+        "/intake/berth-request",
+        json={"source": "ai", "vessel": "TWIN", "imo": 9370006,
+              "draft_ft": 10.0, "etb": "2026-08-01T08:00", "etd": "2026-08-05T08:00"},
+    )
+    b = client.post(
+        "/intake/berth-request",
+        json={"source": "operator", "vessel": "TWIN", "imo": 9370006,
+              "draft_ft": 10.0, "etb": "2026-08-03T08:00", "etd": "2026-08-07T08:00"},
+    )
+    assert a.status_code == 201 and b.status_code == 201
+    id_a, id_b = a.json()["intake_event_id"], b.json()["intake_event_id"]
+
+    rows = {r["id"]: r for r in
+            client.get("/intake/berth-requests", params={"limit": 500}).json()}
+    # Each names the other as its possible duplicate.
+    assert rows[id_a]["possible_duplicate"]["id"] == id_b
+    assert rows[id_b]["possible_duplicate"]["id"] == id_a
+    # Last-writer fields are present (actor is None in open-auth CI, that's fine).
+    assert "updated_at" in rows[id_a] and "last_actor" in rows[id_a]
+
+    # Withdraw one: the flag clears on the survivor (query-layer, not stored).
+    assert client.delete(f"/intake/berth-requests/{id_b}").status_code == 204
+    rows = {r["id"]: r for r in
+            client.get("/intake/berth-requests", params={"limit": 500}).json()}
+    assert rows[id_a]["possible_duplicate"] is None
 
 
 def test_writes_leave_an_audit_trail(client, db_session):

@@ -47,7 +47,7 @@ The `app/routers/` package is the HTTP surface of the POPA data layer. It splits
 | `POST /intake/berth-request` | Create a manual berth request. Idempotent on duplicate content. 422 if IMO already belongs to a different ship; 409 on confirmed overlap. Returns `ais_overrides` when AIS-tracked vessel dims were dropped. |
 | `PATCH /intake/berth-requests/{id}` | Edit a manual berth request in place (the one sanctioned raw mutation). Editable-channel rows only (`phone/email/operator/ai`). |
 | `DELETE /intake/berth-requests/{id}` | Soft-delete a manual berth request (keeps audit row, drops reservation). Editable-channel rows only. |
-| `GET /intake/berth-requests` | Raw `intake_event` list, newest first. Each row includes `vessel` dims in feet + `ais_tracked` flag for the edit-form prefill. `include_deleted=true` shows the full audit trail. |
+| `GET /intake/berth-requests` | Raw `intake_event` list, newest first. Each row includes `vessel` dims in feet + `ais_tracked` flag for the edit-form prefill, last-writer `updated_at`/`last_actor` (migration 0017), and `possible_duplicate` — a same-IMO/overlapping-window twin request, derived live (mirrors `_find_duplicate`), null when none. `include_deleted=true` shows the full audit trail. |
 
 ### Edit (`edit.py`)
 
@@ -96,7 +96,7 @@ The audit callback returns `None` to skip logging a no-op (deduped re-submission
 
 **`POST /verification/sweep` is the write companion to `GET /verification`.** The **occupancy worker** calls the sweep to self-heal (auto-archive stale planned rows on evidence); the UI's "Alongside now" panel reads the plain `GET /verification` (stale archiving is already covered by the worker, so the panel stays read-only). The sweep records a single `audit_log` row only when it actually moved rows; no-op sweeps are not logged.
 
-`GET /verification` includes `vessel_id` on both the `planned` and `unplanned` entries so the "Alongside now" panel can join its moored feed to a plan-vs-observed badge by vessel. `GET /occupancy/moored` likewise carries `imo` and `ship_type` for that panel's per-ship craft status bar, and `GET /reservations` carries read-only display extras (`created_at`, the linked vessel's effective dims via `_vessel_dims`, and the linked `intake_event.raw`) so the reservation cards reuse the berth-request card layout. All additive and null-safe.
+`GET /verification` includes `vessel_id` on both the `planned` and `unplanned` entries so the "Alongside now" panel can join its moored feed to a plan-vs-observed badge by vessel. `GET /occupancy/moored` likewise carries `imo` and `ship_type` for that panel's per-ship craft status bar, and `GET /reservations` carries read-only display extras (`created_at`, last-writer `updated_at`/`last_actor`, the linked vessel's effective dims via `_vessel_dims`, and the linked `intake_event.raw`) so the reservation cards reuse the berth-request card layout. All additive and null-safe. Every mutating write threads the authenticated `actor(request)` into the write function so `last_actor`/`updated_at` are stamped in the write's own transaction (NULL actor = agent/AIS/uncredentialed).
 
 **Station bounds in responses are always dual: POPA + Dock No.** `station_lo`/`station_hi` are canonical POPA feet; `station_lo_dock`/`station_hi_dock` are Dock No. feet, converted server-side through the wharf segment's affine params. The UI never does stationing math.
 

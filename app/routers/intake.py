@@ -48,7 +48,9 @@ def create_berth_request(
             },
         )
 
-    return do_write(session, lambda: record_manual_request(session, form), audit=_audit)
+    return do_write(
+        session, lambda: record_manual_request(session, form, actor=actor(request)), audit=_audit
+    )
 
 
 @router.patch("/intake/berth-requests/{intake_id}")
@@ -77,7 +79,9 @@ def edit_berth_request(
         )
 
     return do_write(
-        session, lambda: update_manual_request(session, intake_id, form), audit=_audit
+        session,
+        lambda: update_manual_request(session, intake_id, form, actor=actor(request)),
+        audit=_audit,
     )
 
 
@@ -103,7 +107,9 @@ def remove_berth_request(
         )
 
     do_write(
-        session, lambda: delete_manual_request(session, intake_id), audit=_audit
+        session,
+        lambda: delete_manual_request(session, intake_id, actor=actor(request)),
+        audit=_audit,
     )
     return Response(status_code=204)
 
@@ -128,12 +134,35 @@ def list_berth_requests(
             """
             SELECT e.id, e.source, e.received_at, e.processed,
                    e.reservation_id, e.raw, e.deleted_at,
+                   e.updated_at, e.last_actor,
                    r.status AS reservation_status,
                    v.id AS vessel_id, v.mmsi AS vessel_mmsi, v.dims_locked AS vessel_dims_locked,
-                   v.loa AS vessel_loa, v.beam AS vessel_beam, v.draft AS vessel_draft
+                   v.loa AS vessel_loa, v.beam AS vessel_beam, v.draft AS vessel_draft,
+                   dup.id AS dup_id, dup.source AS dup_source,
+                   dup.status AS dup_status, dup.received_at AS dup_received_at
             FROM intake_event e
             LEFT JOIN reservation r ON r.id = e.reservation_id
             LEFT JOIN vessel v ON v.id = r.vessel_id
+            -- Cross-source duplicate: another live request for the SAME ship
+            -- (non-null IMO) whose window overlaps this one. Mirrors
+            -- app.intake.manual._find_duplicate so the live badge and the
+            -- submit-time warning agree; clears when either side is withdrawn or
+            -- settled (observed/cancelled/completed never match). Only for live
+            -- rows — a deleted row needs no reconciliation hint.
+            LEFT JOIN LATERAL (
+                SELECT e2.id, e2.source, r2.status, e2.received_at
+                FROM reservation r2
+                JOIN intake_event e2 ON e2.reservation_id = r2.id
+                                    AND e2.deleted_at IS NULL
+                WHERE e.deleted_at IS NULL
+                  AND v.imo IS NOT NULL
+                  AND r2.vessel_id = r.vessel_id
+                  AND r2.id <> r.id
+                  AND r2.status IN ('requested', 'tentative', 'confirmed')
+                  AND r2.time_range && r.time_range
+                ORDER BY e2.received_at DESC
+                LIMIT 1
+            ) dup ON true
             WHERE (:include_deleted OR e.deleted_at IS NULL)
             ORDER BY e.received_at DESC
             LIMIT :limit
@@ -151,6 +180,23 @@ def list_berth_requests(
             "reservation_status": r.reservation_status,
             "raw": r.raw,
             "deleted_at": r.deleted_at.isoformat() if r.deleted_at else None,
+            # Last-writer provenance (migration 0017): when the row was last
+            # written and by whom (NULL actor = the agent/AI channel, uncredentialed).
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "last_actor": r.last_actor,
+            # Cross-source duplicate hint (derived live). ``possible_duplicate`` is
+            # the counterpart request the operator should reconcile against; null
+            # when there's no same-ship / overlapping-window twin.
+            "possible_duplicate": (
+                {
+                    "id": r.dup_id,
+                    "source": r.dup_source,
+                    "status": r.dup_status,
+                    "received_at": r.dup_received_at.isoformat() if r.dup_received_at else None,
+                }
+                if r.dup_id is not None
+                else None
+            ),
             # The linked vessel's *effective* (stored) dimensions, in feet. For an
             # AIS-tracked ship (has MMSI) these are the AIS-authoritative values —
             # what actually governs, not the operator's original typed entry that

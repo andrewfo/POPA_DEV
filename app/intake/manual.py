@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, field_validator
-from sqlalchemy import and_, func, insert, select, text, update
+from sqlalchemy import and_, bindparam, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -443,20 +443,27 @@ def _reproject_placements(session: Session, vessel_id: int | None) -> None:
     )
 
 
-def _insert_reservation(session: Session, req: NormalizedRequest, vessel_id: int | None) -> int:
+def _insert_reservation(
+    session: Session,
+    req: NormalizedRequest,
+    vessel_id: int | None,
+    actor: str | None = None,
+) -> int:
     """Create the status='requested' reservation. Station range is empty
-    (unassigned); time range spans ETB..ETD (open-ended if ETD is missing)."""
+    (unassigned); time range spans ETB..ETD (open-ended if ETD is missing).
+    ``actor`` is the writer (NULL for the agent/AI channel) stamped as last-writer
+    provenance (migration 0017)."""
     row = session.execute(
         text(
             """
             INSERT INTO reservation
                 (vessel_id, type, station_range, time_range, direction,
-                 status, source, cargo, notes, created_at)
+                 status, source, cargo, notes, created_at, updated_at, last_actor)
             VALUES
                 (:vessel_id, 'vessel',
                  'empty'::numrange,
                  tstzrange(:etb, :etd, '[)'),
-                 NULL, 'requested', :source, :cargo, :notes, now())
+                 NULL, 'requested', :source, :cargo, :notes, now(), now(), :actor)
             RETURNING id
             """
         ),
@@ -467,9 +474,60 @@ def _insert_reservation(session: Session, req: NormalizedRequest, vessel_id: int
             "source": req.source,
             "cargo": req.cargo,
             "notes": req.notes,
+            "actor": actor,
         },
     ).one()
     return int(row.id)
+
+
+# Which counterpart statuses count as a live "same visit" when flagging a
+# duplicate. A withdrawn (deleted) or cancelled/completed request is settled and
+# must not raise the flag — so it clears the moment the operator reconciles.
+_DUPLICATE_STATUSES = ("requested", "tentative", "confirmed")
+
+
+def _find_duplicate(session: Session, reservation_id: int):
+    """The most recent *other* live berth request that looks like the **same
+    visit** as the reservation ``reservation_id``: same vessel (identified by a
+    non-null IMO — one IMO is one ship) and an **overlapping time window**.
+
+    Returns the counterpart ``intake_event`` row (``id, source, status,
+    received_at``) or ``None``. Identity is the vessel FK, which equals "same IMO"
+    because the intake path refuses to reuse an IMO across ships; gating on
+    ``v.imo IS NOT NULL`` honours the "must be the same IMO" rule (a manual row
+    with no IMO can't be matched with confidence, so it never flags).
+
+    This is the single definition of a cross-source duplicate; the request-panel
+    query (``GET /intake/berth-requests``) re-derives the same predicate inline so
+    the badge stays live (it clears when either side is withdrawn or settled)."""
+    return session.execute(
+        text(
+            f"""
+            SELECT e2.id, e2.source, r2.status, e2.received_at
+              FROM reservation r
+              JOIN vessel v        ON v.id = r.vessel_id AND v.imo IS NOT NULL
+              JOIN reservation r2  ON r2.vessel_id = r.vessel_id
+                                  AND r2.id <> r.id
+                                  AND r2.status IN :statuses
+                                  AND r2.time_range && r.time_range
+              JOIN intake_event e2 ON e2.reservation_id = r2.id
+                                  AND e2.deleted_at IS NULL
+             WHERE r.id = :rid
+             ORDER BY e2.received_at DESC
+             LIMIT 1
+            """
+        ).bindparams(bindparam("statuses", expanding=True)),
+        {"rid": reservation_id, "statuses": list(_DUPLICATE_STATUSES)},
+    ).first()
+
+
+def _duplicate_warning(dup) -> str:
+    """Operator-facing warning for a cross-source duplicate (submit time)."""
+    return (
+        f"possible duplicate of berth request #{dup.id} "
+        f"(via {dup.source}, {dup.status}) — same ship and overlapping dates. "
+        f"Confirm one and withdraw the other; nothing was merged."
+    )
 
 
 def _norm_name(name: str | None) -> str | None:
@@ -657,7 +715,9 @@ def _apply_ais_overrides(
     return name is not None, diffs
 
 
-def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
+def record_manual_request(
+    session: Session, form: BerthRequestForm, actor: str | None = None
+) -> dict:
     """Land a manual berth request: ``intake_event`` (raw, deduped) + a
     ``requested`` reservation (+ vessel upsert), all in one transaction. Does
     NOT commit — the caller (the endpoint) owns the transaction boundary.
@@ -665,7 +725,13 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     Idempotent: an identical re-submission (same raw payload) is deduped at the
     ``intake_event`` level and creates no second reservation.
 
-    Returns a summary dict for the API response.
+    ``actor`` is the authenticated operator (NULL for the agent/AI channel, which
+    pulls uncredentialed), stamped as the row's last-writer (migration 0017).
+
+    Returns a summary dict for the API response. When the new request names a
+    vessel (by IMO) that already has a live, time-overlapping request on file, a
+    ``possible duplicate`` warning is appended — the agent and an operator can each
+    enter the same visit, and the operator reconciles (nothing is auto-merged).
     """
     req = normalize_form(form)
 
@@ -703,7 +769,14 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     key = dedupe_key(req.raw)
     intake_id = session.execute(
         pg_insert(IntakeEvent)
-        .values(source=req.source, raw=req.raw, dedupe_key=key, processed=False)
+        .values(
+            source=req.source,
+            raw=req.raw,
+            dedupe_key=key,
+            processed=False,
+            updated_at=func.now(),
+            last_actor=actor,
+        )
         .on_conflict_do_nothing(
             # Must match the partial unique index predicate exactly (migration
             # 0010): a *live* row's dedupe_key is unique, but a soft-deleted row
@@ -745,13 +818,20 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     _reproject_placements(session, vessel_id)
     reservation_id: int | None = None
     if req.etb is not None:
-        reservation_id = _insert_reservation(session, req, vessel_id)
+        reservation_id = _insert_reservation(session, req, vessel_id, actor=actor)
         # 4. Link the intake event to its reservation and mark it processed.
         session.execute(
             update(IntakeEvent)
             .where(IntakeEvent.id == intake_id)
             .values(processed=True, reservation_id=reservation_id)
         )
+        # The agent (form/AI) and an operator can each enter the same visit. Flag
+        # it now so the submitter sees the collision immediately; the request panel
+        # re-derives the same flag live (GET /intake/berth-requests). We never
+        # auto-merge or drop either — the operator reconciles.
+        dup = _find_duplicate(session, reservation_id)
+        if dup is not None:
+            req.warnings.append(_duplicate_warning(dup))
     else:
         # No arrival date -> no defensible time window; keep the request as an
         # unprocessed intake_event for human follow-up rather than inventing one.
@@ -770,7 +850,9 @@ def record_manual_request(session: Session, form: BerthRequestForm) -> dict:
     }
 
 
-def delete_manual_request(session: Session, intake_id: int) -> dict:
+def delete_manual_request(
+    session: Session, intake_id: int, actor: str | None = None
+) -> dict:
     """Withdraw a manual berth request: **soft-delete** the raw ``intake_event``
     row (stamp ``deleted_at``) and drop the ``requested`` reservation it
     projected. An operator removing a phoned/emailed request that was mistaken or
@@ -815,7 +897,7 @@ def delete_manual_request(session: Session, intake_id: int) -> dict:
     session.execute(
         update(IntakeEvent)
         .where(IntakeEvent.id == intake_id)
-        .values(deleted_at=func.now())
+        .values(deleted_at=func.now(), updated_at=func.now(), last_actor=actor)
     )
     reservation_id = existing.reservation_id
     if reservation_id is not None:
@@ -834,7 +916,7 @@ def delete_manual_request(session: Session, intake_id: int) -> dict:
 
 
 def update_manual_request(
-    session: Session, intake_id: int, form: BerthRequestForm
+    session: Session, intake_id: int, form: BerthRequestForm, actor: str | None = None
 ) -> dict:
     """Overwrite an existing manual berth request **in place**: re-normalize the
     form, replace ``intake_event.raw`` (and its content-hash ``dedupe_key``), and
@@ -896,7 +978,13 @@ def update_manual_request(
     session.execute(
         update(IntakeEvent)
         .where(IntakeEvent.id == intake_id)
-        .values(source=req.source, raw=req.raw, dedupe_key=key)
+        .values(
+            source=req.source,
+            raw=req.raw,
+            dedupe_key=key,
+            updated_at=func.now(),
+            last_actor=actor,
+        )
     )
 
     # An explicit operator edit is authoritative for a MANUAL vessel: a supplied
@@ -929,7 +1017,9 @@ def update_manual_request(
                        END,
                        source = :source,
                        cargo  = :cargo,
-                       notes  = :notes
+                       notes  = :notes,
+                       updated_at = now(),
+                       last_actor = :actor
                  WHERE id = :rid
                 """
             ),
@@ -940,6 +1030,7 @@ def update_manual_request(
                 "source": req.source,
                 "cargo": req.cargo,
                 "notes": req.notes,
+                "actor": actor,
                 "rid": reservation_id,
             },
         )
@@ -948,7 +1039,7 @@ def update_manual_request(
     elif req.etb is not None:
         # No reservation existed (the original lacked an arrival date); the edit
         # now supplies one, so project it and link the event.
-        reservation_id = _insert_reservation(session, req, vessel_id)
+        reservation_id = _insert_reservation(session, req, vessel_id, actor=actor)
         session.execute(
             update(IntakeEvent)
             .where(IntakeEvent.id == intake_id)

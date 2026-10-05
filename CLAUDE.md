@@ -248,6 +248,20 @@ contract.
   the AI channel all *propose*; they never place. AIS only knows where a vessel is
   now/was and its ranges are approximate, so it cannot position a not-yet-arrived
   ship.
+- **Write precedence — the operator is authoritative; the agent proposes.** When
+  the same visit is entered by both the agent (form/AI) and an operator, the
+  **operator's record wins**. Three mechanisms enforce it, no fourth needed: (a) an
+  operator *edit* of an agent card overwrites `intake_event.raw` in place and
+  re-projects the one reservation (`update_manual_request`); (b) the agent **only
+  ever appends** a `requested` row — it never mutates an existing one, so it cannot
+  clobber operator data; (c) two independent creates for the **same IMO over an
+  overlapping window** are **flagged as possible duplicates, never auto-merged or
+  auto-dropped** — the operator reconciles (confirm one, withdraw the other). The
+  duplicate flag is **derived at the query layer** (`_find_duplicate` + the
+  `GET /intake/berth-requests` LATERAL), so it clears the instant either side is
+  withdrawn/settled — don't store it. Every record carries `source` (provenance)
+  and **`updated_at`/`last_actor`** (migration 0017: when + who last wrote it; NULL
+  actor = agent/AIS/uncredentialed) so the card can show which version is current.
 - **Tests:** DB-marked tests use the `db_session` fixture (SAVEPOINT-nested so
   endpoint commits/rollbacks under `TestClient` stay inside the rolled-back
   transaction). Test write endpoints through `TestClient`, not by committing rows.

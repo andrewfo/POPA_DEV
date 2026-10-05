@@ -562,8 +562,11 @@ def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict |
     }
 
 
-def create_reservation(session: Session, req: ReservationCreate) -> dict:
-    """Insert a reservation. Validates enums + ranges (ValueError -> 422)."""
+def create_reservation(
+    session: Session, req: ReservationCreate, actor: str | None = None
+) -> dict:
+    """Insert a reservation. Validates enums + ranges (ValueError -> 422).
+    ``actor`` is the writer stamped as last-writer provenance (migration 0017)."""
     _validate_enum(req.type, RESERVATION_TYPES, "type")
     _validate_enum(req.status, RESERVATION_STATUSES, "status")
     _validate_enum(req.source, RESERVATION_SOURCES, "source")
@@ -595,6 +598,7 @@ def create_reservation(session: Session, req: ReservationCreate) -> dict:
         "priority": req.priority,
         "cargo": req.cargo,
         "notes": req.notes,
+        "actor": actor,
     }
     station_sql = _station_sql(sr, params)
     time_sql = _time_sql(tr, params)
@@ -603,14 +607,15 @@ def create_reservation(session: Session, req: ReservationCreate) -> dict:
             f"""
             INSERT INTO reservation
                 (vessel_id, berth_id, type, station_range, time_range, direction,
-                 status, source, priority, cargo, notes, created_at)
+                 status, source, priority, cargo, notes, created_at,
+                 updated_at, last_actor)
             VALUES
                 (:vessel_id, :berth_id, CAST(:type AS reservation_type),
                  {station_sql}, {time_sql},
                  CAST(:direction AS direction),
                  CAST(:status AS reservation_status),
                  CAST(:source AS reservation_source),
-                 :priority, :cargo, :notes, now())
+                 :priority, :cargo, :notes, now(), now(), :actor)
             RETURNING id
             """
         ),
@@ -620,7 +625,7 @@ def create_reservation(session: Session, req: ReservationCreate) -> dict:
 
 
 def update_reservation(
-    session: Session, res_id: int, upd: ReservationUpdate
+    session: Session, res_id: int, upd: ReservationUpdate, actor: str | None = None
 ) -> dict | None:
     """Edit a reservation. Time and station ranges are recomputed from the merge
     of the existing row and the supplied fields, so a partial edit (e.g. moving
@@ -726,6 +731,7 @@ def update_reservation(
         "priority": priority,
         "cargo": cargo,
         "notes": notes,
+        "actor": actor,
     }
     station_sql = _station_sql(sr, params)
     time_sql = _time_sql(tr, params)
@@ -742,7 +748,9 @@ def update_reservation(
                 status = CAST(:status AS reservation_status),
                 priority = :priority,
                 cargo = :cargo,
-                notes = :notes
+                notes = :notes,
+                updated_at = now(),
+                last_actor = :actor
             WHERE id = :id
             """
         ),

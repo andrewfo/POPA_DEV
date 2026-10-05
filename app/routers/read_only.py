@@ -788,7 +788,7 @@ def list_reservations(
                    isempty(r.station_range) AS sta_unassigned,
                    lower(r.station_range) AS sta_lo,
                    upper(r.station_range) AS sta_hi,
-                   r.created_at,
+                   r.created_at, r.updated_at, r.last_actor,
                    -- A reservation projected from an IMO-less request (a barge/
                    -- tug the vessel_requires_mmsi_or_imo CHECK won't let us key)
                    -- has no vessel row, so fall back to the name carried in its
@@ -858,6 +858,11 @@ def list_reservations(
             # linked vessel's effective dims, and the raw intake payload for the
             # structured cargo / "all info" footer. All null-safe.
             "created_at": r.created_at.isoformat() if r.created_at else None,
+            # Last-writer provenance (migration 0017): when and by whom the row was
+            # last written (NULL actor = agent/AIS/uncredentialed). Powers the
+            # card's "edited by … · …" line.
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "last_actor": r.last_actor,
             "vessel": _vessel_dims(r),
             "raw": r.raw,
         }

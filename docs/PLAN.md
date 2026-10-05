@@ -39,7 +39,7 @@ in [`../CLAUDE.md`](../CLAUDE.md). Ordered by value/effort.
 | A | IMO auto-fill on intake | ✅ done | High | [routers.md](./reference/routers.md), [frontend.md](./reference/frontend.md) |
 | B | Test & harden the reservation form | ~1 h | High | [tests.md](./reference/tests.md), [scheduling.md](./reference/scheduling.md) |
 | C | UI simplification pass | ~3 h | High | [frontend.md](./reference/frontend.md) |
-| D | Manual vs. agent write precedence (provenance badge) | ~1 h | High | [frontend.md](./reference/frontend.md), [scheduling.md](./reference/scheduling.md) |
+| D | Manual vs. agent write precedence (provenance badge) | ✅ done | High | [intake.md](./reference/intake.md), [migrations.md](./reference/migrations.md), [frontend.md](./reference/frontend.md) |
 | E | Projected / preview vessel view (no reservation) | ~2 h | Med–High | [frontend.md](./reference/frontend.md), [scheduling.md](./reference/scheduling.md) |
 | F | Dredge GPS information layer | ~4 h | High | [frontend.md](./reference/frontend.md), [occupancy.md](./reference/occupancy.md) |
 | G | Dredging XYZ survey analytics | ~6–10 h | Highest | [depth.md](./reference/depth.md) |
@@ -92,14 +92,20 @@ moving client-side.
   (archiving stays in the occupancy worker).
 - Saved-ships roster trimmed to name/dims, searchable by name or IMO.
 
-### D — Manual vs. agent write precedence
-Answer "if we fill it manually and then the agent fills it, which version wins?"
-with one clear rule and a **visible provenance badge** on each record. The AI
-channel is already a normalizer that proposes but never places, and manual edits
-are authoritative for manual vessels. Make precedence explicit in the UI
-(`source` tag + last-writer) so operators trust what they see. Provenance is the
-existing `reservation.source` (`ais|form|phone|operator|email|ai`); editability is
-the separate `EDITABLE_SOURCES` axis — surface both, don't conflate them.
+### D — Manual vs. agent write precedence ✅
+**Shipped.** The one rule: **the operator is authoritative; the agent proposes.**
+Three mechanisms (no fourth needed): an operator *edit* overwrites in place
+(`update_manual_request`); the agent **only appends**, never mutating an existing
+row; two independent creates for the **same IMO over an overlapping window** are
+**flagged as possible duplicates, never auto-merged** (`_find_duplicate` + the
+`GET /intake/berth-requests` LATERAL, derived live so it clears on withdraw/settle).
+Every record now carries `source` (provenance, unchanged) **plus `updated_at` /
+`last_actor`** (migration 0017 — when + who last wrote it; NULL actor = agent/AIS).
+The UI renders the existing channel badge, a "⚠ duplicate?" badge, and an
+"edited by … · …" line (`resCard`/`reqCard`, `app/static/js/forms.js`). Covered by
+`tests/test_intake_manual.py` (last-writer stamping, duplicate flag on/off/clear,
+endpoint surfacing). Editability stays the separate `EDITABLE_SOURCES` axis — not
+conflated with provenance.
 
 ### E — Projected / preview vessel view (no reservation)
 Let an operator sketch a vessel onto the map for planning — without all required

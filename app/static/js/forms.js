@@ -449,6 +449,7 @@ function resCard(r) {
       </div>
       <div class="req-sched">${schedTimes}<span class="ports">${berthLine}</span></div>
       ${dimStrip(r)}
+      ${lastWriterLine(r.updated_at, r.created_at, r.last_actor)}
       ${overrideHtml ? `<div class="meta">${overrideHtml}</div>` : ""}
       <div class="req-actions">
         ${r.status === "requested" ? '<button class="btn-sm primary" data-act="confirm">Place + Confirm</button>' : ""}
@@ -1254,6 +1255,37 @@ function relTime(iso) {
   return future ? `in ${out}` : `${out} ago`;
 }
 
+// "edited by X · 2h ago" — the visible half of the write-precedence rule: a
+// manual edit is authoritative over an agent submission, so the card names who
+// last wrote it and when. Shown only for a *genuine later edit* (updated_at
+// meaningfully after the row first arrived); a plain create reads via the channel
+// badge, not as an edit. ``actor`` is null for the agent/form/AI and AIS writes,
+// so an automated write never claims a human.
+function lastWriterLine(updatedAt, arrivedAt, actor) {
+  if (!updatedAt || !actor) return "";
+  const u = new Date(updatedAt).getTime();
+  const a = arrivedAt ? new Date(arrivedAt).getTime() : NaN;
+  if (isNaN(u)) return "";
+  if (!isNaN(a) && u - a < 2000) return ""; // same transaction as create -> not an edit
+  const rel = relTime(updatedAt);
+  return `<div class="req-writer" title="${esc(fmtCentral(updatedAt))} CT">`
+    + `edited by ${esc(actor)}${rel ? " · " + esc(rel) : ""}</div>`;
+}
+
+// Cross-source duplicate hint: the server found another live request for the SAME
+// ship (same IMO) with an overlapping window (app.intake.manual._find_duplicate,
+// re-derived live by GET /intake/berth-requests). The operator reconciles —
+// confirm one, withdraw the other; nothing is merged or auto-dropped.
+function dupBadge(r) {
+  const d = r && r.possible_duplicate;
+  if (!d) return "";
+  const when = d.received_at ? relTime(d.received_at) : "";
+  const via = sourceLabel(d.source).toUpperCase();
+  const title = `Also entered via ${via}${when ? " " + when : ""} — `
+    + `request #${d.id} (${d.status}). Same ship, overlapping dates; reconcile.`;
+  return `<span class="dup-badge" title="${esc(title)}">⚠ DUPLICATE?</span>`;
+}
+
 // The AI channel stamps "AI-parsed (confidence 99%)" into notes; pull the percent
 // back out for a discreet header pill. Null when absent (operator/phone/email).
 function parseConfidence(notes) {
@@ -1397,6 +1429,14 @@ function groupedInfo(raw, r) {
     ["Confidence", conf != null ? conf + "%" : null],
     ["Notes", has(raw.notes) ? esc(String(raw.notes)) : null],
     ["Received", r.received_at ? esc(fmtCentral(r.received_at)) + " CT" : null],
+    // Last-writer provenance (migration 0017): who last wrote this row and when,
+    // distinct from "Received". Null actor = agent/AI channel (shown as "agent").
+    ["Last edited", r.updated_at ? esc(fmtCentral(r.updated_at)) + " CT" : null],
+    ["Last writer", r.last_actor ? esc(r.last_actor) : (r.updated_at ? "agent" : null)],
+    ["Possible duplicate",
+      r.possible_duplicate
+        ? `request #${r.possible_duplicate.id} via ${esc(sourceLabel(r.possible_duplicate.source))} (${esc(r.possible_duplicate.status)})`
+        : null],
   ]));
 
   const others = [];
@@ -1456,6 +1496,8 @@ function reqCard(r) {
     `<span class="status-badge" style="color:${st.color}">${esc(st.label)}</span>`,
     `<span class="status-badge" style="color:var(--muted)">${esc(channelBadge(r.source))}</span>`,
   ];
+  const dup = dupBadge(r);
+  if (dup) badges.push(dup);
   if (rel) badges.push(`<span class="req-time" title="${esc(fmtCentral(r.received_at))} CT">${esc(rel)}</span>`);
 
   const actions = editable ? `
@@ -1477,6 +1519,7 @@ function reqCard(r) {
       </div>
       ${schedStrip(raw)}
       ${dimStrip(r)}
+      ${lastWriterLine(r.updated_at, r.received_at, r.last_actor)}
       ${actions}
       <details class="req-all">
         <summary class="req-more">All info</summary>

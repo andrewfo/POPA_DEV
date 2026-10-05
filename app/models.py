@@ -246,6 +246,14 @@ class Reservation(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Last-writer provenance (migration 0017): when this row was last written
+    # (create or edit), distinct from created_at (when it first arrived), and who
+    # wrote it — the Basic-auth username, NULL for agent/AIS/unauthenticated
+    # writes. Surfaced on the card so an operator can trust what they see.
+    updated_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_actor: Mapped[str | None] = mapped_column(Text)
 
     vessel: Mapped[Vessel | None] = relationship(back_populates="reservations")
 
@@ -278,6 +286,15 @@ class IntakeEvent(Base):
     # The dedupe unique index is partial on ``deleted_at IS NULL`` so a deleted
     # row neither blocks a re-submission nor is seen by the live API.
     deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last-writer provenance (migration 0017): when this request was last written
+    # (create or edit, the one sanctioned raw mutation), distinct from received_at
+    # (when it first arrived), and who wrote it — the Basic-auth username, NULL for
+    # the agent (form/AI) channel. The pair is how the card shows the operator that
+    # a manual edit is authoritative over an agent submission.
+    updated_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_actor: Mapped[str | None] = mapped_column(Text)
 
 
 class PositionReport(Base):
