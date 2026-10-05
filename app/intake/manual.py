@@ -709,6 +709,7 @@ def _apply_ais_overrides(
     value through the ``dims_locked`` escape hatch (see ``_override_payload``)."""
     name, diffs = _ais_overrides(session, req)
     if diffs:
+        assert name is not None  # diffs is non-empty only when a named vessel matched
         req.warnings.extend(_override_warnings(name, diffs))
         note = _override_note(diffs)
         req.notes = f"{req.notes}\n{note}" if req.notes else note

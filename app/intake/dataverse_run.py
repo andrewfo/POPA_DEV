@@ -156,7 +156,7 @@ class DataverseClient:
 
 
 def process_batch(
-    session: Session,
+    session: Session | None,
     client: DataverseClient,
     *,
     complete,
@@ -219,6 +219,7 @@ def process_batch(
                 summary["errors"] += 1
                 logger.exception("retry mark_triaged failed for %s", row_id)
             continue
+        assert session is not None  # non-dry-run path always has a session
         try:
             result = parse_request(row, complete=complete, source=source)
             result.form.source_raw = row  # preserve the verbatim Dataverse row

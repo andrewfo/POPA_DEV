@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
@@ -101,7 +102,7 @@ def config_bbox() -> dict:
 @router.get("/health/db")
 def health_db(session: Session = Depends(get_session)) -> dict:
     session.execute(text("SELECT 1"))
-    postgis = session.execute(text("SELECT PostGIS_Lib_Version()")).scalar_one()
+    postgis: str = session.execute(text("SELECT PostGIS_Lib_Version()")).scalar_one()
     return {"status": "ok", "postgis": postgis}
 
 
@@ -412,10 +413,10 @@ def vessel_detail(
 
     dock = segment_dockno_params(session)
 
-    def dk(val: object) -> float | None:
+    def dk(val: Any) -> float | None:
         return float(dock.from_popa(float(val))) if val is not None else None
 
-    def fl(val: object) -> float | None:
+    def fl(val: Any) -> float | None:
         return float(val) if val is not None else None
 
     res_rows = session.execute(
@@ -560,7 +561,7 @@ def stats(session: Session = Depends(get_session)) -> dict:
     # feed-relative gate than vessels_present's broad 24h wall-clock window.)
     settings = get_settings()
     point = "ST_SetSRID(ST_MakePoint(l.lon, l.lat), 4326)"
-    moored = session.execute(
+    moored: int = session.execute(
         text(
             f"""
             WITH latest AS (
@@ -588,7 +589,7 @@ def stats(session: Session = Depends(get_session)) -> dict:
     # Arrivals in the next 24h = non-cancelled reservations whose ETB (the lower
     # bound of time_range) falls within [now, now+24h]. The forward-looking view
     # an operator preps berths against — counterpart to "Moored now" (right now).
-    arrivals_24h = session.execute(
+    arrivals_24h: int = session.execute(
         text(
             """
             SELECT count(*)
@@ -604,7 +605,7 @@ def stats(session: Session = Depends(get_session)) -> dict:
     # every row only grows and overstates how many are actually around. Instead
     # count distinct MMSI with a fix inside the present-window (a departed vessel
     # stops broadcasting in the bbox, so its latest fix ages out).
-    vessels_present = session.execute(
+    vessels_present: int = session.execute(
         text(
             """
             SELECT count(DISTINCT pr.mmsi)

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TypeVar
 
 from fastapi import HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
+
+T = TypeVar("T")
 
 
 def actor(request: Request) -> str | None:
@@ -17,7 +20,12 @@ def actor(request: Request) -> str | None:
     return getattr(request.state, "operator", None)
 
 
-def do_write(session: Session, fn, *, audit: Callable[[object], dict | None] | None = None):
+def do_write(
+    session: Session,
+    fn: Callable[[], T],
+    *,
+    audit: Callable[[T], dict | None] | None = None,
+) -> T:
     """Run a write function and commit, translating DB-layer failures into clean
     HTTP errors instead of 500s.
 

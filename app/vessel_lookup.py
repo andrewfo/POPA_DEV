@@ -21,6 +21,7 @@ source-agnostic ``AISSource`` contract on the ingestion side).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -71,7 +72,7 @@ class VesselParticulars:
         }
 
 
-def _to_ft(m: object) -> float | None:
+def _to_ft(m: Any) -> float | None:
     return round(float(m) * FEET_PER_M, 1) if m is not None else None
 
 

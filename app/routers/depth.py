@@ -14,9 +14,10 @@ survey) and lands an ``audit_log`` row. Reads are plain.
 from __future__ import annotations
 
 import datetime as dt
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import text
+from sqlalchemy import CursorResult, text
 from sqlalchemy.orm import Session
 
 from app.crosswalk import segment_dockno_params
@@ -205,7 +206,7 @@ def delete_survey(
         res = session.execute(
             text("DELETE FROM depth_survey WHERE id = :id"), {"id": survey_id}
         )
-        return res.rowcount > 0
+        return cast(CursorResult, res).rowcount > 0
 
     def _audit(deleted: bool) -> dict | None:
         if not deleted:

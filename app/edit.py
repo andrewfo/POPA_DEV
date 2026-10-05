@@ -38,9 +38,10 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
+from typing import cast
 
 from pydantic import BaseModel
-from sqlalchemy import func, select, text, update
+from sqlalchemy import CursorResult, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -280,6 +281,7 @@ def _depth_gate(
     if draft_m is None:
         return ["vessel draft unknown — not validated against controlling depth"]
 
+    assert sr.lo is not None and sr.hi is not None  # non-empty range has both bounds
     controlling_ft, surveyed_at = controlling_depth_over(session, sr.lo, sr.hi)
     if controlling_ft is None:
         return [
@@ -494,7 +496,7 @@ def _cancel_override_notes(session: Session, vessel_id: int) -> int:
             "tail_cancelled": _OVERRIDE_TAIL_CANCELLED,
         },
     )
-    return result.rowcount
+    return cast(CursorResult, result).rowcount
 
 
 def update_vessel(session: Session, vessel_id: int, upd: VesselUpdate) -> dict | None:
@@ -602,7 +604,7 @@ def create_reservation(
     }
     station_sql = _station_sql(sr, params)
     time_sql = _time_sql(tr, params)
-    rid = session.execute(
+    rid: int = session.execute(
         text(
             f"""
             INSERT INTO reservation
@@ -696,6 +698,7 @@ def update_reservation(
     elif changes.get("bow_dock") is not None:
         berth_id = changes.get("berth_id", cur.berth_id)
         bow = _dock_to_popa(session, changes["bow_dock"])
+        assert bow is not None  # bow_dock is not None in this branch
         sr = _station_from_bow(bow, direction, _vessel_loa_ft(session, vessel_id))
     elif "berth_id" in changes and changes["berth_id"] is not None and not has_bounds:
         berth_id = changes["berth_id"]
@@ -764,4 +767,4 @@ def delete_reservation(session: Session, res_id: int) -> bool:
     result = session.execute(
         text("DELETE FROM reservation WHERE id = :id"), {"id": res_id}
     )
-    return result.rowcount > 0
+    return cast(CursorResult, result).rowcount > 0

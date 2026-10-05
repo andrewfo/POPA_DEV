@@ -228,7 +228,7 @@ def verify(
     """
     # Judge no_show/awaiting against the DB clock (Central-pinned, see app/db.py),
     # not the app process clock, so it matches the stored timestamptz exactly.
-    as_of = session.execute(text("SELECT now()")).scalar_one()
+    as_of: datetime = session.execute(text("SELECT now()")).scalar_one()
 
     dock = segment_dockno_params(session)
 

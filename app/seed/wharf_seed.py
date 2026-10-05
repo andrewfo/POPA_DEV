@@ -85,7 +85,7 @@ def seed_wharf(session: Session) -> int:
     sta_start = min(v[2] for v in WHARF_VERTICES)
     sta_end = max(v[2] for v in WHARF_VERTICES)
 
-    row = session.execute(
+    seg_id: int = session.execute(
         text(
             """
             INSERT INTO wharf_segment
@@ -118,9 +118,9 @@ def seed_wharf(session: Session) -> int:
             "dockno_scale": DEFAULT_DOCKNO_SCALE,
             "dockno_offset": DEFAULT_DOCKNO_OFFSET,
         },
-    ).first()
+    ).scalar_one()
     session.commit()
-    return int(row.id)
+    return int(seg_id)
 
 
 def seed_berths(session: Session) -> int:

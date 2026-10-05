@@ -29,8 +29,9 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Iterable
+from typing import cast
 
-from sqlalchemy import text
+from sqlalchemy import CursorResult, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -66,7 +67,7 @@ def import_survey(
     max_m = max_ft / FEET_PER_M
 
     # 1) New survey row (aggregates filled in after the reduction).
-    sid = session.execute(
+    sid: int = session.execute(
         text(
             """
             INSERT INTO depth_survey
@@ -86,6 +87,7 @@ def import_survey(
 
     # 2) COPY soundings into a transaction-scoped temp table (psycopg3 fast path).
     raw = session.connection().connection.driver_connection
+    assert raw is not None  # live DBAPI connection inside an open transaction
     n_parsed = 0
     with raw.cursor() as cur:
         # IF NOT EXISTS + TRUNCATE so a second import within one uncommitted
@@ -171,7 +173,7 @@ def import_survey(
         ),
         {"sid": sid, "bin": bin_ft},
     )
-    segment_count = result.rowcount
+    segment_count = cast(CursorResult, result).rowcount
 
     # 3b) 2-D cross-section grid (station × offset), for the map overlay only.
     session.execute(
@@ -233,6 +235,7 @@ def import_survey(
         ),
         {"sid": sid},
     ).first()
+    assert summary is not None  # the row we just inserted at :sid
 
     return {
         "id": int(sid),

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -94,7 +95,7 @@ class Ingestor:
         # keep the stored value even though the feed carries one, so the override
         # is persistent instead of reverting on the next ShipStaticData. Identity
         # / non-dimension fields keep merging from AIS regardless of the lock.
-        set_ = {}
+        set_: dict[str, Any] = {}
         for k in values:
             if k == "mmsi":
                 continue
