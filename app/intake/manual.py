@@ -502,7 +502,7 @@ def _find_duplicate(session: Session, reservation_id: int):
     the badge stays live (it clears when either side is withdrawn or settled)."""
     return session.execute(
         text(
-            f"""
+            """
             SELECT e2.id, e2.source, r2.status, e2.received_at
               FROM reservation r
               JOIN vessel v        ON v.id = r.vessel_id AND v.imo IS NOT NULL
