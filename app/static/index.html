@@ -623,6 +623,23 @@
   .intake input.ais-dim-edited, .edit-form input.ais-dim-edited {
     border-color: var(--accent); background: rgba(63,174,110,.10);
   }
+  /* Vessel-name type-ahead (forms.js): ships on file; picking one fills the IMO.
+     Styled like the req-card kebab menu. */
+  .intake .vessel-suggest-wrap { position: relative; }
+  .intake .vessel-suggest {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 50;
+    background: var(--panel); border: 1px solid var(--line-2);
+    box-shadow: 0 6px 20px rgba(0,0,0,.5); display: none; max-height: 260px; overflow-y: auto;
+  }
+  .intake .vessel-suggest.open { display: block; }
+  .intake .vessel-suggest .vs-item { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--line); }
+  .intake .vessel-suggest .vs-item:last-child { border-bottom: 0; }
+  .intake .vessel-suggest .vs-item.active,
+  .intake .vessel-suggest .vs-item:hover { background: color-mix(in srgb, var(--line-2) 30%, transparent); }
+  .intake .vessel-suggest .vs-name { color: var(--ink); font-size: 12px; }
+  .intake .vessel-suggest .vs-name b { color: var(--accent); font-weight: 600; }
+  .intake .vessel-suggest .vs-meta { color: var(--muted); font-family: var(--font-mono); font-size: 10px; letter-spacing: .4px; margin-top: 2px; }
+  .intake .vessel-suggest .vs-empty { padding: 6px 10px; color: var(--muted); font-size: 11px; cursor: default; }
   .intake .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 9px; }
   .intake .grid3 { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 0 9px; }
   .intake .check { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: var(--ink); }
@@ -1216,9 +1233,12 @@
           <legend>Vessel</legend>
           <label>IMO Number <span class="req">*</span></label>
           <input type="number" name="imo" required />
-          <div class="hint" style="margin:2px 0 8px">Enter the IMO first — vessel name and dimensions auto-fill from on-file AIS data when the ship is known. Everything else is optional.</div>
+          <div class="hint" style="margin:2px 0 8px">Enter the IMO — or start typing the vessel name to pick a ship on file. Name and dimensions then auto-fill. Everything else is optional.</div>
           <label>Vessel</label>
-          <input type="text" name="vessel" />
+          <div class="vessel-suggest-wrap">
+            <input type="text" name="vessel" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="vesselSuggest" />
+            <div class="vessel-suggest" id="vesselSuggest" role="listbox"></div>
+          </div>
           <div class="grid2">
             <div><label>S/S Line</label><input type="text" name="ss_line" /></div>
             <div><label>Flag</label><input type="text" name="flag" /></div>

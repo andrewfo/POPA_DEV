@@ -57,6 +57,12 @@ the server authority rule is unchanged (an un-pinned typed value is still
 dropped), only the escape hatch got easier. Covered by
 `tests/test_vessels_lookup.py`.
 
+**Name search shipped.** Phone intake hears a name, not an IMO: the Vessel field
+now type-aheads over on-file ships (`GET /vessels/search` →
+`vessel_lookup.search_onfile`, valid IMOs only, most recently seen first); a pick
+fills the IMO and the auto-fill above takes over. Covered by
+`tests/test_vessels_search.py`.
+
 **Tier-2 seam left wired, not implemented.** `vessel_lookup.lookup()` calls
 `lookup_onfile` then falls through to `lookup_external` (a stub returning `None`).
 Adding an external provider (MarineTraffic / VesselFinder / Datalastic / Equasis)

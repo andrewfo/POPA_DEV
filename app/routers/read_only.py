@@ -25,7 +25,7 @@ from app.intake.manual import valid_imo
 from app.models import Vessel, WharfSegment
 from app.occupancy.alongside import alongside_sql, nearest_segment_lateral
 from app.routers.intake import _vessel_dims
-from app.vessel_lookup import lookup
+from app.vessel_lookup import lookup, search_onfile
 from app.workers import KNOWN_WORKERS, classify
 
 router = APIRouter()
@@ -334,7 +334,8 @@ def vessel_lookup(
     it returns ``{found: false}`` so the form can prompt for manual entry.
 
     Dimensions are returned in **feet** (the form's unit; the store is metres).
-    ``ais_tracked`` tells the form the dims are AIS-authoritative (show read-only)."""
+    ``ais_tracked`` tells the form the dims are AIS-authoritative (fill + flag them;
+    a changed value must be pinned via ``dims_locked`` to stick)."""
     if not valid_imo(imo):
         raise HTTPException(
             status_code=422,
@@ -344,6 +345,23 @@ def vessel_lookup(
     if result is None:
         return {"found": False, "source": "none"}
     return result.to_payload()
+
+
+@router.get("/vessels/search")
+def vessel_search(
+    q: str = Query(..., max_length=100, description="Part of a vessel name, or an IMO prefix"),
+    limit: int = Query(8, ge=1, le=20),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Type-ahead name search over on-file vessels for the berth-request form.
+
+    For phone intake, where the operator hears the ship's name rather than its IMO:
+    picking a result fills the IMO, which then drives ``/vessels/lookup`` auto-fill.
+    One row per IMO (rows without an IMO are skipped), dims in **feet**, plus
+    ``last_seen`` (latest AIS fix) to tell same-named ships apart. A ``q`` under 2
+    chars returns an empty list (200, not 422) so the type-ahead needn't
+    special-case it. See ``app/vessel_lookup.search_onfile``."""
+    return {"results": search_onfile(session, q, limit)}
 
 
 @router.get("/vessels")

@@ -36,6 +36,7 @@ The `app/routers/` package is the HTTP surface of the POPA data layer. It splits
 | `GET /berths` | Named berth catalog ordered by station. |
 | `GET /vessels` | Vessel list with latest AIS fix per vessel (LATERAL join). |
 | `GET /vessels/lookup?imo=` | IMO auto-fill for intake: resolve a vessel's name + LOA/beam/draft (**feet**) from its IMO. Rejects an invalid IMO with 422; a clean miss returns `{found:false}` (not 404). Reads on-file AIS data (Tier 1) via `app/vessel_lookup.py`, falling through to an external provider (Tier 2, stubbed). Registered **before** `/vessels/{id}` so it isn't shadowed. |
+| `GET /vessels/search?q=&limit=` | Vessel-name type-ahead for intake (phone callers give a name, not an IMO): on-file ships whose name contains `q` (or whose IMO starts with an all-digit `q`), one row per **structurally valid** IMO (most-recently-updated wins, same as lookup), name-prefix matches first then most recently seen. Returns `{results: [{imo, mmsi, name, loa_ft, beam_ft, ship_type, ais_tracked, last_seen}]}`; `q` under 2 chars → empty list (200). `limit` 1–20, default 8. Via `app/vessel_lookup.search_onfile`; also before `/vessels/{id}`. |
 | `GET /vessels/{id}` | Full vessel detail: record + reservation log + latest AIS position. |
 | `GET /stats` | Sidebar headline counts (vessels present, arrivals in 24h, berth requests, reservations by status, moored now, confirmed). |
 | `GET /geo-to-station` | Project lat/lon → POPA station + Corps + Dock No. equivalents. |

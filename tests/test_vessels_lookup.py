@@ -7,7 +7,7 @@ so seeding a ``vessel`` row through the session is fine.
 Note: the endpoint proposes, it never places — it only reads vessel particulars for
 the intake form to pre-fill. The server-side AIS-dims drop on submit (an AIS-tracked
 vessel's typed dims are dropped/NULL-filled) is covered by the intake tests; auto-fill
-adds no new bypass, it just surfaces ``ais_tracked`` so the form shows dims read-only.
+adds no new bypass, it just surfaces ``ais_tracked`` so the form flags those dims.
 """
 from __future__ import annotations
 

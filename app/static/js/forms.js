@@ -3,7 +3,7 @@
 // audit list, and the sidebar tab switcher.
 import {
   api, apiWrite, errorDetail, esc, fmtCentral, formPayload, isoToLocalInput, localInputToIso,
-  centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, BADGE_COLORS, sourceLabel,
+  centralParts, CENTRAL_TZ, NAV_STATUS, FT_PER_M, BADGE_COLORS, sourceLabel, shipTypeLabel,
 } from "./api.js";
 import { state } from "./state.js";
 import {
@@ -834,6 +834,7 @@ function isValidImo(imo) {
   function resetForm() {
     form.reset();
     clearAutofill();
+    closeSuggest();
     setDefaultDate();
     setMode(null);
   }
@@ -895,8 +896,9 @@ function isValidImo(imo) {
   // /vessels/lookup) and pre-fills name + dims before submit — the biggest lever
   // for "input ships with minimal info". Fill only blank fields, EXCEPT an
   // AIS-tracked vessel's LOA/beam/draft, which are AIS-authoritative: overwrite
-  // and lock them (a typed value wouldn't apply — the ingestor owns them; a dim
-  // AIS lacks stays editable). A miss prompts manual entry; the same call will
+  // and flag them (.ais-dim, still editable — an un-pinned typed value wouldn't
+  // apply since the ingestor owns them, so overtyping arms a confirm-to-pin
+  // override on save). A miss prompts manual entry; the same call will
   // one day answer from an external provider (Tier 2) with no change here.
   const imoInput = form.elements.imo;
   const dimInputs = ["length_ft", "beam_ft", "draft_ft"].map((n) => form.elements[n]);
@@ -977,6 +979,105 @@ function isValidImo(imo) {
     imoTimer = setTimeout(scheduleLookup, 350);
   });
   imoInput.addEventListener("blur", scheduleLookup);
+
+  // --- Vessel-name type-ahead ----------------------------------------------
+  // Phone intake hears a name, not an IMO. While the IMO is still blank (create
+  // mode), typing in Vessel searches ships on file (GET /vessels/search); picking
+  // one fills the IMO and hands off to the IMO auto-fill above, unchanged. Once an
+  // IMO is in, Vessel is plain text again.
+  const nameInput = form.elements.vessel;
+  const suggest = document.getElementById("vesselSuggest");
+  let suggestItems = [];   // current results, index-aligned with .vs-item rows
+  let suggestActive = -1;  // keyboard-highlighted row, -1 = none
+  let nameTimer = null;
+
+  function closeSuggest() {
+    clearTimeout(nameTimer);
+    suggest.classList.remove("open");
+    suggest.innerHTML = "";
+    nameInput.setAttribute("aria-expanded", "false");
+    suggestItems = [];
+    suggestActive = -1;
+  }
+
+  function highlightMatch(name, q) {
+    const i = name.toLowerCase().indexOf(q.toLowerCase());
+    if (i < 0) return esc(name);
+    return esc(name.slice(0, i)) + "<b>" + esc(name.slice(i, i + q.length)) + "</b>" + esc(name.slice(i + q.length));
+  }
+
+  function renderSuggest(q, items) {
+    suggestItems = items;
+    suggestActive = -1;
+    suggest.innerHTML = items.length
+      ? items.map((v, i) => {
+          const meta = [`IMO ${v.imo}`];
+          if (v.loa_ft != null) meta.push(`${Math.round(v.loa_ft)} ft`);
+          const type = shipTypeLabel(v.ship_type);
+          if (type) meta.push(esc(type));
+          meta.push(v.last_seen ? `seen ${relTime(v.last_seen)}` : v.ais_tracked ? "AIS" : "manual entry");
+          return `<div class="vs-item" role="option" data-i="${i}">
+            <div class="vs-name">${highlightMatch(v.name || "(no name)", q)}</div>
+            <div class="vs-meta">${meta.join(" · ")}</div></div>`;
+        }).join("")
+      : `<div class="vs-empty">No ships on file match — enter the IMO.</div>`;
+    suggest.classList.add("open");
+    nameInput.setAttribute("aria-expanded", "true");
+  }
+
+  function setSuggestActive(i) {
+    const rows = suggest.querySelectorAll(".vs-item");
+    if (!rows.length) return;
+    suggestActive = (i + rows.length) % rows.length;
+    rows.forEach((r, j) => r.classList.toggle("active", j === suggestActive));
+    rows[suggestActive].scrollIntoView({ block: "nearest" });
+  }
+
+  function pickSuggest(i) {
+    const v = suggestItems[i];
+    if (!v) return;
+    closeSuggest();
+    imoInput.value = v.imo;
+    if (v.name) nameInput.value = v.name;
+    lastLookup = null;
+    scheduleLookup();   // IMO auto-fill takes it from here (dims, AIS tint, pin)
+  }
+
+  async function searchNames() {
+    const q = String(nameInput.value || "").trim();
+    if (editingId || String(imoInput.value || "").trim() || q.length < 2) { closeSuggest(); return; }
+    let data;
+    try {
+      data = await api(`/vessels/search?q=${encodeURIComponent(q)}`);
+    } catch { return; }   // stay silent; the operator can still type the IMO
+    // Drop a stale result if the operator kept typing, filled an IMO, or opened an edit.
+    if (editingId || String(imoInput.value || "").trim()
+        || String(nameInput.value || "").trim() !== q) return;
+    renderSuggest(q, (data && data.results) || []);
+  }
+
+  nameInput.addEventListener("input", () => {
+    clearTimeout(nameTimer);
+    nameTimer = setTimeout(searchNames, 250);
+  });
+  nameInput.addEventListener("keydown", (e) => {
+    if (!suggest.classList.contains("open")) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setSuggestActive(suggestActive + 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setSuggestActive(suggestActive - 1); }
+    else if (e.key === "Enter") {
+      // Never submit while the list is open: pick the highlighted ship, or just close.
+      e.preventDefault();
+      if (suggestActive >= 0) pickSuggest(suggestActive); else closeSuggest();
+    } else if (e.key === "Escape") { e.preventDefault(); closeSuggest(); }
+  });
+  nameInput.addEventListener("blur", closeSuggest);
+  // mousedown (not click) so the pick lands before the input's blur closes the list.
+  suggest.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const row = e.target.closest(".vs-item");
+    if (row) pickSuggest(Number(row.dataset.i));
+  });
+  imoInput.addEventListener("input", closeSuggest);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
