@@ -1665,169 +1665,100 @@
     </div>
     <div class="tut-body">
       <p class="tut-lede">
-        The console is the single source of truth for berthing and dredging along the
-        Port of Port Arthur wharf. Start with the sandbox, then let the tour walk you
-        through the real screen — it opens each panel for you and has you try things.
+        This console shows every ship and dredging job on the Port of Port Arthur wharf —
+        what's there now and what's booked. Try the practice area below, then take the tour:
+        it walks you around the real screen and lets you try each part.
         <b>Nothing you do in the tour is saved.</b>
       </p>
 
       <details class="tut-demo" open>
-        <summary><span class="tut-num">0</span> The core idea — every booking is a rectangle</summary>
+        <summary><span class="tut-num">0</span> The big idea — a spot on the wharf, for a stretch of time</summary>
         <p>
-          The wharf is measured as one <b>ruler in feet</b>. Every vessel and dredge job occupies a
-          <b>station range</b> over a <b>time window</b> — a rectangle. A conflict is two rectangles that
-          overlap in <i>both</i>. <b>Drag</b> a box to move it, its corner to resize, and change statuses
-          below. The dashed halo is the <b>75 ft mooring gap</b> confirmed hulls must keep.
+          Every booking takes up a <b>stretch of the wharf</b> for a <b>stretch of time</b>. On this chart
+          that's a box. Two bookings <b>clash</b> only when they want the same spot <i>and</i> the same time.
+          <b>Drag</b> a box to move it, or drag its corner to make it bigger. Confirmed ships also need
+          <b>75 ft</b> between them — that's the dashed line around each box.
         </p>
         <div id="tutDemo"></div>
       </details>
 
       <div class="tut-start">
-        <button type="button" class="btn-sm primary" id="tutStartAll">▶ Start the full tour</button>
-        <span class="hint">~3 min · or pick a chapter · ← → to step, Esc to leave</span>
+        <button type="button" class="btn-sm primary" id="tutStartAll">▶ Start the tour</button>
+        <span class="hint">About 3 minutes · or pick one part below · use ← → to move, Esc to stop</span>
       </div>
       <div id="tutChapters" class="tut-chapters"></div>
 
       <details class="tut-ref">
-        <summary>Quick reference — everything on one page</summary>
-      <h3><span class="tut-num">1</span> The core idea — the wharf is a ruler, not a set of berths</h3>
+        <summary>Quick reference — all on one page</summary>
+
+      <h3><span class="tut-num">1</span> Dock numbers</h3>
       <p>
-        The whole wharf face is measured <b>linearly in feet</b> along its centerline
-        (“POPA stationing”). Every vessel and every dredge job is just a <b>rectangle</b>:
-        a stretch of the wharf (a station range) over a stretch of time. A <b>conflict</b>
-        is simply two rectangles that overlap in <i>both</i> time and space. “Berths” (Berth 1,
-        2, …) are just <b>named handles</b> for station ranges — convenient labels, not the
-        real unit of allocation.
+        Spots on the wharf are given as <b>dock numbers in feet</b> — the yellow numbers painted on the
+        wharf and shown on the map. When you place a ship, type the dock number at its <b>bow</b> and
+        which way it faces; the console works out where the stern is from the ship's length.
+        Berth 1, Berth 2, … are just names for stretches of the wharf.
       </p>
-      <div class="tut-tip">
-        You’ll see two number systems on the map: canonical <b>POPA</b> station and the
-        <b>Dock No.</b> feet painted on the quay (the yellow markers). Operators type
-        positions in <b>Dock No. feet</b> — what you actually read off the wharf — and the
-        system converts to canonical internally. The stern (larger Dock No.) is the <i>low</i>
-        end; enter stern first, bow second.
-      </div>
 
       <h3><span class="tut-num">2</span> The map</h3>
       <ul>
-        <li>The chart is <b>rotated</b> so the wharf runs horizontally. The gold line is the
-          measured quay centerline; yellow ticks are Dock No. stationing, red ticks POPA.</li>
-        <li><b>AIS contacts</b> are dots coloured by <b>ship type</b> (see the legend, bottom-left).
-          State is shown by <b>motion</b>, not colour: a <b>solid</b> dot is moored at our wharf,
-          a <b>hollow</b> dot is stopped but off-berth (anchored/holding), and a <b>pulsing ring</b>
-          means underway.</li>
-        <li>To-scale vessel <b>outlines</b> are drawn from the data. The
-          <b>Current / Planned</b> toggle switches between live observed occupancy and the
-          confirmed bookings at the timeline cursor’s moment.</li>
-        <li>A <b>depth overlay</b> paints the surveyed bed (shallow → deep ramp) with
-          per-cell bed-elevation labels, so you can see where the channel shoals out.</li>
-        <li>Click a vessel row in the sidebar to <b>locate</b> its contact (a cyan ping on the chart).</li>
+        <li>The map is turned so the wharf runs left to right. The gold line is the wharf face.</li>
+        <li>Dots are ships from their live tracking signal (AIS), coloured by kind of ship (key at bottom
+          left). <b>Solid</b> = tied up here, <b>hollow</b> = stopped elsewhere, <b>pulsing</b> = moving.</li>
+        <li><b>Current</b> shows ships tied up now; <b>Planned</b> shows confirmed bookings at the time
+          picked on the schedule.</li>
+        <li>The layers button (top right) turns on water depth, berth names and other markings.</li>
       </ul>
 
-      <h3><span class="tut-num">3</span> The stats &amp; conflict strip</h3>
+      <h3><span class="tut-num">3</span> Tabs on the left</h3>
+      <ul>
+        <li><b>Overview</b> — clashes, ships at the wharf now, and depth surveys.</li>
+        <li><b>Reservations</b> — every booking. Find a spot, place it, and confirm it.</li>
+        <li><b>Berth requests</b> — enter phone and email requests, and see all requests.</li>
+        <li><b>Saved ships</b> — every ship we know. Fix a wrong size here.</li>
+        <li><b>History</b> — every past visit. Point at a row for the ship's details.</li>
+      </ul>
+
+      <h3><span class="tut-num">4</span> From request to confirmed</h3>
+      <ul>
+        <li><b>Take the request</b> on the Berth requests tab. It's saved without a spot yet, so it
+          doesn't block anyone.</li>
+        <li><b>Find a spot</b> with <b>Find berth</b> on the Reservations tab — it shows open spots that
+          fit the ship — or set it yourself with <b>Edit placement</b>.</li>
+        <li><b>Confirm</b> it. The console first checks the ship isn't too deep for the water there and
+          doesn't overlap another confirmed ship (75 ft apart minimum). If a check fails you get a message
+          and nothing changes.</li>
+        <li>If the same ship is requested twice for the same dates, both are marked
+          <b>possible duplicate</b> — you choose which to keep.</li>
+      </ul>
+
+      <h3><span class="tut-num">5</span> When a ship's size is wrong</h3>
       <p>
-        The tiles at the top of the sidebar are live counters (vessels in the last 24 h,
-        moored now, reservations, requests, confirmed, arrivals). Below them the
-        <b>Conflicts</b> strip turns <span class="tut-sw" style="background:var(--amber)"></span>amber
-        or <span class="tut-sw" style="background:var(--red)"></span>red the moment any two
-        placed rectangles overlap in time <i>and</i> space — the headline alert. It defaults to
-        current/future and hides harbour service craft (tugs/pilots) so it stays a planning
-        surface, not a log.
+        Ship sizes come from the ship's own tracking signal. If it's wrong, edit the size on
+        <b>Saved ships</b> and say yes to the override. The ship shows <b>Edited</b> and keeps your
+        number. <b>Revert to AIS</b> goes back to the ship's own numbers.
       </p>
 
-      <h3><span class="tut-num">4</span> Sidebar tabs</h3>
+      <h3><span class="tut-num">6</span> The schedule (under the map)</h3>
       <ul>
-        <li><b>Overview</b> — the live picture: what’s alongside now, verification of planned
-          arrivals against AIS, and depth-survey status.</li>
-        <li><b>Reservations</b> — every booking. Create, edit, cancel, delete; place a row by
-          bow + heading; promote it to <b>Confirmed</b>.</li>
-        <li><b>Berth requests</b> — incoming requests (phone/email/operator entry, plus the
-          optional AI channel). Each becomes a <code>requested</code> row you later place.</li>
-        <li><b>Saved ships</b> — every vessel on file, learned from AIS static data and manual
-          entry. Edit a ship’s particulars; for an AIS-tracked ship, <b>override</b> the feed’s
-          LOA/beam/draft when it’s wrong (pinned), or <b>revert to AIS</b>.</li>
-        <li><b>History</b> — the full log of every booking and AIS-observed berthing. Use
-          <b>Filters</b> to search by vessel, IMO, status, or date. <b>Hover</b> a row for a
-          full ship dossier (record + reservation log + latest AIS fix).</li>
+        <li>One row per berth, one bar per booking. Pick how many days to show, or click <b>Today</b>.</li>
+        <li>The <span class="tut-sw" style="background:var(--red)"></span><b>red NOW</b> line is the current
+          time. Click the schedule to pick another time, or press <b>Play</b> to move through time.</li>
       </ul>
 
-      <h3><span class="tut-num">5</span> Capturing a berth request</h3>
+      <h3><span class="tut-num">7</span> Did the ship turn up?</h3>
       <p>
-        On the <b>Berth requests</b> tab, open <b>New berth request</b> and enter what the
-        caller/emailer gave you (vessel, IMO, ETB/ETD, cargo, draft). Submitting lands the
-        raw request for audit and creates a <code>requested</code> reservation with an
-        <b>unassigned</b> station range — it doesn’t block anything yet, because placement is
-        a deliberate operator step. You can <b>Edit</b> or <b>Delete</b> a request card later;
-        edits re-project the linked reservation in place.
+        Once a booked ship arrives, the <b>Overview</b> tab shows whether it <b>arrived</b>, tied up
+        <b>somewhere else</b>, or hasn't shown up. Ships that tie up with <b>no booking</b> are listed too.
+        Old bookings are tidied up automatically once the ship has clearly come and gone.
       </p>
 
-      <h3><span class="tut-num">6</span> Placing &amp; confirming a booking</h3>
+      <h3><span class="tut-num">8</span> Top and bottom of the screen</h3>
       <ul>
-        <li>Open a reservation’s <b>Edit placement</b> form to set its position: type where the
-          <b>bow</b> sits (Dock No. feet, read off the yellow quay markers) and the
-          <b>heading</b>; the stern follows from the vessel’s LOA.</li>
-        <li>Not sure where it fits? Use <b>Find berth</b> — the feasibility picker lists the
-          discrete, vessel-sized <b>candidate berths</b> that are actually free in the window
-          (free space minus everything occupying the wharf, padded by the 75 ft mooring gap,
-          each depth-checked). Pick one and it’s placed.</li>
-        <li>Promote to <b>Confirmed</b> to lock it in. Two gates run automatically:
-          a <b>draft vs controlling-depth</b> check (blocks with a <b>422</b> unless an
-          operator overrides it to a warning) and the <b>no-overlap</b> constraint (a
-          colliding confirmed booking surfaces as a <b>409</b>). Only <code>confirmed</code>
-          rows are hard-guarded; observed AIS rows are allowed to overlap on purpose — that
-          overlap is a signal, not an error.</li>
+        <li><b>«</b> hides the left panel; drag its edge to make it wider.</li>
+        <li>The clock shows local (Central) time, with UTC underneath.</li>
+        <li>The small lights by the clock show the live feeds are working: green is good; yellow or red
+          means data may be out of date.</li>
       </ul>
-
-      <h3><span class="tut-num">7</span> Vessel dimensions &amp; the AIS override</h3>
-      <p>
-        For AIS-tracked ships (those with an MMSI) the <b>AIS feed is authoritative</b> on
-        LOA/beam/draft — a manual edit to those is dropped so the feed can’t be clobbered.
-        When AIS itself is wrong, just edit the dimension on the vessel edit form and
-        confirm when prompted (or use the red <b>Manual override</b> button on a request) to
-        <b>pin</b> a corrected value; the ingestor then stops reverting it. A pinned ship
-        shows an <b>Edited</b> badge and a <b>Revert to AIS</b> button that hands the
-        dimensions back to the feed. Manual-only vessels (no MMSI) own all their dimensions
-        normally.
-      </p>
-
-      <h3><span class="tut-num">8</span> The occupancy timeline (drawer under the map)</h3>
-      <ul>
-        <li>A <b>Gantt chart</b>: one lane per berth, bars coloured by status. Click the
-          caret to expand it; drag its top edge to resize.</li>
-        <li>Use the window presets (<code>±3d</code>, <b>Week</b>, <b>Next 7d/30d</b>) and the
-          pan arrows to scan time. <b>Today</b> recenters on now.</li>
-        <li>The <span class="tut-sw" style="background:var(--red)"></span><b>NOW</b> line is
-          the current instant; the <span class="tut-sw" style="background:var(--cyan)"></span>
-          <b>cursor</b> (drag it, or press <b>Play</b> to sweep) drives the map’s Planned
-          outlines — scrub time and watch the wharf fill and empty.</li>
-      </ul>
-
-      <h3><span class="tut-num">9</span> Verification — did reality match the plan?</h3>
-      <p>
-        The <b>Overview</b> tab checks your placements against observed AIS once vessels
-        arrive: each planned row reads <b>arrived / no-show / awaiting</b> with a
-        <b>where-planned</b> flag, and any <b>unplanned</b> berthing (a ship no request
-        covered) is surfaced. This is <b>read-only verification</b> — AIS can’t position a
-        not-yet-arrived ship, so it never places anything. Stale rows past their window
-        auto-archive to completed/cancelled on evidence (a confirmed no-show is only flagged,
-        never auto-cancelled).
-      </p>
-
-      <h3><span class="tut-num">10</span> Header &amp; footer chrome</h3>
-      <ul>
-        <li>The <b>«</b> button collapses the sidebar; drag its right divider to resize.</li>
-        <li>The <b>clock</b> shows canonical <b>Central Time</b> over UTC — the whole system
-          runs on <code>America/Chicago</code>.</li>
-        <li>The small dots by the clock are <b>background-worker health</b> (AIS ingest,
-          occupancy, intake): green = healthy, amber = stale, red = error. Hover for detail.</li>
-        <li>The footer strip carries system status, refresh cadence, timezone, and the
-          cursor’s lat/lon over the chart.</li>
-      </ul>
-
-      <div class="tut-tip" style="margin-top:22px">
-        <b>In one sentence:</b> watch live AIS on the map and timeline, capture requests on the
-        Berth requests tab, place them with Find berth, confirm them (depth + overlap gates
-        protect you), and let verification tell you whether reality matched the plan.
-      </div>
       </details>
     </div>
   </div>

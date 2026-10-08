@@ -61,17 +61,18 @@ function mapClickProbe(done, card) {
     if (!(e.target instanceof Element) || e.target.closest(".leaflet-control, .leaflet-popup")) return;
     if (map.dragging?.moved?.()) return;   // the tail of a pan, not a pick
     const ll = map.mouseEventToLatLng(e);
-    live.innerHTML = `<span class="tour-dim">projecting ${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}…</span>`;
+    live.innerHTML = `<span class="tour-dim">looking up that spot…</span>`;
     try {
       const r = await api(`/geo-to-station?lat=${ll.lat}&lon=${ll.lng}`);
       live.innerHTML = r.popa_station == null
-        ? `<span class="tour-dim">That point is off the measured wharf — try closer to the gold quay line.</span>`
+        ? `<span class="tour-dim">That spot isn't on the wharf — try clicking closer to the gold line.</span>`
         : `<div class="tour-readout">
+             <div><span>Dock No.</span><b>${Math.round(r.dockno)}′</b></div>
              <div><span>POPA</span><b>${fmtSta(r.popa_station)}</b></div>
              <div><span>Corps</span><b>${fmtSta(r.corps)}</b></div>
-             <div><span>Dock No.</span><b>${Math.round(r.dockno)}′</b></div>
            </div>
-           <div class="tour-dim">Same spot, three rulers — converted server-side. Click again to compare.</div>`;
+           <div class="tour-dim">The dock number is the one painted on the wharf. The other two are the
+             same spot in the port's and the Corps' numbering. Click again to try another spot.</div>`;
     } catch (err) {
       live.innerHTML = `<span class="tour-dim">lookup failed: ${esc(err.message)}</span>`;
     }
@@ -88,164 +89,158 @@ function mapClickProbe(done, card) {
 // with the `empty` note, so the tour never dead-ends on an empty dataset.
 const CHAPTERS = [
   {
-    id: "map", title: "Reading the map", blurb: "Rotated chart, quay rulers, ship dots, outlines, layers",
+    id: "map", title: "Reading the map", blurb: "The wharf, the ships, and the map buttons",
     steps: [
-      { target: "#map", place: "inside", title: "The chart",
-        body: `The chart is <b>rotated</b> so the wharf runs left↔right. The <b>gold line</b> is the measured
-               quay centerline — the ruler everything is positioned on. <b>Yellow ticks</b> are the Dock No.
-               feet painted on the quay; <b>red ticks</b> are canonical POPA stationing. Zoom in and the ticks get denser.` },
-      { target: "#map", place: "inside", title: "One spot, three rulers",
-        body: `POPA, Corps/USACE and Dock No. are three numbering systems for the same quay. Operators type
-               <b>Dock No.</b> (what you read off the wharf); the server converts.`,
-        try: { hint: "Click anywhere near the quay line on the chart", bind: mapClickProbe } },
-      { target: () => shipLegend(), before: () => ensureLegend(true), title: "AIS ship dots",
-        body: `Live AIS contacts, <b>coloured by ship type</b> (this key). State is shown by <b>motion</b>, not colour:
-               <b>solid</b> = moored at our wharf, <b>hollow</b> = stopped off-berth, <b>pulsing ring</b> = underway.
-               Contacts that have gone silent are hidden.` },
-      { target: ".view-toggle", title: "Current vs Planned outlines",
-        body: `To-scale hull outlines. <b>Current</b> draws what AIS says is alongside right now.
-               <b>Planned</b> draws the confirmed bookings at the timeline cursor's moment — scrub time, watch the wharf fill.`,
-        try: { hint: "Flip between Current and Planned", bind: onClick(".view-toggle button") } },
-      { target: ".leaflet-control-layers", title: "Layers",
-        body: `Hover this icon for the layer list: ship dots, outlines, berths, the <b>controlling-depth</b> overlay
-               (shallow→deep ramp with bed-elevation labels), feasible-berth hints and the marker sets.` },
+      { target: "#map", place: "inside", title: "The map",
+        body: `The map is turned so the wharf runs <b>left to right</b>. The <b>gold line</b> is the face of the wharf.
+               The <b>yellow marks</b> are the dock numbers painted on the wharf. Zoom in to see more of them.` },
+      { target: "#map", place: "inside", title: "Where is that?",
+        body: `Every spot on the wharf has a <b>dock number</b> in feet — the same numbers painted on the dock.
+               Click the map and the console tells you the dock number for that spot.`,
+        try: { hint: "Click anywhere near the gold wharf line", bind: mapClickProbe } },
+      { target: () => shipLegend(), before: () => ensureLegend(true), title: "Ship dots",
+        body: `Each dot is a ship, placed by its live tracking signal (AIS). The <b>colour</b> tells you the kind of ship —
+               this key explains them. A <b>solid</b> dot is tied up at our wharf, a <b>hollow</b> dot is stopped somewhere
+               else, and a <b>pulsing</b> dot is moving.` },
+      { target: ".view-toggle", title: "Now vs. planned",
+        body: `These buttons switch the ship shapes on the map. <b>Current</b> shows the ships tied up right now.
+               <b>Planned</b> shows the confirmed bookings for the time picked on the schedule below the map.`,
+        try: { hint: "Click Current, then Planned", bind: onClick(".view-toggle button") } },
+      { target: ".leaflet-control-layers", title: "Turning things on and off",
+        body: `Point at this button to choose what the map shows — ship dots, ship shapes, berth names, water depth,
+               and the dock-number marks.` },
     ],
   },
   {
-    id: "status", title: "Live status at a glance", blurb: "Counters, conflict strip, clock, worker health",
+    id: "status", title: "The top of the screen", blurb: "Counts, the clash warning, the clock",
     steps: [
-      { target: ".stats", before: ensureSidebar, title: "Live counters",
-        body: `Vessels seen in 24 h, moored now, reservations, open requests, confirmed bookings, arrivals.
-               Everything on screen refreshes every <b>15 s</b>.` },
-      { target: "#conflictAlert", title: "The conflict strip",
-        body: `The headline alert. It turns <b style="color:var(--amber)">amber</b>/<b style="color:var(--red)">red</b>
-               the moment two bookings overlap in <i>both</i> time and station. Current &amp; upcoming only —
-               resolved past overlaps live in History.` },
+      { target: ".stats", before: ensureSidebar, title: "Quick counts",
+        body: `How many ships came by today, how many are tied up now, and how many bookings and requests there are.
+               The screen updates itself every 15 seconds — no need to refresh.` },
+      { target: "#conflictAlert", title: "Clash warning",
+        body: `This bar turns <b style="color:var(--amber)">yellow</b> or <b style="color:var(--red)">red</b> when two ships
+               are booked into the <b>same spot at the same time</b>. If it's quiet, there are no clashes.` },
       { target: () => $("#svcCraftToggle")?.closest("label"), before: () => showTab("overview"),
-        title: "Harbor craft filter",
-        body: `Tugs, tows and pilots are hidden from the live panels by default so they stay a planning surface,
-               not a log. Tick this to reveal them.` },
-      { target: "#clock", title: "Central Time is canonical",
-        body: `The whole system reads and writes <b>America/Chicago</b>. UTC is shown underneath for AIS cross-checks.
-               Times you type without a zone are taken as Central.` },
-      { target: "#workerChips", title: "Background workers",
-        body: `One chip per worker (AIS ingest, occupancy, intake…): <b style="color:var(--green)">green</b> healthy,
-               <b style="color:var(--amber)">amber</b> stale, <b style="color:var(--red)">red</b> error. Hover for detail.
-               If AIS goes stale, "moored now" freezes rather than emptying — a dead feed is not a departure.`,
-        empty: "Worker chips appear once the workers have reported in." },
+        title: "Tugs and pilot boats",
+        body: `Tugs, tows and pilot boats are hidden from the lists so they don't crowd things out. Tick this box to show them.` },
+      { target: "#clock", title: "Local time",
+        body: `All times in the console are <b>Port Arthur local time</b> (Central). The second line is UTC, in case you
+               need to match a ship's report.` },
+      { target: "#workerChips", title: "Is the data live?",
+        body: `These lights show whether the live feeds are working. <b style="color:var(--green)">Green</b> means all good.
+               <b style="color:var(--amber)">Yellow</b> or <b style="color:var(--red)">red</b> means the information may be
+               out of date — let the system admin know.`,
+        empty: "These lights appear once the live feeds have started." },
     ],
   },
   {
-    id: "overview", title: "Overview: what's happening now", blurb: "Conflicts, Alongside now, depth surveys",
+    id: "overview", title: "What's happening now", blurb: "Clashes, ships at the wharf, depth",
     steps: [
       { target: () => $("#conflicts")?.closest("details"), before: () => { ensureSidebar(); showTab("overview"); },
-        title: "Conflicts",
-        body: `Each card is a pair of rectangles that collide. <b>Click one</b> to highlight the contested stretch on the
-               chart. AIS-observed vs AIS-observed is never a conflict — AIS can't conflict with itself.` },
-      { target: () => $("#alongside")?.closest("details"), title: "Alongside now",
-        body: `Vessels physically at the wharf right now, each checked against its booking:
-               <b>arrived</b>, <b>berthed elsewhere</b>, or <b>unplanned</b>. Hover a row for the ship dossier;
-               bookings not yet arrived are listed under <b>Future planned</b>.`,
-        try: { hint: "Click a vessel to locate it on the chart (cyan ping)", bind: onClick(".along-card") },
-        empty: "Nobody is alongside right now — this fills from live AIS." },
+        title: "Clashes",
+        body: `Each card here is two bookings that want the same spot at the same time. <b>Click one</b> and the map
+               shows you where.` },
+      { target: () => $("#alongside")?.closest("details"), title: "Ships at the wharf now",
+        body: `Every ship tied up right now, and whether it matches its booking: <b>arrived</b> as planned, tied up
+               <b>somewhere else</b>, or <b>no booking</b> at all. Ships that are booked but haven't arrived yet are listed
+               underneath.`,
+        try: { hint: "Click a ship to find it on the map", bind: onClick(".along-card") },
+        empty: "No ships are tied up right now." },
       { target: "#depthPanel", before: () => { const d = $("#depthPanel"); if (d) d.open = true; },
-        title: "Depth surveys",
-        body: `Upload hydrographic <code>.XYZ</code> condition surveys here. The latest active survey is what the
-               <b>draft gate</b> checks before any booking can be confirmed.` },
+        title: "Water depth",
+        body: `Upload a new depth survey here when one comes in. Before a booking is confirmed, the console checks the
+               ship's <b>draft</b> against the latest depths to make sure it won't touch bottom.` },
     ],
   },
   {
-    id: "intake", title: "Capturing a berth request", blurb: "Phone / email / operator entry — walk the form",
+    id: "intake", title: "Taking a berth request", blurb: "Entering a request from a phone call or email",
     steps: [
-      { target: '#sidebarTabs .tab[data-tab="requests"]', before: ensureSidebar, title: "Berth requests tab",
-        body: `Every inbound request — phone, email, operator entry, and the AI-read mailbox — lands here.`,
-        try: { hint: "Open the Berth requests tab", bind: onClick('.tab[data-tab="requests"]') } },
+      { target: '#sidebarTabs .tab[data-tab="requests"]', before: ensureSidebar, title: "Berth requests",
+        body: `Every request for a berth ends up here, whether it came in by phone, email, or the online form.`,
+        try: { hint: "Click the Berth requests tab", bind: onClick('.tab[data-tab="requests"]') } },
       { target: "#intakePanel", before: () => { showTab("requests"); $("#intakePanel").open = true; },
-        title: "New berth request",
-        body: `Type what the caller gave you. <b>The tour won't submit anything</b> — feel free to poke at the fields.` },
-      { target: () => $('#berthRequestForm [name="imo"]')?.closest("fieldset"), title: "Vessel: IMO first",
-        body: `<b>IMO</b> is the canonical key (names are non-unique and misspelled). Enter it — or start typing a
-               <b>name</b> to pick a ship on file — and name + dimensions auto-fill. For AIS-tracked ships the
-               feed owns LOA/beam/draft.`,
-        try: { hint: "Type a few letters of a vessel name", bind: onEvent("input", '#berthRequestForm [name="vessel"]') } },
-      { target: () => $('#berthRequestForm [name="etb"]')?.closest("fieldset"), title: "Schedule",
-        body: `<b>ETB</b> is required, ETD optional. Times are Central.` },
-      { target: () => $("#berthRequests")?.closest("details"), title: "What happens on submit",
-        body: `The raw request is kept for audit, and a <code>requested</code> reservation is created with an
-               <b>empty station range</b> — it blocks nothing until an operator places it. If the same IMO is already
-               requested over an overlapping window, both cards get a <b>possible duplicate</b> flag; you reconcile
-               (nothing is auto-merged).` },
+        title: "New request",
+        body: `Use this form when someone calls or emails. <b>Nothing is saved during the tour</b>, so go ahead and try the
+               boxes.` },
+      { target: () => $('#berthRequestForm [name="imo"]')?.closest("fieldset"), title: "The ship",
+        body: `Start with the ship's <b>IMO number</b>, or type part of its <b>name</b> and pick it from the list. If we've
+               seen the ship before, its name and size fill in for you.`,
+        try: { hint: "Type a few letters of a ship's name", bind: onEvent("input", '#berthRequestForm [name="vessel"]') } },
+      { target: () => $('#berthRequestForm [name="etb"]')?.closest("fieldset"), title: "When",
+        body: `Enter the <b>arrival time</b> (required) and the departure time if you know it. Use local time.` },
+      { target: () => $("#berthRequests")?.closest("details"), title: "After you save",
+        body: `The request shows up in this list. It doesn't have a spot on the wharf yet — that happens when you
+               place it on the Reservations tab. If the same ship is requested twice for the same dates, both cards
+               are marked <b>possible duplicate</b> so you can decide which one to keep.` },
     ],
   },
   {
-    id: "place", title: "Place & confirm a booking", blurb: "Find berth, placement, the depth and overlap gates",
+    id: "place", title: "Giving a ship a spot", blurb: "Picking a berth and confirming the booking",
     steps: [
-      { target: '#sidebarTabs .tab[data-tab="reservations"]', before: ensureSidebar, title: "Reservations tab",
-        body: `Every booking, whatever its source.`,
-        try: { hint: "Open the Reservations tab", bind: onClick('.tab[data-tab="reservations"]') } },
-      { target: "#resFilter", before: () => showTab("reservations"), title: "Filter by status",
-        body: `<b>requested</b> → <b>tentative</b> → <b>confirmed</b> → <b>completed</b> (or <b>cancelled</b>).`,
-        try: { hint: "Pick a different status", bind: onEvent("change", "#resFilter") } },
-      { target: () => $('#requests [data-act="find-berth"]')?.closest(".card"), title: "Find berth",
-        body: `<b>Find berth</b> asks the feasibility oracle where this vessel fits in its window — free wharf minus
-               everything occupying it, padded by the 75 ft mooring gap, depth-checked — and paints candidates on the
-               chart. It <b>proposes</b>; you pick. Or use <b>⋯ → Edit placement</b>: type the bow in Dock No. feet and
-               the heading, and the stern follows from LOA.`,
-        empty: "No placeable bookings in this filter — set it to Requested or Active to see the Find berth button." },
-      { target: "#requests", title: "Confirming: two gates",
-        body: `Promoting to <b>Confirmed</b> runs two checks. <b>Draft vs controlling depth</b> (422 unless an operator
-               overrides to a warning), and the database's <b>no-overlap constraint</b> — a confirmed booking that
-               collides with another (inside the 75 ft gap) is refused with a <b>409</b>. Only confirmed rows are
-               hard-guarded; see chapter 0 to play with it.` },
+      { target: '#sidebarTabs .tab[data-tab="reservations"]', before: ensureSidebar, title: "Reservations",
+        body: `All bookings, from first request to finished visit.`,
+        try: { hint: "Click the Reservations tab", bind: onClick('.tab[data-tab="reservations"]') } },
+      { target: "#resFilter", before: () => showTab("reservations"), title: "Show only some",
+        body: `Choose which bookings to see: <b>requested</b> (no spot yet), <b>confirmed</b>, <b>completed</b> or
+               <b>cancelled</b>.`,
+        try: { hint: "Pick a different option", bind: onEvent("change", "#resFilter") } },
+      { target: () => $('#requests [data-act="find-berth"]')?.closest(".card"), title: "Find a spot",
+        body: `Click <b>Find berth</b> and the console shows the open spots that fit this ship for its dates, with room
+               to spare and enough water. Pick the one you want. To set the spot yourself, use <b>⋯ → Edit placement</b>
+               and type the <b>dock number at the bow</b> and which way the ship faces.`,
+        empty: "There are no bookings to place right now. Set the filter to Requested to see the Find berth button." },
+      { target: "#requests", title: "Confirming",
+        body: `When you mark a booking <b>Confirmed</b>, the console double-checks two things first:
+               <br>• the ship isn't too deep for the water there, and
+               <br>• it doesn't overlap another confirmed ship (ships need at least <b>75 ft</b> between them).
+               <br>If either check fails, you'll get a message and nothing is changed.` },
     ],
   },
   {
-    id: "ships", title: "Ship particulars & the AIS override", blurb: "Saved ships, pinning dims, revert to AIS",
+    id: "ships", title: "Ship details", blurb: "Looking up ships and fixing wrong sizes",
     steps: [
       { target: "#shipSearch", before: () => { ensureSidebar(); showTab("ships"); }, title: "Saved ships",
-        body: `Every vessel on file, learned from AIS static data and manual entry.`,
-        try: { hint: "Search by name or IMO", bind: onEvent("input", "#shipSearch") } },
-      { target: "#vessels", title: "When AIS is wrong",
-        body: `For an AIS-tracked ship the feed is <b>authoritative</b> on LOA/beam/draft — a plain edit is dropped.
-               If AIS itself is wrong, edit the dimension and confirm the prompt to <b>pin</b> it: the ship shows an
-               <b>Edited</b> badge and the ingestor stops reverting it. <b>Revert to AIS</b> restores the live values
-               immediately. Ships with no MMSI own their dimensions outright.` },
+        body: `Every ship the console knows about.`,
+        try: { hint: "Search for a ship by name or IMO", bind: onEvent("input", "#shipSearch") } },
+      { target: "#vessels", title: "When a ship's size is wrong",
+        body: `Ship sizes normally come straight from the ship's own tracking signal. If that's wrong, edit the length,
+               beam or draft and say yes when asked to <b>override</b>. The ship then shows an <b>Edited</b> tag and keeps
+               your number. <b>Revert to AIS</b> switches back to the ship's own numbers.` },
     ],
   },
   {
-    id: "timeline", title: "The occupancy timeline", blurb: "Gantt lanes, time cursor, playback",
+    id: "timeline", title: "The schedule", blurb: "Who's at which berth, and when",
     steps: [
-      { target: "#timelineDrawer", before: () => ensureTimeline(true), title: "Berth occupancy",
-        body: `A Gantt chart under the map: one lane per berth, bars coloured by status. Drag the drawer's top edge to
-               resize; the caret collapses it.` },
-      { target: () => $("#timelineDrawer .tl-seg"), title: "Window",
-        body: `Presets and pan arrows move the time window; <b>Today</b> recenters on now.`,
-        try: { hint: "Pick a window preset", bind: onClick("#timelineDrawer [data-preset], #timelineDrawer [data-pan]") } },
-      { target: "#tlSvg", title: "NOW line & time cursor",
-        body: `The <b style="color:var(--red)">red NOW</b> line is the current instant. The cursor is a moment you
-               choose — it drives the map's <b>Planned</b> outlines.`,
-        try: { hint: "Click or drag on the chart to move the cursor", bind: onEvent("mousedown", "#tlSvg") } },
+      { target: "#timelineDrawer", before: () => ensureTimeline(true), title: "Berth schedule",
+        body: `One row per berth, one bar per booking, coloured by status. Drag the top edge to make it bigger; the arrow
+               on the left hides it.` },
+      { target: () => $("#timelineDrawer .tl-seg"), title: "Which days",
+        body: `Choose how many days to show, or use the arrows to go back and forward. <b>Today</b> jumps back to now.`,
+        try: { hint: "Pick one of the day buttons", bind: onClick("#timelineDrawer [data-preset], #timelineDrawer [data-pan]") } },
+      { target: "#tlSvg", title: "Now, and a time you pick",
+        body: `The <b style="color:var(--red)">red NOW</b> line is the current time. Click anywhere on the schedule to pick
+               a different time — with the map on <b>Planned</b>, it shows the wharf as booked at that moment.`,
+        try: { hint: "Click somewhere on the schedule", bind: onEvent("mousedown", "#tlSvg") } },
       { target: "#tlPlay", title: "Play",
-        body: `Sweeps the cursor forward (speed alongside). Switch the map to <b>Planned</b> to watch berths fill and empty.`,
-        try: { hint: "Press Play (press again to pause)", bind: onClick("#tlPlay") } },
+        body: `Moves through time on its own. Set the map to <b>Planned</b> and watch ships come and go.`,
+        try: { hint: "Press Play (press again to stop)", bind: onClick("#tlPlay") } },
     ],
   },
   {
-    id: "history", title: "History & the ship dossier", blurb: "Every booking ever, filters, hover dossier",
+    id: "history", title: "Looking back", blurb: "Past visits and ship details",
     steps: [
       { target: '#sidebarTabs .tab[data-tab="history"]', before: () => { ensureSidebar(); closeHistFilters(); },
-        title: "History", body: `Every booking and every AIS-observed berthing, newest arrival first.`,
-        try: { hint: "Open the History tab", bind: onClick('.tab[data-tab="history"]') } },
-      { target: "#histFilterBtn", before: () => { showTab("history"); closeHistFilters(); }, title: "Filters",
-        body: `Search by vessel name, IMO, status or date range.`,
-        try: { hint: "Open Filters", bind: onClick("#histFilterBtn") } },
+        title: "History", body: `Every past visit and booking, newest first.`,
+        try: { hint: "Click the History tab", bind: onClick('.tab[data-tab="history"]') } },
+      { target: "#histFilterBtn", before: () => { showTab("history"); closeHistFilters(); }, title: "Search",
+        body: `Look up visits by ship name, IMO, status or dates.`,
+        try: { hint: "Click Filters", bind: onClick("#histFilterBtn") } },
       { target: "#histFilterModal .sheet",
         before: () => { if (!$("#histFilterModal").classList.contains("open")) $("#histFilterBtn")?.click(); },
-        title: "Narrow it down", body: `Fill any combination and hit <b>Search</b>; <b>Clear</b> resets.` },
-      { target: "#historyList", before: closeHistFilters, title: "Hover for the dossier",
-        body: `Hover any row for the full ship dossier — the vessel record, its reservation log and the latest AIS fix.`,
-        try: { hint: "Hover a history row", bind: onEvent("mouseover", "#historyList .hist-card") },
-        empty: "No history yet — it fills as AIS observes berthings and bookings are made." },
+        title: "Narrow it down", body: `Fill in what you know and click <b>Search</b>. <b>Clear</b> starts over.` },
+      { target: "#historyList", before: closeHistFilters, title: "Ship details",
+        body: `Point at any row to see that ship's details, its past visits, and where it was last seen.`,
+        try: { hint: "Point at a row", bind: onEvent("mouseover", "#historyList .hist-card") } },
     ],
   },
 ];
@@ -339,17 +334,17 @@ const engine = (function () {
       <div class="tour-head">
         <span class="tour-chap">${esc(s.chapterTitle)}</span>
         <span class="tour-count">${i + 1} / ${steps.length}</span>
-        <button type="button" class="tour-x" data-tour="close" title="End tour (Esc)">×</button>
+        <button type="button" class="tour-x" data-tour="close" title="Close the tour (Esc)">×</button>
       </div>
       <div class="tour-prog"><i style="width:${pct}%"></i></div>
       <h4>${s.title}</h4>
       <div class="tour-text">${s.body}</div>
-      <div class="tour-empty" hidden>${s.empty ? esc(s.empty) : "Nothing to point at right now — this area fills in with live data."}</div>
+      <div class="tour-empty" hidden>${s.empty ? esc(s.empty) : "There's nothing here right now — this fills in as ships come and go."}</div>
       ${s.try ? `<div class="tour-await"><span class="tour-pulse"></span><span>Your turn: ${esc(s.try.hint)}</span></div>` : ""}
       <div class="tour-live"></div>
       <div class="tour-foot">
         <button type="button" class="btn-sm" data-tour="back" ${i === 0 ? "disabled" : ""}>‹ Back</button>
-        <span class="tour-keys">← → keys</span>
+        <span class="tour-keys">or use ← →</span>
         ${s.try ? `<button type="button" class="tour-skip" data-tour="skip">skip</button>` : ""}
         <button type="button" class="btn-sm primary" data-tour="next" ${s.try ? "disabled" : ""}>${last ? "Finish ✓" : "Next ›"}</button>
       </div>`;
@@ -358,7 +353,7 @@ const engine = (function () {
         const a = card.querySelector(".tour-await");
         if (a && !a.classList.contains("done")) {
           a.classList.add("done");
-          a.querySelector("span:last-child").textContent = "✓ Nice — that's it.";
+          a.querySelector("span:last-child").textContent = "✓ That's it.";
         }
         const nb = card.querySelector('[data-tour="next"]');
         if (nb) nb.disabled = false;
@@ -448,25 +443,26 @@ function initDemo(root) {
     tooClose: [{ t0: 8, t1: 44, s0: 150, s1: 600 }, { t0: 20, t1: 60, s0: 640, s1: 1050 }],
   };
   const boxes = [
-    { name: "Vessel A", status: "confirmed" },
-    { name: "Dredge op", status: "confirmed" },
+    { name: "Ship", status: "confirmed" },
+    { name: "Dredging", status: "confirmed" },
   ];
+  const STATUS_TXT = { observed: "seen at the wharf", requested: "requested", confirmed: "confirmed" };
   const setPreset = (k) => PRESETS[k].forEach((p, j) => Object.assign(boxes[j], p));
   setPreset("tooClose");
 
   root.innerHTML = `
     <div class="demo-bar">
-      <span class="demo-lbl">Scenario</span>
-      <button type="button" class="btn-sm" data-preset="overlap">Overlap</button>
-      <button type="button" class="btn-sm" data-preset="space">Same time, apart</button>
-      <button type="button" class="btn-sm" data-preset="time">Same berth, back-to-back</button>
-      <button type="button" class="btn-sm" data-preset="tooClose">Too close</button>
+      <span class="demo-lbl">Try</span>
+      <button type="button" class="btn-sm" data-preset="overlap">Same spot, same time</button>
+      <button type="button" class="btn-sm" data-preset="space">Same time, different spots</button>
+      <button type="button" class="btn-sm" data-preset="time">Same spot, one after the other</button>
+      <button type="button" class="btn-sm" data-preset="tooClose">Too close together</button>
     </div>
-    <svg class="demo-svg" viewBox="0 0 ${VW} ${VH}" role="img" aria-label="Time by station sandbox"></svg>
+    <svg class="demo-svg" viewBox="0 0 ${VW} ${VH}" role="img" aria-label="Practice area: wharf spot by time"></svg>
     <div class="demo-bar">
       ${boxes.map((b, j) => `<label class="demo-lbl">${b.name}
-        <select data-box="${j}">${["observed", "requested", "confirmed"].map((s) =>
-          `<option ${s === b.status ? "selected" : ""}>${s}</option>`).join("")}</select></label>`).join("")}
+        <select data-box="${j}">${Object.entries(STATUS_TXT).map(([v, t]) =>
+          `<option value="${v}" ${v === b.status ? "selected" : ""}>${t}</option>`).join("")}</select></label>`).join("")}
     </div>
     <div class="demo-verdict"></div>`;
   const svg = root.querySelector("svg"), verdict = root.querySelector(".demo-verdict");
@@ -483,17 +479,17 @@ function initDemo(root) {
     const bothObs = a.status === "observed" && b.status === "observed";
     const chip = (ok, txt) => `<span class="demo-chip ${ok ? "hit" : ""}">${ok ? "✓" : "✗"} ${txt}</span>`;
     let cls = "ok", msg;
-    if (!tOv) msg = "<b>No conflict.</b> They never share the wharf at the same time.";
-    else if (!sGap) msg = `<b>No conflict.</b> Same time, but ${clear} ft apart — clear of the 75 ft gap.`;
-    else if (bothObs) { cls = "dim"; msg = "<b>Not a conflict.</b> Observed vs observed — AIS can't conflict with itself."; }
+    if (!tOv) msg = "<b>No clash.</b> They're never at the wharf at the same time.";
+    else if (!sGap) msg = `<b>No clash.</b> Same time, but ${clear} ft apart — more than the 75 ft needed.`;
+    else if (bothObs) { cls = "dim"; msg = "<b>No clash shown.</b> Both are ships actually sitting at the wharf, so there's nothing to plan."; }
     else if (bothConf) { cls = "bad"; msg = sRaw
-        ? "<b>Refused (409).</b> The database will not hold two confirmed bookings on the same wharf at the same time."
-        : `<b>Refused (409).</b> Hulls only ${clear} ft apart — inside the 75 ft mooring gap the constraint enforces.`; }
-    else if (sRaw) { cls = "warn"; msg = "<b>Flagged on Conflicts — not blocked.</b> Only confirmed-vs-confirmed is hard-blocked; this overlap is a signal for the operator."; }
-    else { cls = "warn"; msg = `<b>Allowed for now.</b> ${clear} ft apart is under the 75 ft gap — you couldn't confirm both.`; }
+        ? "<b>Not allowed.</b> Two confirmed bookings can't use the same spot at the same time — the console won't save the second one."
+        : `<b>Not allowed.</b> Only ${clear} ft apart — confirmed ships need at least 75 ft between them.`; }
+    else if (sRaw) { cls = "warn"; msg = "<b>Shows as a clash.</b> It appears on the clash list for you to sort out. Only two <i>confirmed</i> bookings are stopped outright."; }
+    else { cls = "warn"; msg = `<b>OK for now.</b> But ${clear} ft apart is less than 75 ft, so you couldn't confirm both.`; }
     verdict.className = "demo-verdict " + cls;
-    verdict.innerHTML = `<div>${chip(tOv, "time overlap")}${chip(sRaw, "station overlap")}${
-      tOv && !sRaw ? chip(sGap, `within 75 ft gap (${clear} ft)`) : ""}</div><div>${msg}</div>`;
+    verdict.innerHTML = `<div>${chip(tOv, "same time")}${chip(sRaw, "same spot")}${
+      tOv && !sRaw ? chip(sGap, `closer than 75 ft (${clear} ft)`) : ""}</div><div>${msg}</div>`;
     return tOv && sGap;
   }
 
@@ -508,14 +504,14 @@ function initDemo(root) {
       svg.append(el("line", { x1: L, x2: L + pw, y1: Y(f), y2: Y(f), class: "demo-grid" }));
       svg.append(el("text", { x: L - 6, y: Y(f) + 3, class: "demo-ax", "text-anchor": "end" }, `${f}′`));
     }
-    svg.append(el("text", { x: 10, y: TOP + ph / 2, class: "demo-ax", transform: `rotate(-90 10 ${TOP + ph / 2})`, "text-anchor": "middle" }, "station"));
+    svg.append(el("text", { x: 10, y: TOP + ph / 2, class: "demo-ax", transform: `rotate(-90 10 ${TOP + ph / 2})`, "text-anchor": "middle" }, "along the wharf"));
     boxes.forEach((b, j) => {
       const g = el("g", { "data-j": j, class: "demo-box" });
       g.append(el("rect", { x: X(b.t0), y: Y(b.s0 - GAP / 2), width: X(b.t1) - X(b.t0),
         height: Y(b.s1 + GAP / 2) - Y(b.s0 - GAP / 2), class: "demo-halo" }));
       g.append(el("rect", { x: X(b.t0), y: Y(b.s0), width: X(b.t1) - X(b.t0), height: Y(b.s1) - Y(b.s0),
         class: "demo-rect", style: `fill:var(--st-${b.status});stroke:var(--st-${b.status})`, "data-act": "move" }));
-      g.append(el("text", { x: X(b.t0) + 6, y: Y(b.s0) + 14, class: "demo-name" }, `${b.name} · ${b.status}`));
+      g.append(el("text", { x: X(b.t0) + 6, y: Y(b.s0) + 14, class: "demo-name" }, `${b.name} · ${STATUS_TXT[b.status]}`));
       g.append(el("rect", { x: X(b.t1) - 9, y: Y(b.s1) - 9, width: 9, height: 9, class: "demo-handle", "data-act": "size" }));
       svg.append(g);
     });
