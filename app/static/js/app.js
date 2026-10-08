@@ -8,6 +8,7 @@ import { loadTimeline } from "./timeline.js";
 import { loadStats, loadConflicts, loadAlongside, loadWorkers } from "./panels.js";
 import { loadVessels, loadRequests, loadBerthRequests } from "./forms.js";
 import { loadDepthSurveys } from "./depth.js";
+import { initTutorial } from "./tour.js";
 
 // --- Resizable left sidebar ------------------------------------------------
 // Drag the divider between the sidebar and the map. Width (--sidebarW on <main>)
@@ -70,21 +71,8 @@ document.querySelectorAll("summary .info").forEach((i) =>
   });
 })();
 
-// --- Tutorial modal --------------------------------------------------------
-// A static how-to overlay opened from the header button. Close on ×, backdrop
-// click, or Esc. No data — pure guide markup lives in index.html.
-(function () {
-  const modal = document.getElementById("tutorialModal");
-  const openBtn = document.getElementById("tutorialBtn");
-  const closeBtn = document.getElementById("tutorialClose");
-  if (!modal || !openBtn) return;
-  const open = () => modal.classList.add("open");
-  const close = () => modal.classList.remove("open");
-  openBtn.addEventListener("click", open);
-  closeBtn && closeBtn.addEventListener("click", close);
-  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
-  addEventListener("keydown", (e) => { if (e.key === "Escape" && modal.classList.contains("open")) close(); });
-})();
+// --- Tutorial: chapter menu + spotlight tour (tour.js) ---------------------
+initTutorial();
 
 // --- Boot ------------------------------------------------------------------
 loadBbox();

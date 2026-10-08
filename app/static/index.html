@@ -1189,6 +1189,118 @@
     margin: 12px 0; padding: 9px 12px; border-left: 2px solid var(--accent);
     background: rgba(232,183,48,.07); color: var(--ink-dim); font-size: 12px; line-height: 1.5;
   }
+  /* Tutorial menu: chapter 0 sandbox, chapter list, collapsible quick reference */
+  .tut-body > details > summary {
+    cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.4px; font-weight: 700;
+    color: var(--accent); margin: 18px 0 6px; padding-bottom: 5px; border-bottom: 1px solid var(--line);
+  }
+  .tut-body > details > summary::-webkit-details-marker { display: none; }
+  .tut-body > details > summary::after { content: "▸"; margin-left: auto; color: var(--muted); }
+  .tut-body > details[open] > summary::after { content: "▾"; }
+  .tut-body .tut-num {
+    font-family: var(--font-mono); color: var(--on-accent); background: var(--accent);
+    font-size: 10px; min-width: 18px; height: 18px; border-radius: var(--r-int);
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+  }
+  .tut-ref > summary { color: var(--ink-dim) !important; }
+  .tut-start { display: flex; align-items: center; gap: 12px; margin: 18px 0 10px; flex-wrap: wrap; }
+  .tut-start .hint { margin: 0; }
+  .tut-chapters { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; }
+  .tut-ch {
+    display: flex; align-items: center; gap: 10px; text-align: left; cursor: pointer;
+    background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--line);
+    color: var(--ink); padding: 9px 10px; border-radius: var(--r-int); font: inherit;
+    transition: border-color .12s ease, background-color .12s ease;
+  }
+  .tut-ch:hover { border-color: var(--accent-dim); border-left-color: var(--accent); background: var(--line); }
+  .tut-ch.done { border-left-color: var(--green); }
+  .tut-ch.done .tut-num { background: var(--green); }
+  .tut-ch-t { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .tut-ch-t b { font-size: 12.5px; font-weight: 600; }
+  .tut-ch-t span { font-size: 11.5px; color: var(--muted); }
+  .tut-ch-n { font-family: var(--font-mono); font-size: 10px; color: var(--muted); white-space: nowrap; }
+  /* Chapter 0 sandbox */
+  .demo-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .demo-lbl { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; margin-right: 8px; }
+  .demo-lbl select { text-transform: none; letter-spacing: 0; }
+  .demo-svg { width: 100%; height: auto; display: block; background: var(--bg); border: 1px solid var(--line); touch-action: none; user-select: none; }
+  .demo-grid { stroke: var(--line); stroke-width: 1; }
+  .demo-ax { fill: var(--muted); font-family: var(--font-mono); font-size: 9px; }
+  .demo-rect { fill-opacity: .28; stroke-width: 1.5; cursor: grab; }
+  .demo-rect:active { cursor: grabbing; }
+  .demo-halo { fill: none; stroke: var(--ink-dim); stroke-opacity: .45; stroke-dasharray: 3 3; pointer-events: none; }
+  .demo-name { fill: var(--ink); font-family: var(--font-mono); font-size: 10px; pointer-events: none; }
+  .demo-handle { fill: var(--ink); cursor: nwse-resize; }
+  .demo-hit { fill: var(--red); fill-opacity: .35; stroke: var(--red); stroke-width: 1.5; pointer-events: none; }
+  .demo-verdict {
+    border-left: 2px solid var(--green); background: var(--panel-2); padding: 8px 11px;
+    font-size: 12.5px; line-height: 1.5; color: var(--ink-dim); display: grid; gap: 5px;
+  }
+  .demo-verdict b { color: var(--ink); }
+  .demo-verdict.warn { border-left-color: var(--amber); }
+  .demo-verdict.bad { border-left-color: var(--red); }
+  .demo-verdict.dim { border-left-color: var(--muted); }
+  .demo-chip { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); margin-right: 12px; }
+  .demo-chip.hit { color: var(--ink); }
+
+  /* ===== Spotlight tour overlay (tour.js) ===== */
+  #tourLayer { position: fixed; inset: 0; z-index: 4300; pointer-events: none; display: none; }
+  #tourLayer.on { display: block; }
+  .tour-spot {
+    position: fixed; pointer-events: none; border: 1px solid var(--accent);
+    box-shadow: 0 0 0 200vmax rgba(4,6,9,.62), 0 0 0 4px rgba(232,183,48,.18);
+    transition: left .22s ease, top .22s ease, width .22s ease, height .22s ease;
+  }
+  .tour-spot.none { border-color: transparent; box-shadow: 0 0 0 200vmax rgba(4,6,9,.62); }
+  .tour-card {
+    position: fixed; pointer-events: auto; width: min(340px, calc(100vw - 24px));
+    background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--accent);
+    box-shadow: 0 14px 44px rgba(0,0,0,.6); padding: 10px 14px 12px;
+    transition: left .22s ease, top .22s ease;
+  }
+  .tour-head { display: flex; align-items: center; gap: 8px; }
+  .tour-chap { flex: 1; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--accent); }
+  .tour-count { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+  .tour-x { background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 2px; line-height: 1; }
+  .tour-x:hover { color: var(--accent); }
+  .tour-prog { height: 2px; background: var(--line); margin: 7px 0 9px; }
+  .tour-prog i { display: block; height: 100%; background: var(--accent); transition: width .22s ease; }
+  .tour-card h4 { margin: 0 0 6px; font-size: 13.5px; color: var(--ink); font-weight: 600; }
+  .tour-text { font-size: 12.5px; line-height: 1.55; color: var(--ink-dim); }
+  .tour-text b { color: var(--ink); font-weight: 600; }
+  .tour-text code { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+  .tour-empty { margin-top: 8px; font-size: 11.5px; color: var(--muted); font-style: italic; }
+  .tour-await {
+    margin-top: 10px; padding: 7px 10px; display: flex; align-items: center; gap: 9px;
+    border: 1px dashed var(--accent-dim); background: rgba(232,183,48,.07);
+    font-size: 12px; color: var(--ink);
+  }
+  .tour-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: tourPulse 1.2s ease-in-out infinite; }
+  .tour-await.done { border-style: solid; border-color: var(--green); background: rgba(54,181,106,.08); }
+  .tour-await.done .tour-pulse { background: var(--green); animation: none; }
+  @keyframes tourPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(232,183,48,.6); } 50% { box-shadow: 0 0 0 5px rgba(232,183,48,0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .tour-pulse { animation: none; }
+    .tour-spot, .tour-card, .tour-prog i { transition: none; }
+  }
+  .tour-live:not(:empty) { margin-top: 8px; font-size: 11.5px; }
+  .tour-dim { color: var(--muted); }
+  .tour-readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 5px; }
+  .tour-readout div { background: var(--panel-2); border: 1px solid var(--line); padding: 5px 7px; display: flex; flex-direction: column; gap: 1px; }
+  .tour-readout span { font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .tour-readout b { font-family: var(--font-mono); font-size: 13px; color: var(--accent); font-weight: 600; }
+  .tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .tour-keys { flex: 1; font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); }
+  .tour-skip { background: none; border: 0; color: var(--muted); font-size: 11px; cursor: pointer; text-decoration: underline; }
+  .tour-skip:hover { color: var(--ink); }
+  .tour-foot button[disabled] { opacity: .4; cursor: not-allowed; }
+  .tour-nudge {
+    position: fixed; z-index: 4150; display: flex; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--accent-dim); border-left: 2px solid var(--accent);
+    padding: 6px 8px 6px 11px; font-size: 12px; color: var(--ink);
+    box-shadow: 0 8px 26px rgba(0,0,0,.5);
+  }
 </style>
 </head>
 <body>
@@ -1553,13 +1665,31 @@
     </div>
     <div class="tut-body">
       <p class="tut-lede">
-        This console is the single source of truth for berthing and dredging along the
-        Port of Port Arthur wharf. It seeds itself from <b>live AIS</b> (real vessel
-        positions), lets operators capture and place <b>berth requests</b>, and guards
-        every booking against <b>time × berth-space conflicts</b> and <b>controlling
-        depth</b>. Nothing here needs a spreadsheet. Below is what each part does.
+        The console is the single source of truth for berthing and dredging along the
+        Port of Port Arthur wharf. Start with the sandbox, then let the tour walk you
+        through the real screen — it opens each panel for you and has you try things.
+        <b>Nothing you do in the tour is saved.</b>
       </p>
 
+      <details class="tut-demo" open>
+        <summary><span class="tut-num">0</span> The core idea — every booking is a rectangle</summary>
+        <p>
+          The wharf is measured as one <b>ruler in feet</b>. Every vessel and dredge job occupies a
+          <b>station range</b> over a <b>time window</b> — a rectangle. A conflict is two rectangles that
+          overlap in <i>both</i>. <b>Drag</b> a box to move it, its corner to resize, and change statuses
+          below. The dashed halo is the <b>75 ft mooring gap</b> confirmed hulls must keep.
+        </p>
+        <div id="tutDemo"></div>
+      </details>
+
+      <div class="tut-start">
+        <button type="button" class="btn-sm primary" id="tutStartAll">▶ Start the full tour</button>
+        <span class="hint">~3 min · or pick a chapter · ← → to step, Esc to leave</span>
+      </div>
+      <div id="tutChapters" class="tut-chapters"></div>
+
+      <details class="tut-ref">
+        <summary>Quick reference — everything on one page</summary>
       <h3><span class="tut-num">1</span> The core idea — the wharf is a ruler, not a set of berths</h3>
       <p>
         The whole wharf face is measured <b>linearly in feet</b> along its centerline
@@ -1698,6 +1828,7 @@
         Berth requests tab, place them with Find berth, confirm them (depth + overlap gates
         protect you), and let verification tell you whether reality matched the plan.
       </div>
+      </details>
     </div>
   </div>
 </div>
