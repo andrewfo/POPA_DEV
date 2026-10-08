@@ -332,6 +332,16 @@
     transition: color .12s ease;
   }
   details.section[open] > summary { color: var(--ink-dim); }
+  /* Inline header note (panels.js setSumNote): an empty section reads as one quiet
+     line ("CONFLICTS ... NONE") instead of a boxed empty panel, so a real alert
+     stands out; a non-empty one shows its count. .alert tints a count that needs
+     attention (conflicts). The caret keeps its gap after the note. */
+  details.section > summary .sum-note {
+    margin-left: auto; color: var(--muted); font-family: var(--font-mono);
+    font-weight: 500; letter-spacing: 1.2px;
+  }
+  details.section > summary .sum-note.alert { color: var(--bad); font-weight: 700; }
+  details.section > summary:has(.sum-note:not(:empty))::after { margin-left: 8px; }
   details.section > summary::-webkit-details-marker { display: none; }
   details.section > summary::before { content: ""; width: 2px; height: 10px; background: var(--accent); flex: none; }
   details.section > summary::after { content: "▸"; margin-left: auto; color: var(--muted); font-size: 9px; transition: transform .12s ease; }
@@ -577,6 +587,16 @@
     transform: rotate(-90deg); transform-origin: center center;
     white-space: nowrap;
   }
+  /* Zoom-gated tick/label density (map.js applyMarkerDensity sets one mk-* on the
+     map container). mk-none (<z15): only the 500-ft ticks, no labels; mk-500
+     (z15): ticks + labels every 500 ft; mk-200 (z16): every 200 ft; mk-100 (z17+): all.
+     The 50-ft Dock No. minors only show from z17. */
+  .mk-none .yk-label, .mk-none .ft-label,
+  .mk-500 .yk-label:not(.m500), .mk-500 .ft-label:not(.m500),
+  .mk-200 .yk-label:not(.m200), .mk-200 .ft-label:not(.m200),
+  .mk-none .yk-tick:not(.m500), .mk-none .ft-tick:not(.m500),
+  .mk-500 .yk-tick:not(.m500), .mk-500 .ft-tick:not(.m500),
+  .mk-200 .yk-tick.minor { display: none; }
   .berth-label { color: var(--ink); font-family: var(--font-mono); font-weight: 600; font-size: 13px; text-align: center; line-height: 1.15; letter-spacing: 1px; text-transform: uppercase; }
   .berth-label .sub { color: var(--ink-dim); font-weight: 500; font-size: 11px; }
   .wh-label { color: var(--ink-dim); font-size: 12px; }
@@ -1377,15 +1397,15 @@
 
     <!-- ===== Conflicts (time × station overlaps) ===== -->
     <details class="section" open>
-      <summary>Conflicts <i class="info" title="Reservations overlapping in both time and station — current and upcoming only (resolved past overlaps live in History). Click one to highlight the contested stretch.">i</i></summary>
-    <div id="conflicts"><div class="empty">none</div></div>
+      <summary>Conflicts <i class="info" title="Reservations overlapping in both time and station — current and upcoming only (resolved past overlaps live in History). Click one to highlight the contested stretch.">i</i><span class="sum-note" id="conflictsNote"></span></summary>
+    <div id="conflicts"></div>
     </details>
     <!-- ===== /Conflicts ===== -->
 
     <!-- ===== Alongside now (live AIS + verification + future planned) ===== -->
     <details class="section" open>
-      <summary>Alongside now <i class="info" title="Vessels physically at the wharf right now (live AIS), each checked against its booking — arrived / berthed elsewhere / unplanned — and labeled by craft type. Click one to locate it on the chart; hover for the dossier. Below: bookings not yet arrived.">i</i></summary>
-    <div id="alongside"><div class="empty">loading…</div></div>
+      <summary>Alongside now <i class="info" title="Vessels physically at the wharf right now (live AIS), each checked against its booking — arrived / berthed elsewhere / unplanned — and labeled by craft type. Click one to locate it on the chart; hover for the dossier. Below: bookings not yet arrived.">i</i><span class="sum-note" id="alongsideNote">loading…</span></summary>
+    <div id="alongside"></div>
     <h4 id="futurePlannedHdr" class="subhead" style="display:none">Future planned</h4>
     <div id="futurePlanned"></div>
     </details>

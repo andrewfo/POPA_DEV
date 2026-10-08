@@ -278,10 +278,11 @@ app/
   ais/       # AIS ingestion → reference/ais.md
   occupancy/ # occupancy derivation → reference/occupancy.md
   intake/    # manual + llm + dataverse_run → reference/intake.md
+  vessel_lookup.py # IMO auto-fill + name search (read-only) → reference/intake.md
   depth/     # controlling-depth + draft gate → reference/depth.md
   seed/·static/                                               # wharf seed; Leaflet UI → reference/frontend.md
 data/gis/·data/surveys/   # geometry build + raw surveys → reference/crosswalk.md, depth.md
-alembic/                  # migrations 0001–0016 → reference/migrations.md
+alembic/                  # migrations 0001–0017 → reference/migrations.md
 tests/                    # → reference/tests.md
 scripts/·Dockerfile·docker-compose*.yml·.env.example·.github/ # → reference/deployment.md
 docs/                     # PLAN.md (roadmap) · DEPLOY.md · reference/ (per-section docs)

@@ -19,12 +19,12 @@ skill whenever the code it covers changes.
 | --- | --- | --- |
 | [core.md](./core.md) | Cross-cutting app-root modules: settings, DB/session, ORM, time, app assembly, auth, audit, worker liveness | `app/{config,db,models,tz,main,auth,audit,workers}.py` |
 | [crosswalk.md](./crosswalk.md) | Stationing crosswalk (POPA ↔ Corps ↔ Dock No.) + wharf centerline/apron geometry | `app/crosswalk.py`, `app/seed/wharf_seed.py`, `data/gis/` |
-| [migrations.md](./migrations.md) | Alembic migration history + the schema each revision builds | `alembic/versions/0001…0015` |
+| [migrations.md](./migrations.md) | Alembic migration history + the schema each revision builds | `alembic/versions/0001…0017` |
 | [ais.md](./ais.md) | AIS ingestion (step 4): normalized messages, pluggable sources, source-agnostic ingestor | `app/ais/` |
 | [occupancy.md](./occupancy.md) | Occupancy derivation (step 5): detect → project → alongside → idempotent `observed` rows | `app/occupancy/` |
 | [depth.md](./depth.md) | Controlling-depth data layer + draft gate (step 6): `.XYZ` reduction, versioned surveys, confirm-time gate | `app/depth/` |
 | [scheduling.md](./scheduling.md) | The scheduling brain: conflict primitive, feasibility oracle, AIS verification, manual edit surface, ship types | `app/{conflicts,feasibility,verification,edit,shiptypes}.py` |
-| [intake.md](./intake.md) | Berth-request intake (step 7 capture): manual entry, LLM normalizer, Dataverse pull worker | `app/intake/` |
+| [intake.md](./intake.md) | Berth-request intake (step 7 capture): manual entry, LLM normalizer, Dataverse pull worker | `app/intake/`, `app/vessel_lookup.py` |
 | [routers.md](./routers.md) | The HTTP surface split by concern + the `do_write`/audit write-wrapper | `app/routers/` |
 | [frontend.md](./frontend.md) | The Leaflet UI: map, occupancy timeline, panels, edit/intake forms, ES modules | `app/static/` |
 | [deployment.md](./deployment.md) | Packaging, dev/prod compose, CI, auth's ops role, the schedule importer | `Dockerfile`, `docker-compose*.yml`, `scripts/`, `.github/`, `docs/DEPLOY.md` |

@@ -77,6 +77,29 @@ const centerlineLayer = L.geoJSON(null, {
     radius: 2, color: PAL.muted, fillColor: PAL.ink, fillOpacity: 0.5, weight: 1, opacity: 0.4,
   }),
 }).addTo(map);
+// Zoom-gated marker density. Both tick series run every 100 ft (Dock No. adds
+// 50-ft minors), which at the default zoom is a few pixels apart — the labels
+// pile into a solid yellow smear. Each tick/label carries the multiples it
+// lands on (m500 / m200, plus `minor` for the 50s) and applyMarkerDensity puts
+// one mk-* class on the map container; CSS (index.html) hides what that tier
+// doesn't show. Tiers by on-screen spacing of 100 ft (~7 px at z15, 15 at z16,
+// 29 at z17): below 15 only the 500s' ticks, no labels; 15 → ticks + labels
+// every 500 ft; 16 → every 200 ft; 17+ → every tick. Presentation only.
+function markerMultiples(v) {
+  if (v == null) return "";
+  const n = Number(v);
+  return [n % 500 === 0 ? "m500" : "", n % 200 === 0 ? "m200" : ""].filter(Boolean).join(" ");
+}
+function applyMarkerDensity() {
+  const z = map.getZoom();
+  const tier = z < 15 ? "mk-none" : z < 16 ? "mk-500" : z < 17 ? "mk-200" : "mk-100";
+  const c = map.getContainer();
+  c.classList.remove("mk-none", "mk-500", "mk-200", "mk-100");
+  c.classList.add(tier);
+}
+map.on("zoomend", applyMarkerDensity);
+applyMarkerDensity();
+
 // Station ticks, straight from feet_markers.geojson: each feature is a
 // LineString perpendicular to the quay, running from a nub on the concrete out
 // into the channel (built with the real water-side normal, so direction/
@@ -84,14 +107,15 @@ const centerlineLayer = L.geoJSON(null, {
 // thin uniform light lines every 100 ft, labelled in POPA stationing
 // (STA "X+YY") at the water end — the same reference the exhibit uses.
 const feetLayer = L.geoJSON(null, {
-  style: () => ({ color: PAL.inkDim, weight: 1, opacity: 0.8 }),
+  style: (f) => ({ color: PAL.inkDim, weight: 1, opacity: 0.8,
+                  className: `ft-tick ${markerMultiples(f.properties.popa)}` }),
   onEachFeature: (f, layer) => {
     if (!f.properties.label) return;
     const co = f.geometry.coordinates;
     const end = co[co.length - 1];                 // water end of the tick
     L.marker([end[1], end[0]], {
       icon: L.divIcon({
-        className: "ft-label",
+        className: `ft-label ${markerMultiples(f.properties.popa)}`,
         html: `<span class="lbl">${f.properties.label}</span>`,
         iconSize: [0, 0],
       }),
@@ -107,7 +131,8 @@ const feetLayer = L.geoJSON(null, {
 // hundreds carry a yellow Dock No. label on the landward (dock) end, the 50-ft
 // minors are drawn thinner and unlabelled.
 const yellowLayer = L.geoJSON(null, {
-  style: (f) => ({ color: PAL.amber, weight: f.properties.major ? 2 : 1, opacity: 0.95 }),
+  style: (f) => ({ color: PAL.amber, weight: f.properties.major ? 2 : 1, opacity: 0.95,
+                  className: `yk-tick ${f.properties.major ? "" : "minor"} ${markerMultiples(f.properties.dockno)}` }),
   onEachFeature: (f, layer) => {
     if (!f.properties.label) return;
     const co = f.geometry.coordinates;
@@ -115,7 +140,7 @@ const yellowLayer = L.geoJSON(null, {
     const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];   // label rides the middle of the tick
     L.marker([mid[1], mid[0]], {
       icon: L.divIcon({
-        className: "yk-label",
+        className: `yk-label ${markerMultiples(f.properties.dockno)}`,
         html: `<span class="lbl">${f.properties.label}</span>`,
         iconSize: [0, 0],
       }),

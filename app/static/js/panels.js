@@ -163,6 +163,15 @@ function wireConflictCards(el) {
   });
 }
 
+// Section-header note: "none" when a section is empty (its body is left blank, so
+// the whole section is one quiet line), else the count. Blank = no note.
+function setSumNote(id, n, { alert = false } = {}) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = n == null ? "" : n ? String(n) : "none";
+  el.classList.toggle("alert", alert && !!n);
+}
+
 export async function loadConflicts() {
   const el = document.getElementById("conflicts");
   const stat = document.getElementById("statConflicts");
@@ -172,14 +181,14 @@ export async function loadConflicts() {
     if (stat) stat.textContent = cs.length;
     setConflictAlert(cs.length);
     if (!el) return;
-    el.innerHTML = cs.length
-      ? cs.map(conflictCard).join("")
-      : '<div class="empty">no conflicts</div>';
+    setSumNote("conflictsNote", cs.length, { alert: true });
+    el.innerHTML = cs.map(conflictCard).join("");
     wireConflictCards(el);
   } catch (e) {
     CONFLICTS = [];
     if (stat) stat.textContent = "0";
     setConflictAlert(0);
+    setSumNote("conflictsNote", null);
     if (el) el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
   }
 }
@@ -279,9 +288,8 @@ export async function loadAlongside() {
       ? moored
       : moored.filter((r) => !isServiceCraftType(r.ship_type));
 
-    el.innerHTML = rows.length
-      ? rows.map((r) => alongsideCard(r, vmap.get(r.vessel_id))).join("")
-      : '<div class="empty">nothing alongside</div>';
+    setSumNote("alongsideNote", rows.length);
+    el.innerHTML = rows.map((r) => alongsideCard(r, vmap.get(r.vessel_id))).join("");
     el.querySelectorAll(".along-card").forEach((card) => {
       card.addEventListener("click", () => {
         const mmsi = Number(card.dataset.alongMmsi);
@@ -321,6 +329,7 @@ export async function loadAlongside() {
       if (fel) fel.innerHTML = "";
     }
   } catch (e) {
+    setSumNote("alongsideNote", null);
     el.innerHTML = '<div class="empty">unavailable (DB offline)</div>';
     if (fhdr) fhdr.style.display = "none";
     if (fel) fel.innerHTML = "";

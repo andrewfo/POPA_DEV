@@ -34,6 +34,12 @@ A prioritized set of operator-facing improvements ahead of the director demo. Al
 build on surfaces that already exist; none change the core model or the invariants
 in [`../CLAUDE.md`](../CLAUDE.md). Ordered by value/effort.
 
+**Recommended order (2026-10-07):** **B** (cheapest, and it's the demoed form) →
+**AIS reconnect + stale-feed healthcheck** (pulled forward from the backlog — a
+dropped aisstream socket mid-demo silently shows an empty wharf) → finish **C** →
+then **G** (highest long-term value) / **F** (most visible on the map). If the
+demo isn't imminent, B then straight to G.
+
 | # | Item | Effort | Value | Touches |
 |---|------|--------|-------|---------|
 | A | IMO auto-fill on intake | ✅ done | High | [routers.md](./reference/routers.md), [frontend.md](./reference/frontend.md) |
@@ -65,11 +71,44 @@ fills the IMO and the auto-fill above takes over. Covered by
 
 **Tier-2 seam left wired, not implemented.** `vessel_lookup.lookup()` calls
 `lookup_onfile` then falls through to `lookup_external` (a stub returning `None`).
-Adding an external provider (MarineTraffic / VesselFinder / Datalastic / Equasis)
-for a not-yet-on-AIS ship touches only `lookup_external` + a `VESSEL_REF_*` setting
-in `app/config.py` — the endpoint and form don't change (same source-agnostic
-contract as `AISSource`). Flag/callsign auto-fill also belongs to Tier 2 (`vessel`
-has no `flag` column and the form no callsign field).
+Adding an external provider for a not-yet-on-AIS ship touches only
+`lookup_external` + a `VESSEL_REF_*` setting in `app/config.py` — the endpoint and
+form don't change (same source-agnostic contract as `AISSource`). Flag/callsign
+auto-fill also belongs to Tier 2 (`vessel` has no `flag` column and the form no
+callsign field).
+
+*Provider research (2026-10-07) — recommended: **VesselFinder MasterData**.*
+Pay-per-use credits, no subscription (3 credits/vessel; 10k credits ≈ €330 ≈ 3,300
+lookups, valid 12 months; billed only for delivered data); IMO-keyed, batchable;
+returns LENGTH / BEAM / MAXDRAUGHT / FLAG / DWT / type / owner (no callsign/MMSI —
+fine, Tier 2 is never AIS-tracked). With hits cached back into `vessel`, volume is
+~once per ship, so per-lookup beats a subscription. Alternatives: Datalastic
+(monthly credit plans; beam/draft fields unconfirmed), MarineTraffic/Kpler
+(quote-only), **Equasis ruled out** (its terms forbid robot/bulk retrieval and
+storing without written permission). Before wiring, verify: (1) units of
+LENGTH/BEAM/MAXDRAUGHT (undocumented — one test call); (2) MAXDRAUGHT is the
+*design max*, not the current draft — conservative for the depth gate, but label it
+"registry max draft" in the form; (3) the ToS allows caching into `vessel`;
+(4) 2- vs 3-credit pricing conflict between VesselFinder pages (budget 3).
+Decide whether Tier 2 is worth paying for only after the hit/miss metric below.
+
+**Auto-fill follow-ups (do before Tier 2 — cheaper, use data already on hand):**
+- **Fill from prior requests** — flag, S/S line, deadweight, destinations, bunker
+  type from the latest `intake_event.raw` for the same IMO (blanks only, labelled
+  "from request on …"). `vessel` has none of these; repeat callers would need
+  almost no typing.
+- **Inline IMO check-digit feedback** — an invalid IMO currently silently clears
+  the auto-fill; say "check digit doesn't match — likely a typo".
+- **Provenance + age of filled values** — e.g. "draft from AIS, reported 41 d ago".
+  AIS draft is the last-reported (often departure-from-previous-port) draft, the
+  field most likely to need overriding.
+- **Lookup hit/miss metric** — count `found` vs miss on `/vessels/lookup` (a counter
+  or small table, not `audit_log`, which is for writes) to size the Tier-2 case.
+- **Marine Cadastre preload** — the planned historical `AISSource` (backlog) would
+  pre-populate `vessel` with years of Port Arthur visitors, so Tier 1 hits even on a
+  ship's first request.
+- **IMO-only ↔ MMSI identity merge** — see *Data quality* below; Tier 2 would make
+  IMO-only rows common, so fix this first.
 
 ### B — Test & harden the reservation form
 This is the form directors will see demoed — it must be reliable end to end. The
@@ -96,7 +135,10 @@ moving client-side.
   the standalone verification section is gone and the harbor-craft toggle is now a
   single global Overview filter. The panel reads the read-only `GET /verification`
   (archiving stays in the occupancy worker).
-- Saved-ships roster trimmed to name/dims, searchable by name or IMO.
+- Saved-ships roster dropped the live NAV/SOG/COG columns (now Name / MMSI / IMO /
+  Call / Drft / LOA, live fix in the row tooltip), searchable by name or IMO.
+- Map tick/label density is zoom-gated (no more yellow label smear at the default
+  zoom) and empty Overview sections collapse to a one-line NONE header note.
 
 ### D — Manual vs. agent write precedence ✅
 **Shipped.** The one rule: **the operator is authoritative; the agent proposes.**
@@ -198,13 +240,21 @@ Not tied to one step; pick up as the system matures.
 
 ### Data quality
 - Vessel identity merge: link an MMSI-only row when its IMO later appears; handle
-  MMSI reuse / mismatched IMO.
+  MMSI reuse / mismatched IMO. The reverse case too: an **IMO-only** row (manual
+  request, or a future Tier-2 auto-fill cache) gets a second `vessel` row when AIS
+  later sees the ship, because the ingestor keys on MMSI — the ingestor should
+  attach to the existing IMO-only row on first MMSI sighting. Lookups survive it
+  (most-recent row wins) but the duplicates accumulate.
+- AIS-reported IMOs are not trustworthy (e.g. a 9-digit `101212306` is on file);
+  `/vessels/search` already filters to check-digit-valid IMOs, but the ingestor
+  stores them unvalidated.
 - Sanity bounds on AIS values (lat/lon in bbox, SOG/heading ranges) before
   trusting them in derivation.
 
 ### CI / tests
 - Add a migration round-trip test (`upgrade` → `downgrade` → `upgrade`).
-- Drop `continue-on-error` on the mypy job once the tree type-checks clean.
+- Drop `continue-on-error` on the mypy job — **the tree now type-checks clean**
+  (`mypy app`: 0 issues as of 702e318), so this is a one-line CI change.
 
 ### Schema evolution (always via Alembic)
 - Keep `app/models.py` enum tuples and the migrations in lockstep.
@@ -237,6 +287,8 @@ Not tied to one step; pick up as the system matures.
    `ST_Contains` predicate (closes a carried-forward gap with zero new code).
 2. **AIS ingestion hardening** — reconnect/backoff, metrics, and the
    last-message-age healthcheck (the biggest reliability gap for a 24/7 feed).
-3. Migration round-trip test; drop the mypy `continue-on-error` once clean.
+   Reconnect + healthcheck are pulled into the demo track (see the recommended
+   order above); metrics can follow.
+3. Migration round-trip test; drop the mypy `continue-on-error` (tree is clean).
 4. Data-quality guards — vessel identity merge + AIS sanity bounds.
 5. *(Optional)* wire the legacy-spreadsheet backfill review → commit pipeline.
